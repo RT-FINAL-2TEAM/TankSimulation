@@ -168,6 +168,7 @@ DEFAULT_ALLOWED_CLIENTS = {
     "127.0.0.1",
     "::1",
     # "192.168.0.44",  # Windows / Tank Simulator PC IP
+    "192.168.0.33",  # Windows / Tank Simulator PC IP
 }
 
 _allowed_clients_env = os.environ.get("TANK_ALLOWED_CLIENTS", "").strip()

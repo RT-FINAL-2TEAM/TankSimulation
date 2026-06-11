@@ -42,9 +42,18 @@ TOPIC_LIDAR_ORIGIN = os.environ.get("TANK_TOPIC_LIDAR_ORIGIN", "/tank/sensor/lid
 TOPIC_LIDAR_ORIGIN_RAW = os.environ.get("TANK_TOPIC_LIDAR_ORIGIN_RAW", "/tank/sensor/lidar/origin_raw")
 TOPIC_LIDAR_ROTATION = os.environ.get("TANK_TOPIC_LIDAR_ROTATION", "/tank/sensor/lidar/rotation")
 TOPIC_LIDAR_DETECTED_MAP = os.environ.get("TANK_TOPIC_LIDAR_DETECTED_MAP", "/tank/sensor/lidar/detected_points_map")
+TOPIC_LIDAR_ALL_DETECTED_MAP = os.environ.get("TANK_TOPIC_LIDAR_ALL_DETECTED_MAP", "/tank/sensor/lidar/all_detected_points_map")
+TOPIC_LIDAR_TERRAIN_MAP = os.environ.get("TANK_TOPIC_LIDAR_TERRAIN_MAP", "/tank/sensor/lidar/terrain_points_map")
+TOPIC_TERRAIN_INFO = os.environ.get("TANK_TOPIC_TERRAIN_INFO", "/tank/perception/terrain_info")
 
-GROUND_FILTER_ENABLED = env_bool("TANK_LIDAR_GROUND_FILTER_ENABLED", False)
+GROUND_FILTER_ENABLED = env_bool("TANK_LIDAR_GROUND_FILTER_ENABLED", True)
 DEFAULT_LIDAR_ORIGIN_Y = env_float("TANK_LIDAR_DEFAULT_ORIGIN_Y", 8.0)
+
+# Terrain/obstacle separation defaults. These came from the terrain development branch
+# and are enabled by default so the existing run command can use the feature immediately.
+TERRAIN_GRID_RESOLUTION = env_float("TANK_TERRAIN_GRID_RESOLUTION", 0.5)
+TERRAIN_CLIMB_LIMIT = env_float("TANK_TERRAIN_CLIMB_LIMIT", 0.4)
+TERRAIN_OBSTACLE_MIN_HEIGHT = env_float("TANK_TERRAIN_OBSTACLE_MIN_HEIGHT", 0.2)
 
 # Dynamic-replanning / path-block check defaults. The planner imports these
 # defaults, but the actual ROS2 parameters are still declared inside the planner.

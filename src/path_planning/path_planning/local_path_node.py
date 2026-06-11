@@ -40,6 +40,8 @@ try:
 except Exception:  # pragma: no cover
     yaml = None
 
+SERVICE_TERRAIN_FINALIZE = "/tank/terrain/finalize_map"
+
 from lidar.config import TOPIC_LIDAR_DETECTED_MAP
 from path_planning.config import (
     CAMERA_LIDAR_PROJECTION_PARAMS,
@@ -225,6 +227,7 @@ class LocalPathNode(Node):
 
         self.create_service(Trigger, SERVICE_DISCOVERED_SAVE, self.save_service_cb)
         self.create_service(Trigger, SERVICE_DISCOVERED_CLEAR, self.clear_service_cb)
+        self.terrain_finalize_client = self.create_client(Trigger, SERVICE_TERRAIN_FINALIZE)
         self.create_timer(LOCAL_PATH_TIMER_SEC, self.timer_cb)
 
         self.get_logger().info(
@@ -776,11 +779,28 @@ class LocalPathNode(Node):
     def publish_current_markers(self, fused: List[Dict[str, Any]]) -> None:
         self.current_marker_pub.publish(self.make_current_markers(fused))
 
+    def request_terrain_finalize(self) -> str:
+        """Fire-and-forget terrain finalize request so the existing discovered-save command also saves terrain outputs."""
+        try:
+            if not self.terrain_finalize_client.service_is_ready():
+                self.terrain_finalize_client.wait_for_service(timeout_sec=0.2)
+            if not self.terrain_finalize_client.service_is_ready():
+                return "terrain finalize service not ready"
+            self.terrain_finalize_client.call_async(Trigger.Request())
+            return "terrain finalize requested"
+        except Exception as exc:
+            return f"terrain finalize request failed: {exc}"
+
     def save_service_cb(self, request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
         try:
             saved_paths = self.save_discovered_map()
+            terrain_status = self.request_terrain_finalize()
             response.success = True
-            response.message = "Saved discovered map: " + ", ".join(str(p) for p in saved_paths)
+            response.message = (
+                "Saved discovered map: "
+                + ", ".join(str(p) for p in saved_paths)
+                + f"; {terrain_status}"
+            )
         except Exception as exc:
             response.success = False
             response.message = f"Failed to save discovered map: {exc}"
