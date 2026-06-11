@@ -233,6 +233,17 @@ class RosBridge(Node):
         )
 
         # ----------------------------------------------------
+        # Sensor fusion data logging subscription
+        # ----------------------------------------------------
+        self.sub_fused_objects = self.create_subscription(
+            String,
+            "/tank/perception/fused_objects",
+            self.on_fused_objects,
+            10,
+            callback_group=self.control_callback_group,
+        )
+
+        # ----------------------------------------------------
         # Internal shared state
         # ----------------------------------------------------
         # 공유 상태 보호용 Lock이다. Flask thread와 ROS2 callback thread가 동시에 접근하는 것을 막는다.
@@ -455,6 +466,18 @@ class RosBridge(Node):
             self._one_shot_override = command
         # 실행 터미널에 bridge 초기화 상태를 ROS2 logger로 출력한다.
         self.get_logger().info("one-shot /get_action override received")
+
+    # 퓨전된 객체 데이터를 수신하여 로그로 저장한다.
+    def on_fused_objects(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+            append_jsonl("fused.jsonl", {
+                "timestamp_wall": now_wall(),
+                "route": "/tank/perception/fused_objects",
+                "data": payload
+            })
+        except Exception as exc:
+            self.get_logger().error(f"Failed to log fused objects: {exc}")
 
     # /get_action 응답에 실제로 사용할 명령과 명령 출처 문자열을 선택한다.
     def select_action_command(self) -> Tuple[Dict[str, Any], str]:
