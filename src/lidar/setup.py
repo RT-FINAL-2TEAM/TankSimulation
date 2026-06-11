@@ -19,6 +19,7 @@ setup(
     entry_points={
         "console_scripts": [
             "lidar_processor_node = lidar.lidar_processor_node:main",
+            "polar_scan_viewer = lidar.polar_scan_viewer:main",
         ],
     },
 )

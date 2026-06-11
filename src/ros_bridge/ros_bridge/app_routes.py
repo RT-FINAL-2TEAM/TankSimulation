@@ -167,7 +167,7 @@ app = Flask(__name__)
 DEFAULT_ALLOWED_CLIENTS = {
     "127.0.0.1",
     "::1",
-    "192.168.0.82",  # Windows / Tank Simulator PC IP
+    "192.168.0.33",  # Windows / Tank Simulator PC IP
 }
 
 _allowed_clients_env = os.environ.get("TANK_ALLOWED_CLIENTS", "").strip()

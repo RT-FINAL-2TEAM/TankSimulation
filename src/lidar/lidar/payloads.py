@@ -9,10 +9,16 @@ lidar 패키지로 제한된다.
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from .config import BBOX_MIN_THICKNESS
+from .config import (
+    BBOX_MIN_THICKNESS,
+    TERRAIN_CLIMB_LIMIT,
+    TERRAIN_GRID_RESOLUTION,
+    TERRAIN_OBSTACLE_MIN_HEIGHT,
+)
 from .coordinate_utils import lidar_point_with_map_position, to_float
+from .terrain_utils import split_terrain_obstacle_points
 
 Point2D = Tuple[float, float]
 BBox2D = Dict[str, float]
@@ -39,6 +45,142 @@ def iter_detected_points(raw_points: Any) -> Iterable[Dict[str, Any]]:
     return (p for p in raw_points if isinstance(p, dict) and bool(p.get("isDetected", False)))
 
 
+def _converted_points(source_points: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    points: List[Dict[str, Any]] = []
+    for point in source_points:
+        converted = lidar_point_with_map_position(point)
+        if converted is not None:
+            points.append(converted)
+    return points
+
+
+def _base_payload(
+    points: Sequence[Dict[str, Any]],
+    *,
+    timestamp_wall: float,
+    map_frame: str,
+    source: str,
+    lidar_origin_map_for_correction: Optional[Dict[str, Any]] = None,
+    lidar_rotation_deg: Optional[Dict[str, Any]] = None,
+    player_body_deg: Optional[Dict[str, Any]] = None,
+    terrain_filter: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "route": "/info",
+        "timestamp_wall": timestamp_wall,
+        "source": source,
+        "frame_id": map_frame,
+        "coordinate_policy": "position_map: x=raw.x, y=raw.z, z=raw.y",
+        "count": len(points),
+        "points": list(points),
+    }
+    if lidar_origin_map_for_correction is not None:
+        payload["lidar_origin_map_for_correction"] = lidar_origin_map_for_correction
+    if lidar_rotation_deg is not None:
+        payload["lidar_rotation_deg"] = lidar_rotation_deg
+    if player_body_deg is not None:
+        payload["player_body_deg"] = player_body_deg
+    if terrain_filter is not None:
+        payload["terrain_filter"] = terrain_filter
+    return payload
+
+
+def build_classified_lidar_payloads(
+    lidar_points: Any,
+    *,
+    timestamp_wall: float,
+    map_frame: str,
+    ground_filter_enabled: bool = True,
+    lidar_origin_map_for_correction: Optional[Dict[str, Any]] = None,
+    lidar_rotation_deg: Optional[Dict[str, Any]] = None,
+    player_body_deg: Optional[Dict[str, Any]] = None,
+    grid_resolution: float = TERRAIN_GRID_RESOLUTION,
+    climb_limit: float = TERRAIN_CLIMB_LIMIT,
+    obstacle_min_height: float = TERRAIN_OBSTACLE_MIN_HEIGHT,
+) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """Build four map-frame payloads from raw simulator lidarPoints.
+
+    Returns:
+        detected_obstacle_payload, terrain_payload, all_detected_payload, terrain_info_payload
+    """
+    source_points = list(iter_detected_points(lidar_points))
+
+    if ground_filter_enabled and source_points:
+        obstacle_raw, terrain_raw, stats = split_terrain_obstacle_points(
+            source_points,
+            grid_resolution=grid_resolution,
+            climb_limit=climb_limit,
+            obstacle_min_height=obstacle_min_height,
+        )
+        filter_stats = stats.to_dict()
+        filter_method = "grid_local_ground_steep_cell"
+    else:
+        obstacle_raw = source_points
+        terrain_raw = []
+        filter_stats = {
+            "input_points": len(source_points),
+            "obstacle_points": len(source_points),
+            "terrain_points": 0,
+            "grid_resolution": grid_resolution,
+            "climb_limit": climb_limit,
+            "obstacle_min_height": obstacle_min_height,
+        }
+        filter_method = "disabled"
+
+    obstacle_points = _converted_points(obstacle_raw)
+    terrain_points = _converted_points(terrain_raw)
+    all_points = _converted_points(source_points)
+
+    common_meta = {
+        "enabled": bool(ground_filter_enabled),
+        "method": filter_method,
+        **filter_stats,
+    }
+    detected_payload = _base_payload(
+        obstacle_points,
+        timestamp_wall=timestamp_wall,
+        map_frame=map_frame,
+        source="lidarPoints/obstacle_only",
+        lidar_origin_map_for_correction=lidar_origin_map_for_correction,
+        lidar_rotation_deg=lidar_rotation_deg,
+        player_body_deg=player_body_deg,
+        terrain_filter=common_meta,
+    )
+    terrain_payload = _base_payload(
+        terrain_points,
+        timestamp_wall=timestamp_wall,
+        map_frame=map_frame,
+        source="lidarPoints/terrain_only",
+        lidar_origin_map_for_correction=lidar_origin_map_for_correction,
+        lidar_rotation_deg=lidar_rotation_deg,
+        player_body_deg=player_body_deg,
+        terrain_filter=common_meta,
+    )
+    all_payload = _base_payload(
+        all_points,
+        timestamp_wall=timestamp_wall,
+        map_frame=map_frame,
+        source="lidarPoints/all_detected",
+        lidar_origin_map_for_correction=lidar_origin_map_for_correction,
+        lidar_rotation_deg=lidar_rotation_deg,
+        player_body_deg=player_body_deg,
+        terrain_filter=common_meta,
+    )
+    terrain_info_payload = {
+        "route": "/info",
+        "timestamp_wall": timestamp_wall,
+        "frame_id": map_frame,
+        "source": "lidar_terrain_separation",
+        "terrain_filter": common_meta,
+        "counts": {
+            "all_detected": len(all_points),
+            "obstacle": len(obstacle_points),
+            "terrain": len(terrain_points),
+        },
+    }
+    return detected_payload, terrain_payload, all_payload, terrain_info_payload
+
+
 def build_detected_map_payload(
     lidar_points: Any,
     timestamp_wall: float,
@@ -46,30 +188,17 @@ def build_detected_map_payload(
     ground_filter_enabled: bool = False,
     origin_y: float = 8.0,
 ) -> Dict[str, Any]:
-    source_points = list(iter_detected_points(lidar_points))
-    if ground_filter_enabled and source_points:
-        try:
-            from .perception_utils import filter_ground_points
-            source_points = filter_ground_points(source_points, origin_y)
-        except Exception:
-            # Node code may log the exception if it needs detail; this utility stays side-effect free.
-            pass
+    """Backward-compatible helper used by older callers.
 
-    points = []
-    for point in source_points:
-        converted = lidar_point_with_map_position(point)
-        if converted is not None:
-            points.append(converted)
-
-    return {
-        "route": "/info",
-        "timestamp_wall": timestamp_wall,
-        "source": "lidarPoints",
-        "frame_id": map_frame,
-        "coordinate_policy": "position_map: x=raw.x, y=raw.z, z=raw.y",
-        "count": len(points),
-        "points": points,
-    }
+    It now returns the obstacle-only payload when ground_filter_enabled=True.
+    """
+    detected_payload, _, _, _ = build_classified_lidar_payloads(
+        lidar_points,
+        timestamp_wall=timestamp_wall,
+        map_frame=map_frame,
+        ground_filter_enabled=ground_filter_enabled,
+    )
+    return detected_payload
 
 
 def parse_lidar_points_payload(payload: Any) -> List[Point2D]:
