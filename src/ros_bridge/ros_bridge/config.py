@@ -182,11 +182,12 @@ if AUTO_FALLBACK not in ("neutral", "stop"):
 # true:
 # - /info, /get_action, /update_bullet, /collision 같은 데이터를 로그로 남긴다.
 # - 사후 분석, 디버깅, 강화학습 데이터셋 저장에 유용하다.
-SAVE_JSONL = os.environ.get("TANK_SAVE_JSONL", "false").strip().lower() in ("1", "true", "yes", "y")
+SAVE_JSONL = os.environ.get("TANK_SAVE_JSONL", "true").strip().lower() in ("1", "true", "yes", "y")
 
 # JSONL_DIR은 JSONL 로그를 저장할 디렉터리다.
-# 상대 경로일 경우 실행 위치 기준으로 생성된다.
-JSONL_DIR = Path(os.environ.get("TANK_JSONL_DIR", "./tank_logs"))
+from datetime import datetime
+_session_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+JSONL_DIR = Path(os.environ.get("TANK_JSONL_DIR", f"./tank_logs/session_{_session_ts}"))
 
 # SAVE_FULL_INFO는 /info 원본 전체를 저장할지 결정한다.
 #
@@ -197,7 +198,7 @@ JSONL_DIR = Path(os.environ.get("TANK_JSONL_DIR", "./tank_logs"))
 # true:
 # - /info 원본 JSON 전체를 저장한다.
 # - LiDAR point까지 모두 남길 수 있어 파일이 매우 커질 수 있다.
-SAVE_FULL_INFO = os.environ.get("TANK_SAVE_FULL_INFO", "false").strip().lower() in ("1", "true", "yes", "y")
+SAVE_FULL_INFO = os.environ.get("TANK_SAVE_FULL_INFO", "true").strip().lower() in ("1", "true", "yes", "y")
 
 # SAVE_IMAGES는 /detect 또는 /stereo_image로 들어온 이미지 파일을 로컬에 저장할지 결정한다.
 #
