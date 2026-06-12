@@ -187,7 +187,7 @@ SAVE_JSONL = os.environ.get("TANK_SAVE_JSONL", "true").strip().lower() in ("1", 
 # JSONL_DIR은 JSONL 로그를 저장할 디렉터리다.
 from datetime import datetime
 _session_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-JSONL_DIR = Path(os.environ.get("TANK_JSONL_DIR", f"./tank_logs/session_{_session_ts}"))
+JSONL_DIR = Path(os.environ.get("TANK_JSONL_DIR", f"./tank_logs/session_{TANK_MODE}_{_session_ts}"))
 
 # SAVE_FULL_INFO는 /info 원본 전체를 저장할지 결정한다.
 #
