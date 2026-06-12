@@ -8,12 +8,14 @@ from pathlib import Path
 from datetime import datetime
 import matplotlib.pyplot as plt
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 # 로컬 패키지 import를 위해 src 경로 추가
-sys.path.append("c:/dev/rotem/tank_project/src/lidar")
+sys.path.append(str(PROJECT_ROOT / "src" / "lidar"))
 from lidar.perception_utils import filter_ground_points
 
 def create_report_dir(session_name):
-    base_dir = Path("c:/dev/rotem/tank_project/reports")
+    base_dir = PROJECT_ROOT / "reports"
     report_dir = base_dir / session_name
     report_dir.mkdir(parents=True, exist_ok=True)
     return report_dir
@@ -30,7 +32,9 @@ def parse_jsonl(filepath):
                 continue
     return data
 
-def analyze_and_plot(logs_dir="c:/dev/rotem/tank_project/tank_logs", map_name="알 수 없음 (시뮬레이터 제공 안됨)", target_mode="latest"):
+def analyze_and_plot(logs_dir=None, map_name="알 수 없음 (시뮬레이터 제공 안됨)", target_mode="latest"):
+    if logs_dir is None:
+        logs_dir = str(PROJECT_ROOT / "tank_logs")
     logs_path = Path(logs_dir)
     if not logs_path.exists():
         print(f"로그 폴더를 찾을 수 없습니다: {logs_dir}")
