@@ -15,11 +15,11 @@ from rclpy.node import Node
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 
-from lidar.config import TOPIC_LIDAR_POINTS
-
-# 프로젝트 구조에 맞춘 토픽 설정
-TOPIC_FUSED_OBJECTS = "/tank/perception/fused_objects"
+# 사용 토픽 설정
+TOPIC_LIDAR_POINTS = "/tank/sensor/lidar/points"
 TOPIC_PLAYER_POSE = "/tank/player/pose"
+TOPIC_PLAYER_STATE = "/tank/player/state"
+TOPIC_CLUSTERS = "/tank/visual_perception/lidar_clusters"
 
 class PolarViewer(Node):
     def __init__(self):
@@ -30,40 +30,49 @@ class PolarViewer(Node):
             String, TOPIC_LIDAR_POINTS, self.callback_lidar, 10
         )
         
-        # 2. 융합된 객체(YOLO + LiDAR Cluster) 구독
-        self.subscription_objects = self.create_subscription(
-            String, TOPIC_FUSED_OBJECTS, self.callback_fused, 10
-        )
-
-        # 3. 객체의 상대 각도 계산을 위한 전차 위치 구독
+        # 2. 전차 위치 구독 (클러스터 상대 좌표 계산용)
         self.subscription_pose = self.create_subscription(
             PoseStamped, TOPIC_PLAYER_POSE, self.callback_pose, 10
         )
         
+        # 3. 전차 상태 구독 (전차의 Heading 각도 계산용)
+        self.subscription_state = self.create_subscription(
+            String, TOPIC_PLAYER_STATE, self.callback_state, 10
+        )
+        
+        # 4. LiDAR 기반 클러스터링 구독
+        self.subscription_clusters = self.create_subscription(
+            String, TOPIC_CLUSTERS, self.callback_clusters, 10
+        )
+        
         self.lock = threading.Lock()
 
-        # 전차 위치 캐싱용 변수
+        # 전차 상태 캐싱용 변수
         self.tank_x = 0.0
         self.tank_y = 0.0
+        self.tank_heading = 0.0
 
         # 데이터 저장용
-        self.channels = {ch: {"theta": [], "radius": []} for ch in range(1, 9)}
-        self.visible = {ch: True for ch in range(1, 9)}
-        self.detected_objects = []
+        self.channels = {ch: {"theta": [], "radius": []} for ch in range(1, 17)}
+        self.visible = {ch: True for ch in range(1, 17)}
+        self.clusters = []
         
+        # 16개 채널을 위한 색상 지정
         self.colors = {
             1: "red", 2: "blue", 3: "green", 4: "orange",
             5: "purple", 6: "brown", 7: "pink", 8: "black",
+            9: "cyan", 10: "magenta", 11: "yellow", 12: "lime",
+            13: "teal", 14: "navy", 15: "maroon", 16: "olive"
         }
 
         # UI 초기화
         plt.ion()
-        self.fig = plt.figure(figsize=(11, 8))
-        self.ax = self.fig.add_axes([0.05, 0.05, 0.72, 0.90], projection="polar")
-        check_ax = self.fig.add_axes([0.82, 0.20, 0.15, 0.60])
+        self.fig = plt.figure(figsize=(12, 8))
+        self.ax = self.fig.add_axes([0.05, 0.05, 0.70, 0.90], projection="polar")
+        check_ax = self.fig.add_axes([0.80, 0.10, 0.15, 0.80])
 
-        labels = [f"CH{i}" for i in range(1, 9)]
-        states = [True] * 8
+        labels = [f"CH{i}" for i in range(1, 17)]
+        states = [True] * 16
         self.check = CheckButtons(check_ax, labels, states)
         self.check.on_clicked(self.on_click)
         self.fig.canvas.mpl_connect("close_event", self.on_close)
@@ -72,19 +81,19 @@ class PolarViewer(Node):
 
         # Scatter 객체 초기화 (렌더링 최적화)
         self.scatters = {}
-        for ch in range(1, 9):
+        for ch in range(1, 17):
             self.scatters[ch] = self.ax.scatter([], [], s=5, color=self.colors[ch], label=f"CH{ch}")
             
-        # 융합된 객체용 마커 (별모양)
-        self.obj_scatter = self.ax.scatter([], [], s=200, marker='*', color='magenta', edgecolors='black', zorder=5, label='Detected Object')
-        self.obj_texts = []
-        
+        # 클러스터 마커 초기화 (비어있는 원형 마커)
+        self.cluster_scatter = self.ax.scatter([], [], s=200, marker='o', facecolors='none', edgecolors='magenta', linewidth=2, zorder=5, label='Cluster')
+        self.cluster_texts = []
+            
         # Polar 좌표계 방향 설정 (N이 0도, 시계방향)
         self.ax.set_theta_zero_location("N")
         self.ax.set_theta_direction(-1)
         self.ax.grid(True)
-        self.ax.legend(loc="upper right", fontsize=8)
-        self.title_text = self.ax.set_title("LiDAR Polar Scan (0 points)")
+        self.ax.legend(loc="upper right", bbox_to_anchor=(1.15, 1.1), fontsize=8)
+        self.title_text = self.ax.set_title("LiDAR 16CH Scan & Clusters")
 
     def on_close(self, event):
         self.running = False
@@ -95,9 +104,19 @@ class PolarViewer(Node):
 
     # --- 콜백 함수들 ---
     def callback_pose(self, msg):
-        # 전차의 맵 상 좌표 업데이트
         self.tank_x = msg.pose.position.x
         self.tank_y = msg.pose.position.y
+
+    def callback_state(self, msg):
+        try:
+            data = json.loads(msg.data)
+            body = data.get("body", {})
+            if "x" in body:
+                self.tank_heading = float(body["x"])
+            elif "playerBodyX" in data:
+                self.tank_heading = float(data["playerBodyX"])
+        except Exception:
+            pass
 
     def callback_lidar(self, msg):
         try:
@@ -106,7 +125,7 @@ class PolarViewer(Node):
             return
 
         points = payload.get("points", [])
-        temp = {ch: {"theta": [], "radius": []} for ch in range(1, 9)}
+        temp = {ch: {"theta": [], "radius": []} for ch in range(1, 17)}
 
         for point in points:
             if not isinstance(point, dict) or not point.get("isDetected", False):
@@ -127,42 +146,46 @@ class PolarViewer(Node):
 
         with self.lock:
             self.channels = temp
-            
-    def callback_fused(self, msg):
+
+    def callback_clusters(self, msg):
         try:
             payload = json.loads(msg.data)
-            objects = payload.get("objects", [])
-            parsed_objects = []
+            clusters_data = payload.get("clusters", [])
+            parsed_clusters = []
             
-            for obj in objects:
-                pos = obj.get("position_map", {})
-                obj_x = float(pos.get("x", 0.0))
-                obj_y = float(pos.get("y", 0.0))
-                class_name = obj.get("className", "Unknown")
-                heading = float(obj.get("camera_heading_deg", 0.0))
+            for c in clusters_data:
+                c_id = c.get("id", 0)
+                count = c.get("count", 0)
+                centroid = c.get("centroid", {})
                 
-                dx = obj_x - self.tank_x
-                dy = obj_y - self.tank_y
+                cx = float(centroid.get("x", 0.0))
+                cy = float(centroid.get("y", 0.0))
                 
-                # [수정] Z축 높이를 제외한 2D 평면 상의 실제 거리를 계산합니다.
+                # 맵 절대 좌표를 전차 기준 상대 좌표로 변환
+                dx = cx - self.tank_x
+                dy = cy - self.tank_y
                 distance_2d = math.hypot(dx, dy)
                 
+                # y축이 앞, x축이 오른쪽일 때의 방위각 계산 (북쪽 0도 기준)
                 global_bearing = math.degrees(math.atan2(dx, dy))
-                rel_bearing_deg = global_bearing - heading
+                rel_bearing_deg = global_bearing - self.tank_heading
+                
+                # -180 ~ 180도로 정규화
                 rel_bearing_deg = (rel_bearing_deg + 180.0) % 360.0 - 180.0
                 
-                parsed_objects.append({
+                parsed_clusters.append({
+                    "id": c_id,
+                    "count": count,
                     "theta": math.radians(rel_bearing_deg),
-                    "radius": distance_2d,  # 3D distance 대신 2D distance 사용
-                    "class_name": class_name
+                    "radius": distance_2d
                 })
-                    
+                
             with self.lock:
-                self.detected_objects = parsed_objects
+                self.clusters = parsed_clusters
                 
         except Exception as e:
-            self.get_logger().debug(f"Fused objects parse failed: {e}")
-            
+            self.get_logger().debug(f"Clusters parse failed: {e}")
+
     # --- 렌더링 ---
     def update(self):
         with self.lock:
@@ -170,7 +193,7 @@ class PolarViewer(Node):
             max_r = 1.0
 
             # 1. LiDAR 포인트 업데이트
-            for ch in range(1, 9):
+            for ch in range(1, 17):
                 if not self.visible[ch] or not self.channels[ch]["theta"]:
                     self.scatters[ch].set_offsets(np.empty((0, 2)))
                     continue
@@ -186,36 +209,36 @@ class PolarViewer(Node):
                 if r > max_r:
                     max_r = r
 
-            # 2. 객체 마커 및 텍스트 업데이트
-            for txt in self.obj_texts:
+            # 2. 클러스터 텍스트 및 마커 업데이트
+            for txt in self.cluster_texts:
                 txt.remove()
-            self.obj_texts.clear()
+            self.cluster_texts.clear()
             
-            if self.detected_objects:
-                obj_thetas = []
-                obj_radii = []
+            if self.clusters:
+                c_thetas = []
+                c_radii = []
                 
-                for obj in self.detected_objects:
-                    t = obj["theta"]
-                    r = obj["radius"]
-                    obj_thetas.append(t)
-                    obj_radii.append(r)
+                for c in self.clusters:
+                    t = c["theta"]
+                    r = c["radius"]
+                    c_thetas.append(t)
+                    c_radii.append(r)
                     
                     if r > max_r:
                         max_r = r
                         
-                    # 텍스트 라벨 추가 (클래스명 표시)
-                    txt = self.ax.text(t, r + 2.0, obj["class_name"], 
-                                       fontsize=11, fontweight='bold', color='magenta', 
+                    # RViz와 유사하게 'C번호 N=개수' 텍스트 표시
+                    txt = self.ax.text(t, r + 1.5, f"C{c['id']} N={c['count']}", 
+                                       fontsize=10, fontweight='bold', color='magenta', 
                                        ha='center', va='bottom')
-                    self.obj_texts.append(txt)
-                
-                self.obj_scatter.set_offsets(np.column_stack([obj_thetas, obj_radii]))
+                    self.cluster_texts.append(txt)
+                    
+                self.cluster_scatter.set_offsets(np.column_stack([c_thetas, c_radii]))
             else:
-                self.obj_scatter.set_offsets(np.empty((0, 2)))
+                self.cluster_scatter.set_offsets(np.empty((0, 2)))
 
             self.ax.set_rmax(max_r + 5.0)
-            self.title_text.set_text(f"LiDAR Polar Scan ({total_points} points) | Detected Objects: {len(self.detected_objects)}")
+            self.title_text.set_text(f"LiDAR 16CH Scan ({total_points} pts) | Clusters: {len(self.clusters)}")
 
         plt.draw()
         plt.pause(0.001)
