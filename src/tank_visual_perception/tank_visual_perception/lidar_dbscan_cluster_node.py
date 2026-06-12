@@ -11,6 +11,7 @@ Team command compatibility:
 
 Subscribe:
   /tank/sensor/lidar/detected_points_map      std_msgs/String
+  /tank/player/pose                           geometry_msgs/PoseStamped  <-- [추가됨] 전차 위치
 
 Publish:
   /tank/visual_perception/lidar_clusters      std_msgs/String
@@ -25,7 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import rclpy
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, PoseStamped
 from rclpy.node import Node
 from std_msgs.msg import ColorRGBA, String
 from visualization_msgs.msg import Marker, MarkerArray
@@ -186,6 +187,7 @@ class LidarDbscanClusterNode(Node):
         super().__init__("lidar_dbscan_cluster_node")
 
         self.declare_parameter("input_topic", "/tank/sensor/lidar/detected_points_map")
+        self.declare_parameter("pose_topic", "/tank/player/pose") # [추가됨] 전차 위치 토픽
         self.declare_parameter("clusters_topic", "/tank/visual_perception/lidar_clusters")
         self.declare_parameter("markers_topic", "/tank/rviz/lidar_cluster_markers")
         self.declare_parameter("frame_id", "tank_map")
@@ -197,6 +199,7 @@ class LidarDbscanClusterNode(Node):
         self.declare_parameter("text_height", 1.0)
 
         self.input_topic = str(self.get_parameter("input_topic").value)
+        self.pose_topic = str(self.get_parameter("pose_topic").value)
         self.clusters_topic = str(self.get_parameter("clusters_topic").value)
         self.markers_topic = str(self.get_parameter("markers_topic").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
@@ -207,7 +210,13 @@ class LidarDbscanClusterNode(Node):
         self.bbox_min_thickness = float(self.get_parameter("bbox_min_thickness").value)
         self.text_height = float(self.get_parameter("text_height").value)
 
+        # [추가됨] 전차 위치 저장용 변수
+        self.tank_x = 0.0
+        self.tank_y = 0.0
+
         self.sub = self.create_subscription(String, self.input_topic, self.on_lidar, 10)
+        self.sub_pose = self.create_subscription(PoseStamped, self.pose_topic, self.on_pose, 10) # [추가됨] 구독
+        
         self.pub_clusters = self.create_publisher(String, self.clusters_topic, 10)
         self.pub_markers = self.create_publisher(MarkerArray, self.markers_topic, 10)
 
@@ -215,6 +224,11 @@ class LidarDbscanClusterNode(Node):
             f"lidar_dbscan_cluster_node started: input={self.input_topic}, eps={self.eps}, "
             f"min_samples={self.min_samples}, min_cluster_size={self.min_cluster_size}"
         )
+
+    # [추가됨] 전차 위치 업데이트 콜백
+    def on_pose(self, msg: PoseStamped) -> None:
+        self.tank_x = float(msg.pose.position.x)
+        self.tank_y = float(msg.pose.position.y)
 
     def on_lidar(self, msg: String) -> None:
         try:
@@ -266,7 +280,8 @@ class LidarDbscanClusterNode(Node):
         }
         for c in clusters:
             cx, cy, cz = c.centroid
-            nearest = min(math.hypot(p[0], p[1]) for p in c.points) if c.points else None
+            # [수정됨] 0,0 원점이 아니라 현재 전차 위치(tank_x, tank_y)를 기준으로 거리 계산!
+            nearest = min(math.hypot(p[0] - self.tank_x, p[1] - self.tank_y) for p in c.points) if c.points else None
             bbox = c.bbox
             data["clusters"].append(
                 {
@@ -352,7 +367,9 @@ class LidarDbscanClusterNode(Node):
             text.pose.orientation.w = 1.0
             text.scale.z = self.text_height
             text.color = make_color(1.0, 1.0, 1.0, 1.0)
-            nearest = min(math.hypot(p[0], p[1]) for p in c.points) if c.points else 0.0
+            
+            # [수정됨] RViz 텍스트 마커에도 원점이 아닌 '현재 전차 위치 기준' 거리가 뜹니다!
+            nearest = min(math.hypot(p[0] - self.tank_x, p[1] - self.tank_y) for p in c.points) if c.points else 0.0
             text.text = f"cluster {c.cluster_id}\nN={c.count}\nD={nearest:.1f}m"
             arr.markers.append(text)
 
