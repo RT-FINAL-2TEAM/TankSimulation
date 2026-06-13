@@ -8,7 +8,7 @@ RViz overlay and actual YOLO-LiDAR fusion.
 
 Subscribe:
   /tank/camera/image_compressed     sensor_msgs/CompressedImage
-  /tank/api/info/compact            std_msgs/String
+  /tank/api/info/raw                std_msgs/String
 
 Publish:
   /tank/camera/lidar_projection/image       sensor_msgs/Image
@@ -164,7 +164,7 @@ class LidarCameraOverlayNode(Node):
                 self._latest_info = info
                 self._latest_info_stamp = self.get_clock().now()
         except Exception as exc:
-            self.get_logger().warn(f"failed to parse info compact: {exc}")
+            self.get_logger().warn(f"failed to parse info raw: {exc}")
 
     def on_lidar_pc2(self, msg: PointCloud2) -> None:
         try:

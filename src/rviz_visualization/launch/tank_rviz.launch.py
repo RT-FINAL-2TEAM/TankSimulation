@@ -108,7 +108,7 @@ def generate_launch_description():
             #   /tank/enemy/pose
             #   /tank/goal/pose
             #   /tank/map/obstacles
-            #   /tank/sensor/lidar/detected_points_map
+            #   /tank/sensor/lidar/points
             #
             # 출력 예:
             #   /tank/rviz/object_markers

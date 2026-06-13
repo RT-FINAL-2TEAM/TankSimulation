@@ -16,7 +16,7 @@
     - /tank/enemy/pose
     - /tank/goal/pose
     - /tank/map/obstacles
-    - /tank/sensor/lidar/detected_points_map (PointCloud2)
+    - /tank/sensor/lidar/points
 
 핵심 출력:
     - /tank/rviz/object_markers
@@ -75,6 +75,8 @@ import math
 # JSON 문자열로 들어오므로 json 파싱이 필요하다.
 import json
 
+import numpy as np
+
 # 타입 힌트용 import.
 #
 # Any:
@@ -104,7 +106,7 @@ import rclpy
 # PoseStamped:
 #   위치 + 자세 + frame_id + timestamp를 함께 담는 메시지.
 #   ros_bridge에서 아군/적/목표 위치를 이 타입으로 publish한다.
-from geometry_msgs.msg import PoseStamped, Vector3Stamped
+from geometry_msgs.msg import PointStamped, PoseStamped, Vector3Stamped
 from nav_msgs.msg import Path as NavPath
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
@@ -192,6 +194,7 @@ from .config import (
     ############################################################
     TOPIC_ENEMY_POSE,
     TOPIC_GOAL_POSE,
+    TOPIC_LIDAR_POINTS,
     TOPIC_OBSTACLES,
     TOPIC_PLAYER_POSE,
 
@@ -333,7 +336,11 @@ class RvizVisualizerNode(Node):
         #   /tank_rviz_visualizer_node
         super().__init__("tank_rviz_visualizer_node")
         self.declare_parameter("lidar_pc2_topic", "/tank/sensor/lidar/detected_points_map")
+        self.declare_parameter("lidar_ray_pc2_topic", "/tank/sensor/lidar/all_detected_points_map")
+        self.declare_parameter("lidar_origin_topic", "/tank/sensor/lidar/origin")
         self.lidar_pc2_topic = str(self.get_parameter("lidar_pc2_topic").value)
+        self.lidar_ray_pc2_topic = str(self.get_parameter("lidar_ray_pc2_topic").value)
+        self.lidar_origin_topic = str(self.get_parameter("lidar_origin_topic").value)
 
 
         ########################################################
@@ -362,6 +369,14 @@ class RvizVisualizerNode(Node):
         #
         # /tank/sensor/lidar/detected_points_map PointCloud2에서 받은 map-frame XYZ tuple 목록.
         self.lidar_points: List[Tuple[float, float, float]] = []
+
+        # LiDAR ray 표시용 endpoint 목록.
+        # detected_points_map은 지형 분리 후 obstacle-only일 수 있으므로,
+        # 실시간 스캔 ray는 all_detected_points_map을 별도로 사용한다.
+        self.lidar_ray_points: List[Tuple[float, float, float]] = []
+
+        # LiDAR ray 시작점. lidar_processor_node가 publish하는 map-frame PointStamped.
+        self.lidar_origin: Optional[PointStamped] = None
 
         # 아군/적 전차 상태 dict.
         #
@@ -442,6 +457,23 @@ class RvizVisualizerNode(Node):
             PointCloud2,
             self.lidar_pc2_topic,
             self.lidar_points_callback,
+            10,
+        )
+
+        # LiDAR ray 표시용 endpoint.
+        # detected_points_map은 obstacle-only일 수 있으므로 ray는 all_detected_points_map을 사용한다.
+        self.create_subscription(
+            PointCloud2,
+            self.lidar_ray_pc2_topic,
+            self.lidar_ray_points_callback,
+            10,
+        )
+
+        # LiDAR ray 시작점.
+        self.create_subscription(
+            PointStamped,
+            self.lidar_origin_topic,
+            self.lidar_origin_callback,
             10,
         )
 
@@ -721,7 +753,7 @@ class RvizVisualizerNode(Node):
             self.obstacles = []
 
     def lidar_points_callback(self, msg: PointCloud2) -> None:
-        """Store LiDAR PointCloud2 as lightweight map-frame XYZ tuples."""
+        """Store obstacle-only LiDAR PointCloud2 as lightweight map-frame XYZ tuples."""
         try:
             points = pointcloud2_to_xyz_array(msg)
             if LIDAR_VISUALIZATION_SAMPLE_STEP > 1 and points.shape[0] > 0:
@@ -730,6 +762,31 @@ class RvizVisualizerNode(Node):
         except Exception as exc:
             self.get_logger().debug(f"failed to parse lidar PointCloud2 for RViz: {exc}")
             self.lidar_points = []
+
+    def lidar_ray_points_callback(self, msg: PointCloud2) -> None:
+        """Store all detected LiDAR endpoints for live ray visualization."""
+        try:
+            points = pointcloud2_to_xyz_array(msg)
+            if LIDAR_VISUALIZATION_SAMPLE_STEP > 1 and points.shape[0] > 0:
+                points = points[:: max(1, int(LIDAR_VISUALIZATION_SAMPLE_STEP))]
+            self.lidar_ray_points = [(float(x), float(y), float(z)) for x, y, z in points]
+        except Exception as exc:
+            self.get_logger().debug(f"failed to parse lidar ray PointCloud2 for RViz: {exc}")
+            self.lidar_ray_points = []
+
+    def lidar_origin_callback(self, msg: PointStamped) -> None:
+        """Store latest map-frame LiDAR origin for ray start point."""
+        self.lidar_origin = msg
+
+    def _current_lidar_origin_xyz(self) -> Optional[Tuple[float, float, float]]:
+        """Return LiDAR origin, falling back to player pose if origin topic is not available yet."""
+        if self.lidar_origin is not None:
+            p = self.lidar_origin.point
+            return (float(p.x), float(p.y), float(p.z))
+        if self.player_pose is not None:
+            p = self.player_pose.pose.position
+            return (float(p.x), float(p.y), float(p.z) + 1.2)
+        return None
 
     def potential_repulsive_callback(self, msg: Vector3Stamped) -> None:
         self.potential_repulsive_vector = msg
@@ -1304,9 +1361,39 @@ class RvizVisualizerNode(Node):
     ############################################################
 
     def publish_lidar_markers(self) -> None:
-        """LiDAR PointCloud2 points를 RViz2 POINTS marker로 표시한다."""
+        """LiDAR PC2 point와 실시간 ray를 RViz2 MarkerArray로 표시한다."""
 
         markers = MarkerArray()
+
+        # 0) Live LiDAR rays: origin -> all detected endpoints.
+        # all_detected_points_map을 사용해야 지형 분리로 빠진 point까지 스캔 ray로 볼 수 있다.
+        origin = self._current_lidar_origin_xyz()
+        if origin is not None and self.lidar_ray_points:
+            line_segments = [(origin, end) for end in self.lidar_ray_points]
+            markers.markers.append(
+                make_line_list_marker(
+                    MAP_FRAME,
+                    "lidar_live_rays",
+                    10,
+                    line_segments,
+                    0.035,
+                    make_color(0.1, 0.9, 1.0, 0.22),
+                )
+            )
+            markers.markers.append(
+                make_sphere_marker(
+                    MAP_FRAME,
+                    "lidar_origin",
+                    11,
+                    origin[0],
+                    origin[1],
+                    origin[2],
+                    0.35,
+                    make_color(0.1, 0.9, 1.0, 0.85),
+                )
+            )
+
+        # 1) Obstacle-only hit points.
         if self.lidar_points:
             markers.markers.append(
                 make_points_marker(

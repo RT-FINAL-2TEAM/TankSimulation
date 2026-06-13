@@ -39,7 +39,7 @@ def generate_launch_description():
             output="screen",
         ),
         # Team visual perception integration:
-        # - /detect image from ros_bridge + /info compact + LiDAR PC2 -> camera LiDAR projection overlay
+        # - /detect image from ros_bridge + /info LiDAR raw -> camera LiDAR projection overlay
         # - /tank/sensor/lidar/detected_points_map -> DBSCAN cluster markers/status
         Node(
             package="tank_visual_perception",
