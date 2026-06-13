@@ -24,10 +24,13 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path as NavPath
 from rclpy.node import Node
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
 from std_msgs.msg import String
 
 from lidar.obstacle_memory import LidarObstacleMemory
@@ -87,6 +90,36 @@ from path_planning.team_path_planning import plan_path_through_waypoints as team
 
 def clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
+
+
+def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
+    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+
+    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
+    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
+    node usable on older sensor_msgs_py versions.
+    """
+    try:
+        arr = point_cloud2.read_points_numpy(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+    except Exception:
+        pts = point_cloud2.read_points(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+        if isinstance(pts, np.ndarray):
+            arr = pts
+        else:
+            arr = np.asarray(list(pts), dtype=np.float32)
+    if arr is None:
+        return np.empty((0, 3), dtype=np.float32)
+    arr = np.asarray(arr)
+    if arr.dtype.fields:
+        arr = np.column_stack((arr["x"], arr["y"], arr["z"]))
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.size == 0:
+        return np.empty((0, 3), dtype=np.float32)
+    return np.ascontiguousarray(arr.reshape(-1, 3), dtype=np.float32)
 
 
 def get_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
@@ -468,7 +501,7 @@ class TeamDynamicAStarPlannerNode(Node):
         self.create_subscription(PoseStamped, TOPIC_PLAYER_POSE, self.player_pose_cb, 10)
         self.create_subscription(PoseStamped, TOPIC_GOAL_POSE, self.goal_pose_cb, 10)
         self.create_subscription(String, TOPIC_MAP_OBSTACLES, self.obstacles_cb, 10)
-        self.create_subscription(String, TOPIC_LIDAR_DETECTED_MAP, self.lidar_cb, 10)
+        self.create_subscription(PointCloud2, TOPIC_LIDAR_DETECTED_MAP, self.lidar_cb, 10)
         self.create_subscription(String, TOPIC_LIDAR_CLUSTERS, self.lidar_clusters_cb, 10)
         self.create_timer(1.0 / max(1.0, PLANNER_HZ), self.timer_cb)
         self.get_logger().info(
@@ -514,16 +547,34 @@ class TeamDynamicAStarPlannerNode(Node):
             self.path_block_hit_count = 0
         self.get_logger().info(f"GT obstacles received: {len(obs)} bboxes")
 
-    def lidar_cb(self, msg: String) -> None:
+    def lidar_cb(self, msg: PointCloud2) -> None:
         try:
+            points = pointcloud2_to_xyz_array(msg)
+            # LidarObstacleMemory still owns the planning-side memory/clustering logic.
+            # Feed it a minimal in-memory payload instead of parsing a LiDAR JSON String.
+            point_items = [
+                {
+                    "isDetected": True,
+                    "position_map": {"x": float(x), "y": float(y), "z": float(z)},
+                }
+                for x, y, z in points
+            ]
+            payload = {
+                "route": "/info",
+                "source": "pointcloud2/detected_points_map",
+                "timestamp_ros_sec": msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9,
+                "frame_id": msg.header.frame_id or MAP_FRAME,
+                "count": len(point_items),
+                "points": point_items,
+            }
             self.lidar_obstacles.update_from_payload(
-                json.loads(msg.data),
+                payload,
                 history_enabled=self.enable_dynamic_replan,
                 history_resolution=self.lidar_history_resolution,
                 max_history_points=self.max_lidar_history_points,
             )
         except Exception as exc:
-            self.get_logger().warn(f"failed to update detected lidar obstacle memory: {exc}")
+            self.get_logger().warn(f"failed to update detected lidar obstacle memory from PC2: {exc}")
 
     def lidar_clusters_cb(self, msg: String) -> None:
         try:

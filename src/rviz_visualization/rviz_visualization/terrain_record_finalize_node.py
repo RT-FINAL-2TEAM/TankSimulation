@@ -8,11 +8,11 @@ terrain_record_finalize_node.py
 핵심 의도:
 - 주행 중에는 무거운 CSF를 반복 실행하지 않는다.
 - 주행이 끝났다는 기준은 사용자가 /tank/terrain/finalize_map service를 호출하는 시점이다.
-- finalize 후에는 최종 지형 지도 topic을 계속 publish해서 RViz에서 볼 수 있게 한다.
+- JSON 파싱과 자세 보정(Attitude Correction)은 앞단(LidarProcessorNode)에서 이미
+  처리한 PointCloud2 메시지를 수신하여 CPU 점유율을 극도로 최적화함.
 
 입력:
-- /tank/sensor/lidar/all_detected_points_map  (std_msgs/String, JSON)
-  lidar_processor_node가 isDetected=True 전체 LiDAR hit point를 map 좌표로 변환해 publish하는 topic.
+- /tank/sensor/lidar/all_detected_points_map  (sensor_msgs/PointCloud2)
 
 출력:
 - /tank/terrain/final_accumulated_cloud   (sensor_msgs/PointCloud2)
@@ -26,7 +26,6 @@ terrain_record_finalize_node.py
 - /tank/terrain/reset_map     (std_srvs/Trigger)
 """
 
-import json
 import math
 import os
 import time
@@ -37,7 +36,6 @@ import numpy as np
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
@@ -49,6 +47,36 @@ try:
     import CSF  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
     CSF = None
+
+
+def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
+    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+
+    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
+    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
+    node usable on older sensor_msgs_py versions.
+    """
+    try:
+        arr = point_cloud2.read_points_numpy(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+    except Exception:
+        pts = point_cloud2.read_points(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+        if isinstance(pts, np.ndarray):
+            arr = pts
+        else:
+            arr = np.asarray(list(pts), dtype=np.float32)
+    if arr is None:
+        return np.empty((0, 3), dtype=np.float32)
+    arr = np.asarray(arr)
+    if arr.dtype.fields:
+        arr = np.column_stack((arr["x"], arr["y"], arr["z"]))
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.size == 0:
+        return np.empty((0, 3), dtype=np.float32)
+    return np.ascontiguousarray(arr.reshape(-1, 3), dtype=np.float32)
 
 
 class TerrainRecordFinalizeNode(Node):
@@ -81,18 +109,7 @@ class TerrainRecordFinalizeNode(Node):
         self.declare_parameter("wireframe_max_height_gap", 1.5)
         self.declare_parameter("wireframe_connect_diagonal", False)
 
-        # 자세 보정: LiDAR hit point의 x/y는 이미 map 좌표로 보고 그대로 두되,
-        # lidarOrigin + lidarRotation/playerBody yaw/pitch/roll로 z 높이만 보정한다.
-        self.declare_parameter("attitude_correction_enabled", True)
-        self.declare_parameter("attitude_correction_source", "lidar_then_body")
-        self.declare_parameter("attitude_reference_mode", "first_frame")
-        self.declare_parameter("attitude_use_origin_z_delta", False)
-        self.declare_parameter("attitude_max_abs_delta_deg", 20.0)
-        self.declare_parameter("min_map_z", -10.0)
-        self.declare_parameter("max_map_z", 60.0)
-
         # 장애물 제거용 local low-surface prefilter.
-        # 전체 z percentile이 아니라 같은 x-y cell 안에서 낮은 표면만 남겨서 언덕을 살린다.
         self.declare_parameter("terrain_prefilter_enabled", True)
         self.declare_parameter("terrain_cell_size", 0.5)
         self.declare_parameter("terrain_low_percentile", 45.0)
@@ -118,13 +135,6 @@ class TerrainRecordFinalizeNode(Node):
         self.wireframe_line_width = float(self.get_parameter("wireframe_line_width").value)
         self.wireframe_max_height_gap = float(self.get_parameter("wireframe_max_height_gap").value)
         self.wireframe_connect_diagonal = bool(self.get_parameter("wireframe_connect_diagonal").value)
-        self.attitude_correction_enabled = bool(self.get_parameter("attitude_correction_enabled").value)
-        self.attitude_correction_source = str(self.get_parameter("attitude_correction_source").value)
-        self.attitude_reference_mode = str(self.get_parameter("attitude_reference_mode").value)
-        self.attitude_use_origin_z_delta = bool(self.get_parameter("attitude_use_origin_z_delta").value)
-        self.attitude_max_abs_delta_deg = float(self.get_parameter("attitude_max_abs_delta_deg").value)
-        self.min_map_z = float(self.get_parameter("min_map_z").value)
-        self.max_map_z = float(self.get_parameter("max_map_z").value)
         self.terrain_prefilter_enabled = bool(self.get_parameter("terrain_prefilter_enabled").value)
         self.terrain_cell_size = float(self.get_parameter("terrain_cell_size").value)
         self.terrain_low_percentile = float(self.get_parameter("terrain_low_percentile").value)
@@ -145,17 +155,14 @@ class TerrainRecordFinalizeNode(Node):
         self._final_non_ground: Optional[np.ndarray] = None
         self._final_markers: Optional[MarkerArray] = None
         self._final_wireframe_markers: Optional[MarkerArray] = None
-        self._recording_enable=True
+        self._recording_enable = True
         self._last_summary = "아직 finalize되지 않았습니다."
-        self._attitude_ref_origin_z: Optional[float] = None
-        self._attitude_ref_pitch_deg: Optional[float] = None
-        self._attitude_ref_roll_deg: Optional[float] = None
-        self._attitude_corrected_points = 0
 
         # -----------------------------
         # ROS interfaces
         # -----------------------------
-        self.create_subscription(String, self.input_topic, self.on_lidar_json, 30)
+        # JSON(String) 대신 PointCloud2로 직접 구독
+        self.create_subscription(PointCloud2, self.input_topic, self.on_lidar_pc2, 30)
 
         self.pub_final_accumulated = self.create_publisher(
             PointCloud2, "/tank/terrain/final_accumulated_cloud", 10
@@ -181,24 +188,21 @@ class TerrainRecordFinalizeNode(Node):
 
         self.get_logger().info(
             "terrain_record_finalize_node started. "
-            f"Recording from {self.input_topic}. "
+            f"Recording from {self.input_topic} (PointCloud2). "
             "Call /tank/terrain/finalize_map when driving is finished."
         )
 
     # ------------------------------------------------------------------
-    # Input parsing
+    # Input parsing (Optimized for PointCloud2)
     # ------------------------------------------------------------------
-    def on_lidar_json(self, msg: String) -> None:
-        """lidar_processor_node의 all_detected_points_map JSON을 받아 map 좌표 point를 기록한다."""
+    def on_lidar_pc2(self, msg: PointCloud2) -> None:
+        """바이너리 PointCloud2 데이터를 직접 넘파이 배열로 변환하여 누적 기록합니다."""
         if not self._recording_enable:
             return 
-        try:
-            payload = json.loads(msg.data)
-        except Exception as exc:
-            self.get_logger().warn(f"LiDAR JSON parse failed: {exc}")
-            return
 
-        points = self.extract_points_from_payload(payload)
+        # PC2 -> NumPy 직접 변환
+        points = pointcloud2_to_xyz_array(msg)
+
         if points.size == 0:
             return
 
@@ -206,164 +210,13 @@ class TerrainRecordFinalizeNode(Node):
         self._received_frames += 1
         self._received_points += int(points.shape[0])
         self._last_lidar_wall = time.time()
-        self._finalized = False  # 새 데이터가 들어오면 이전 finalize 결과는 오래된 것으로 간주
+        self._finalized = False 
 
         if self._received_frames % 50 == 0:
             self.get_logger().info(
                 f"Recording LiDAR frames={self._received_frames}, "
                 f"raw_points={self._received_points}, stored_points={len(self._recording_points)}"
             )
-
-    def extract_points_from_payload(self, payload: Any) -> np.ndarray:
-        """여러 가능한 JSON 구조에서 Nx3 map 좌표 point 배열을 추출하고 자세 기반 z 보정을 적용한다."""
-        if not isinstance(payload, dict):
-            return np.empty((0, 3), dtype=np.float32)
-
-        raw_points = payload.get("points", [])
-        if not isinstance(raw_points, list):
-            return np.empty((0, 3), dtype=np.float32)
-
-        payload_origin_map = payload.get("lidar_origin_map_for_correction")
-        payload_lidar_rot = payload.get("lidar_rotation_deg")
-        payload_body = payload.get("player_body_deg")
-
-        xyz: List[List[float]] = []
-        for p in raw_points:
-            if not isinstance(p, dict):
-                continue
-            if "isDetected" in p and not bool(p.get("isDetected", False)):
-                continue
-
-            pos = p.get("position_map")
-            if isinstance(pos, dict):
-                try:
-                    map_x = float(pos.get("x", 0.0))
-                    map_y = float(pos.get("y", 0.0))
-                    map_z = float(pos.get("z", 0.0))
-                except Exception:
-                    continue
-            else:
-                raw = p.get("position")
-                if not isinstance(raw, dict):
-                    continue
-                try:
-                    map_x = float(raw.get("x", 0.0))
-                    map_y = float(raw.get("z", 0.0))
-                    map_z = float(raw.get("y", 0.0))
-                except Exception:
-                    continue
-
-            origin_map = p.get("lidar_origin_map") if isinstance(p.get("lidar_origin_map"), dict) else payload_origin_map
-            lidar_rot = p.get("lidar_rotation_deg") if isinstance(p.get("lidar_rotation_deg"), dict) else payload_lidar_rot
-            body_deg = p.get("player_body_deg") if isinstance(p.get("player_body_deg"), dict) else payload_body
-
-            map_z = self.correct_height_with_attitude(
-                map_x=map_x,
-                map_y=map_y,
-                map_z=map_z,
-                origin_map=origin_map,
-                lidar_rotation_deg=lidar_rot,
-                player_body_deg=body_deg,
-            )
-
-            if self.min_map_z <= map_z <= self.max_map_z:
-                xyz.append([map_x, map_y, map_z])
-
-        if not xyz:
-            return np.empty((0, 3), dtype=np.float32)
-        arr = np.asarray(xyz, dtype=np.float32)
-        return arr[np.isfinite(arr).all(axis=1)]
-
-    @staticmethod
-    def _dict_float(d: Any, key: str, default: float = 0.0) -> float:
-        if not isinstance(d, dict):
-            return default
-        try:
-            v = d.get(key, default)
-            return default if v is None else float(v)
-        except Exception:
-            return default
-
-    def choose_pitch_roll_yaw(
-        self,
-        lidar_rotation_deg: Any,
-        player_body_deg: Any,
-    ) -> Tuple[float, float, float]:
-        """yaw는 playerBody.x, pitch/roll은 lidarRotation 우선, 없으면 playerBody y/z를 사용."""
-        yaw = self._dict_float(player_body_deg, "x", 0.0)
-
-        lidar_pitch = self._dict_float(lidar_rotation_deg, "x", 0.0)
-        lidar_roll = self._dict_float(lidar_rotation_deg, "z", 0.0)
-        body_pitch = self._dict_float(player_body_deg, "y", 0.0)
-        body_roll = self._dict_float(player_body_deg, "z", 0.0)
-
-        if self.attitude_correction_source == "body":
-            return yaw, body_pitch, body_roll
-        if self.attitude_correction_source == "lidar":
-            return yaw, lidar_pitch, lidar_roll
-
-        # lidar_then_body: lidarRotation이 0/누락이면 body tilt를 fallback으로 사용한다.
-        pitch = lidar_pitch if abs(lidar_pitch) > 1e-6 else body_pitch
-        roll = lidar_roll if abs(lidar_roll) > 1e-6 else body_roll
-        return yaw, pitch, roll
-
-    def correct_height_with_attitude(
-        self,
-        map_x: float,
-        map_y: float,
-        map_z: float,
-        origin_map: Any,
-        lidar_rotation_deg: Any,
-        player_body_deg: Any,
-    ) -> float:
-        """
-        전차/라이다가 pitch/roll로 흔들릴 때 생기는 높이 오차를 yaw 방향 기준으로 z에 보정한다.
-
-        중요한 점:
-        - x/y는 raw world/map 좌표가 이미 맞는 것으로 보고 다시 회전하지 않는다.
-        - yaw는 보정축을 정하는 데만 사용한다.
-        - pitch/roll은 첫 프레임 기준 변화량(delta)만 제거해서 언덕 자체의 높이 변화는 최대한 보존한다.
-        """
-        if not self.attitude_correction_enabled:
-            return map_z
-        if not isinstance(origin_map, dict):
-            return map_z
-
-        origin_x = self._dict_float(origin_map, "x", map_x)
-        origin_y = self._dict_float(origin_map, "y", map_y)
-        origin_z = self._dict_float(origin_map, "z", map_z)
-        yaw_deg, pitch_deg, roll_deg = self.choose_pitch_roll_yaw(lidar_rotation_deg, player_body_deg)
-
-        if self._attitude_ref_pitch_deg is None or self._attitude_ref_roll_deg is None:
-            self._attitude_ref_pitch_deg = pitch_deg
-            self._attitude_ref_roll_deg = roll_deg
-            self._attitude_ref_origin_z = origin_z
-            return map_z
-
-        pitch_delta = pitch_deg - float(self._attitude_ref_pitch_deg)
-        roll_delta = roll_deg - float(self._attitude_ref_roll_deg)
-        limit = max(0.0, self.attitude_max_abs_delta_deg)
-        if limit > 0.0:
-            pitch_delta = float(np.clip(pitch_delta, -limit, limit))
-            roll_delta = float(np.clip(roll_delta, -limit, limit))
-
-        dx = map_x - origin_x
-        dy = map_y - origin_y
-        yaw = math.radians(yaw_deg)
-
-        # body 기준 좌표. yaw=0이면 forward가 +map_y, right가 +map_x.
-        forward = math.sin(yaw) * dx + math.cos(yaw) * dy
-        right = math.cos(yaw) * dx - math.sin(yaw) * dy
-
-        tilt_error = math.tan(math.radians(pitch_delta)) * forward
-        tilt_error += math.tan(math.radians(roll_delta)) * right
-
-        corrected_z = map_z - tilt_error
-        if self.attitude_use_origin_z_delta and self._attitude_ref_origin_z is not None:
-            corrected_z -= origin_z - float(self._attitude_ref_origin_z)
-
-        self._attitude_corrected_points += 1
-        return corrected_z
 
     # ------------------------------------------------------------------
     # Services
@@ -380,17 +233,14 @@ class TerrainRecordFinalizeNode(Node):
         self._received_points = 0
         self._last_lidar_wall = None
         self._finalized = False
-        self._recording_enable=True
+        self._recording_enable = True
         self._final_accumulated = None
         self._final_ground = None
         self._final_non_ground = None
         self._final_markers = self.make_delete_all_markers("final_elevation_grid")
         self._final_wireframe_markers = self.make_delete_all_markers("final_terrain_wireframe")
         self._last_summary = "reset 완료"
-        self._attitude_ref_origin_z = None
-        self._attitude_ref_pitch_deg = None
-        self._attitude_ref_roll_deg = None
-        self._attitude_corrected_points = 0
+        
         self.publish_final_outputs()
         response.success = True
         response.message = "기록된 LiDAR와 최종 지도 결과를 초기화했습니다."
@@ -434,13 +284,15 @@ class TerrainRecordFinalizeNode(Node):
         accumulated = self.voxel_downsample(raw, self.voxel_size)
         terrain_candidates, obstacle_candidates = self.prefilter_low_surface(accumulated)
         ground, non_ground_from_ground_filter, method = self.split_ground(terrain_candidates)
+        
         if obstacle_candidates.shape[0] > 0 and non_ground_from_ground_filter.shape[0] > 0:
             non_ground = np.vstack([obstacle_candidates, non_ground_from_ground_filter]).astype(np.float32)
         elif obstacle_candidates.shape[0] > 0:
             non_ground = obstacle_candidates.astype(np.float32)
         else:
             non_ground = non_ground_from_ground_filter.astype(np.float32)
-        method = f"attitude_z_corrected+local_low_surface+{method}" if self.attitude_correction_enabled else f"local_low_surface+{method}"
+            
+        method = f"local_low_surface+{method}"
         markers = self.make_elevation_markers(ground)
         wireframe_markers = self.make_wireframe_markers(ground)
 
@@ -450,7 +302,7 @@ class TerrainRecordFinalizeNode(Node):
         self._final_markers = markers
         self._final_wireframe_markers = wireframe_markers
         self._finalized = True
-        self._recording_enable=False
+        self._recording_enable = False
 
         stamp = time.strftime("%Y%m%d_%H%M%S")
         out_prefix = self.save_dir / f"terrain_map_{stamp}"
@@ -462,7 +314,6 @@ class TerrainRecordFinalizeNode(Node):
             f"stored_points={len(self._recording_points)}, "
             f"voxel_points={accumulated.shape[0]}, "
             f"ground={ground.shape[0]}, non_ground={non_ground.shape[0]}, "
-            f"attitude_corrected_points={self._attitude_corrected_points}, "
             f"method={method}, save_prefix={out_prefix}"
         )
         self._last_summary = summary
@@ -570,7 +421,6 @@ class TerrainRecordFinalizeNode(Node):
             self.pub_final_wireframe_markers.publish(self._final_wireframe_markers)
 
     def to_cloud_msg(self, points: np.ndarray, stamp: Any) -> PointCloud2:
-        header = rclpy.qos.QoSProfile  # dummy for linter only
         from std_msgs.msg import Header
         h = Header()
         h.stamp = stamp
@@ -617,14 +467,13 @@ class TerrainRecordFinalizeNode(Node):
             marker.scale.x = self.grid_cell_size
             marker.scale.y = self.grid_cell_size
             marker.scale.z = self.marker_z_thickness
-            # 낮은 곳: 초록 성분 높게, 높은 곳: 빨강 성분 높게. RViz Marker는 색상 지정 필요.
+            # 낮은 곳: 초록 성분 높게, 높은 곳: 빨강 성분 높게.
             marker.color.r = float(t)
             marker.color.g = float(1.0 - 0.6 * t)
             marker.color.b = 0.1
             marker.color.a = self.marker_alpha
             arr.markers.append(marker)
         return arr
-
 
     def grid_height_map(self, ground: np.ndarray) -> Dict[Tuple[int, int], float]:
         """ground point를 x-y grid cell별 대표 높이 dict로 변환한다."""
@@ -641,7 +490,6 @@ class TerrainRecordFinalizeNode(Node):
             step = math.ceil(len(items) / self.max_elevation_cells)
             items = items[::step]
 
-        # 지형은 장애물/노이즈보다 낮은 표면을 대표로 쓰는 편이 안정적이라 median을 사용한다.
         return {key: float(np.median(zlist)) for key, zlist in items}
 
     def height_color(self, z: float, z_min: float, z_max: float, alpha: float) -> ColorRGBA:
@@ -679,7 +527,7 @@ class TerrainRecordFinalizeNode(Node):
         marker.action = Marker.ADD
         marker.pose.orientation.w = 1.0
         marker.scale.x = max(self.wireframe_line_width, 0.001)
-        marker.color.a = 1.0  # colors 배열을 쓰지만 RViz 호환을 위해 기본 alpha도 지정
+        marker.color.a = 1.0 
 
         neighbor_offsets = [(1, 0), (0, 1)]
         if self.wireframe_connect_diagonal:
@@ -696,7 +544,6 @@ class TerrainRecordFinalizeNode(Node):
                     continue
                 z2 = grid[key2]
                 if max_gap > 0.0 and abs(z2 - z1) > max_gap:
-                    # 너무 급격히 높이가 튀는 곳은 선을 끊어서 이상한 수직벽을 줄인다.
                     continue
 
                 x2 = (key2[0] + 0.5) * self.grid_cell_size
@@ -741,6 +588,8 @@ class TerrainRecordFinalizeNode(Node):
         non_ground: np.ndarray,
         method: str,
     ) -> None:
+        import json # Local import for saving meta
+        
         np.save(str(out_prefix) + "_accumulated.npy", accumulated)
         np.save(str(out_prefix) + "_ground.npy", ground)
         np.save(str(out_prefix) + "_non_ground.npy", non_ground)
@@ -750,6 +599,7 @@ class TerrainRecordFinalizeNode(Node):
             np.savetxt(str(out_prefix) + "_ground.csv", ground, delimiter=",", header="x,y,z", comments="")
             np.savetxt(str(out_prefix) + "_non_ground.csv", non_ground, delimiter=",", header="x,y,z", comments="")
 
+        import time # Local
         meta = {
             "created_wall_time": time.time(),
             "map_frame": self.map_frame,

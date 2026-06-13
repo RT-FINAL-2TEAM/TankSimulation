@@ -34,10 +34,13 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Point, PoseStamped, Vector3Stamped
 from rclpy.node import Node
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -117,6 +120,36 @@ class ForceBreakdown:
 
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
+    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+
+    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
+    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
+    node usable on older sensor_msgs_py versions.
+    """
+    try:
+        arr = point_cloud2.read_points_numpy(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+    except Exception:
+        pts = point_cloud2.read_points(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+        if isinstance(pts, np.ndarray):
+            arr = pts
+        else:
+            arr = np.asarray(list(pts), dtype=np.float32)
+    if arr is None:
+        return np.empty((0, 3), dtype=np.float32)
+    arr = np.asarray(arr)
+    if arr.dtype.fields:
+        arr = np.column_stack((arr["x"], arr["y"], arr["z"]))
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.size == 0:
+        return np.empty((0, 3), dtype=np.float32)
+    return np.ascontiguousarray(arr.reshape(-1, 3), dtype=np.float32)
 
 
 def get_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
@@ -597,6 +630,7 @@ class TeamPotentialFieldNode(Node):
         # ROS2 parameter mirror of global variables.
         self.declare_parameter("target_pose_topic", TARGET_POSE_TOPIC)
         self.declare_parameter("fallback_goal_topic", FALLBACK_GOAL_TOPIC)
+        self.declare_parameter("lidar_points_topic", "/tank/sensor/lidar/detected_points_map")
         self.declare_parameter("hz", APF_HZ)
         self.declare_parameter("k_att", K_ATTRACTIVE)
         self.declare_parameter("k_rep", K_REPULSIVE)
@@ -636,6 +670,7 @@ class TeamPotentialFieldNode(Node):
 
         self.target_pose_topic = str(self.get_parameter("target_pose_topic").value)
         self.fallback_goal_topic = str(self.get_parameter("fallback_goal_topic").value)
+        self.lidar_points_topic = str(self.get_parameter("lidar_points_topic").value)
         self.hz = float(self.get_parameter("hz").value)
         self.k_att = float(self.get_parameter("k_att").value)
         self.k_rep = float(self.get_parameter("k_rep").value)
@@ -699,7 +734,7 @@ class TeamPotentialFieldNode(Node):
         self.create_subscription(PoseStamped, self.target_pose_topic, self.target_cb, 10)
         if self.fallback_goal_topic != self.target_pose_topic:
             self.create_subscription(PoseStamped, self.fallback_goal_topic, self.fallback_goal_cb, 10)
-        self.create_subscription(String, LIDAR_POINTS_TOPIC, self.lidar_cb, 10)
+        self.create_subscription(PointCloud2, self.lidar_points_topic, self.lidar_cb, 10)
         if self.use_lidar_clusters:
             self.create_subscription(String, self.lidar_clusters_topic, self.lidar_clusters_cb, 10)
         if self.use_discovered_objects:
@@ -711,7 +746,8 @@ class TeamPotentialFieldNode(Node):
             f"target_topic={self.target_pose_topic}, kA={self.k_att}, kR={self.k_rep}, "
             f"g*={self.influence_radius}, tangent={self.use_tangential_force}, "
             f"threats={len(self.threats)}, discovered={self.use_discovered_objects}, "
-            f"strategy={self.motion_strategy}, clusters={self.use_lidar_clusters}, profile={self.apf_weight_profile_name}"
+            f"strategy={self.motion_strategy}, lidar_pc2={self.lidar_points_topic}, "
+            f"clusters={self.use_lidar_clusters}, profile={self.apf_weight_profile_name}"
         )
 
     # -------------------------------------------------------------------------
@@ -728,11 +764,16 @@ class TeamPotentialFieldNode(Node):
     def fallback_goal_cb(self, msg: PoseStamped) -> None:
         self.fallback_goal = (float(msg.pose.position.x), float(msg.pose.position.y))
 
-    def lidar_cb(self, msg: String) -> None:
+    def lidar_cb(self, msg: PointCloud2) -> None:
         try:
-            self.raw_obstacles = parse_lidar_points_payload(json.loads(msg.data))
+            points = pointcloud2_to_xyz_array(msg)
+            if points.size == 0:
+                self.raw_obstacles = []
+                return
+            # APF uses only map-plane x/y.  Filtering/voxel limiting is done in timer_cb.
+            self.raw_obstacles = [(float(x), float(y)) for x, y in points[:, :2]]
         except Exception as exc:
-            self.get_logger().warn(f"failed to parse lidar APF points: {exc}")
+            self.get_logger().warn(f"failed to parse lidar APF PointCloud2: {exc}")
 
     def lidar_clusters_cb(self, msg: String) -> None:
         try:

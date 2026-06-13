@@ -12,6 +12,7 @@ Local path / local mapping node for YOLO + LiDAR calibrated fusion.
 1. 스레드 안전성(Thread Safety) 확보를 위한 Lock 적용
 2. 카메라-라이다 Time Synchronization 강제 동기화 (고스트 현상 방지)
 3. Discovered Map 메모리 누수 방지 (Decay 로직 추가)
+4. 카메라 투영용 /info는 compact topic 사용, LiDAR hit는 PointCloud2 사용
 """
 
 from __future__ import annotations
@@ -22,21 +23,55 @@ import time
 import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import rclpy
-from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import Point, PoseStamped, Vector3Stamped
+from geometry_msgs.msg import PoseStamped, Vector3Stamped
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import ColorRGBA, String
 from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker, MarkerArray
 
+# [추가] PointCloud2 및 변환 라이브러리
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
+
 try:
     import yaml
-except Exception:  # pragma: no cover
+except Exception:
     yaml = None
+
+
+def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
+    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+
+    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
+    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
+    node usable on older sensor_msgs_py versions.
+    """
+    try:
+        arr = point_cloud2.read_points_numpy(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+    except Exception:
+        pts = point_cloud2.read_points(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+        if isinstance(pts, np.ndarray):
+            arr = pts
+        else:
+            arr = np.asarray(list(pts), dtype=np.float32)
+    if arr is None:
+        return np.empty((0, 3), dtype=np.float32)
+    arr = np.asarray(arr)
+    if arr.dtype.fields:
+        arr = np.column_stack((arr["x"], arr["y"], arr["z"]))
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.size == 0:
+        return np.empty((0, 3), dtype=np.float32)
+    return np.ascontiguousarray(arr.reshape(-1, 3), dtype=np.float32)
 
 SERVICE_TERRAIN_FINALIZE = "/tank/terrain/finalize_map"
 
@@ -53,7 +88,7 @@ from path_planning.config import (
     TOPIC_DISCOVERED_OBJECTS,
     TOPIC_FUSED_OBJECT_MARKERS,
     TOPIC_FUSED_OBJECTS,
-    TOPIC_INFO_RAW,
+    TOPIC_INFO_COMPACT,
     TOPIC_LIDAR_CLUSTERS,
     TOPIC_PLAYER_POSE,
     TOPIC_PLAYER_STATE,
@@ -63,8 +98,6 @@ from path_planning.config import (
 from tank_visual_perception.projection import (
     compute_camera_pose,
     extract_info_payload,
-    lidar_point_map_position,
-    lidar_point_raw_position,
     map_to_raw_xyz,
     point_inside_bbox,
     project_point,
@@ -133,7 +166,8 @@ class LocalPathNode(Node):
         self.declare_parameter("config_file", str(default_config))
         self.config_file = Path(str(self.get_parameter("config_file").value)).expanduser()
         self.cfg = self._load_config(self.config_file)
-
+        self.latest_lidar_points = np.empty((0, 3), dtype=np.float32)
+        self.latest_lidar_ts = 0.0
         self.map_frame = str(self._cfg(["frame", "map_frame"], MAP_FRAME))
         self.hfov_deg = float(self._cfg(["camera", "horizontal_fov_deg"], 47.81061))
         self.default_image_width = int(self._cfg(["camera", "default_image_width"], 1920))
@@ -214,8 +248,8 @@ class LocalPathNode(Node):
         )
 
         self.create_subscription(String, TOPIC_DETECTIONS, self.detections_cb, 10)
-        self.create_subscription(String, TOPIC_LIDAR_DETECTED_MAP, self.lidar_cb, 10)
-        self.create_subscription(String, TOPIC_INFO_RAW, self.info_raw_cb, 10)
+        self.create_subscription(PointCloud2, TOPIC_LIDAR_DETECTED_MAP, self.lidar_cb, 10)
+        self.create_subscription(String, TOPIC_INFO_COMPACT, self.info_raw_cb, 10)
         self.create_subscription(String, TOPIC_LIDAR_CLUSTERS, self.lidar_clusters_cb, 10)
         self.create_subscription(PoseStamped, TOPIC_PLAYER_POSE, self.player_pose_cb, 10)
         self.create_subscription(String, TOPIC_PLAYER_STATE, self.player_state_cb, 10)
@@ -231,11 +265,7 @@ class LocalPathNode(Node):
         self.create_service(Trigger, SERVICE_DISCOVERED_CLEAR, self.clear_service_cb)
         self.terrain_finalize_client = self.create_client(Trigger, SERVICE_TERRAIN_FINALIZE)
         self.create_timer(LOCAL_PATH_TIMER_SEC, self.timer_cb)
-
-        self.get_logger().info(
-            "local_path_node started (Robust Version): projection fusion enabled="
-            f"{self.use_projection_fusion}, clusters={self.prefer_clusters}, method={self.fusion_method}"
-        )
+        self.get_logger().info("local_path_node started (PC2 Optimized Version)")
 
     # ------------------------------------------------------------------
     # Configuration helpers
@@ -271,14 +301,22 @@ class LocalPathNode(Node):
         except Exception as exc:
             self.get_logger().debug(f"detections parse failed: {exc}")
 
-    def lidar_cb(self, msg: String) -> None:
+    def lidar_cb(self, msg: PointCloud2) -> None:
         try:
-            data = json.loads(msg.data)
-            if isinstance(data, dict):
-                with self._lock:
-                    self.latest_lidar_payload = data
+            # PointCloud2를 NumPy 배열로 바로 변환
+            points = pointcloud2_to_xyz_array(msg)
+            stamp_sec = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
+            with self._lock:
+                self.latest_lidar_points = points
+                self.latest_lidar_ts = stamp_sec
+                self.latest_lidar_payload = {
+                    "timestamp_wall": stamp_sec,
+                    "timestamp_ros_sec": stamp_sec,
+                    "frame_id": msg.header.frame_id or MAP_FRAME,
+                    "count": int(points.shape[0]),
+                }
         except Exception as exc:
-            self.get_logger().debug(f"lidar parse failed: {exc}")
+            self.get_logger().debug(f"lidar pc2 parse failed: {exc}")
 
     def info_raw_cb(self, msg: String) -> None:
         try:
@@ -288,7 +326,7 @@ class LocalPathNode(Node):
                 with self._lock:
                     self.latest_info = info
         except Exception as exc:
-            self.get_logger().debug(f"info raw parse failed: {exc}")
+            self.get_logger().debug(f"info compact parse failed: {exc}")
 
     def lidar_clusters_cb(self, msg: String) -> None:
         try:
@@ -378,7 +416,7 @@ class LocalPathNode(Node):
         self.publish_discovered(discovered_to_pub)
 
     def compute_fused_objects_locked(self) -> List[Dict[str, Any]]:
-        if self.player_pose is None or self.latest_detections_payload is None or self.latest_lidar_payload is None:
+        if self.player_pose is None or self.latest_detections_payload is None or self.latest_lidar_points.shape[0] == 0:
             return []
         
         detections = self.latest_detections_payload.get("detections", [])
@@ -390,7 +428,7 @@ class LocalPathNode(Node):
 
         # [핵심 변경 3] 수동 Time Synchronization (고스트 억제)
         det_ts = self._as_float(self.latest_detections_payload.get("timestamp_wall", 0.0))
-        lidar_ts = self._as_float(self.latest_lidar_payload.get("timestamp_wall", 0.0))
+        lidar_ts = self._as_float(self.latest_lidar_ts, 0.0)
         if det_ts > 0 and lidar_ts > 0:
             if abs(det_ts - lidar_ts) > self.max_sync_diff_sec:
                 # 라이다와 카메라의 시차가 너무 크면 매칭을 포기합니다.
@@ -540,26 +578,22 @@ class LocalPathNode(Node):
             return None
 
     def _project_raw_lidar_points(self, ctx: Dict[str, Any], px: float, py: float, image_w: int, image_h: int) -> List[Dict[str, Any]]:
-        if self.latest_info is None:
-            return []
-        raw_points = self.latest_info.get("lidarPoints", [])
-        if not isinstance(raw_points, list):
+        points = self.latest_lidar_points
+        if points.shape[0] == 0:
             return []
         out: List[Dict[str, Any]] = []
-        for p in raw_points:
-            if not isinstance(p, dict):
+        for x, y, z in points:
+            x = float(x)
+            y = float(y)
+            z = float(z)
+            distance = math.hypot(x - px, y - py)
+            if distance < self.min_fusion_range_m or distance > self.max_fusion_range_m:
                 continue
-            if self.use_only_detected_projection_points and not bool(p.get("isDetected", False)):
-                continue
-            dist_raw = self._as_float(p.get("distance"), 9999.0)
-            if dist_raw < self.min_fusion_range_m or dist_raw > self.max_fusion_range_m:
-                continue
-            pos_raw = lidar_point_raw_position(p)
-            pos_map = lidar_point_map_position(p)
-            if pos_raw is None or pos_map is None:
-                continue
+            # Projection utilities use Unity raw xyz.  PC2 is map xyz, so convert back.
+            map_pos = {"x": x, "y": y, "z": z}
+            raw_pos = map_to_raw_xyz(map_pos)
             projected = project_point(
-                vec3_from_dict(pos_raw),
+                vec3_from_dict(raw_pos),
                 ctx["camera_pos"],
                 ctx["camera_yaw"],
                 ctx["camera_pitch"],
@@ -573,13 +607,7 @@ class LocalPathNode(Node):
             u, v, depth = projected
             if not (0 <= u < image_w and 0 <= v < image_h):
                 continue
-            x = self._as_float(pos_map.get("x"), 0.0)
-            y = self._as_float(pos_map.get("y"), 0.0)
-            z = self._as_float(pos_map.get("z"), 0.0)
-            distance = math.hypot(x - px, y - py)
-            if distance < self.min_fusion_range_m or distance > self.max_fusion_range_m:
-                continue
-            out.append({"x": x, "y": y, "z": z, "u": u, "v": v, "depth": depth, "distance_m": distance, "raw": p})
+            out.append({"x": x, "y": y, "z": z, "u": u, "v": v, "depth": depth, "distance_m": distance, "raw": map_pos})
         return out
 
     def _project_clusters(self, ctx: Dict[str, Any], px: float, py: float, image_w: int, image_h: int) -> List[Dict[str, Any]]:
@@ -699,16 +727,32 @@ class LocalPathNode(Node):
         return obj
 
     def _build_angle_lidar_points(self, px: float, py: float) -> List[Dict[str, Any]]:
-        if self.latest_lidar_payload is None:
+        points = self.latest_lidar_points
+        if points.shape[0] == 0:
             return []
-        lidar_points = self.latest_lidar_payload.get("points", [])
-        if not isinstance(lidar_points, list):
-            return []
+            
         usable_points = []
-        for p in lidar_points:
-            item = self._extract_lidar_point(p, px, py)
-            if item is not None:
-                usable_points.append(item)
+        cam_heading = self._camera_heading_deg()
+        
+        # NumPy 벡터화 연산으로 거리 및 각도 계산
+        dx = points[:, 0] - px
+        dy = points[:, 1] - py
+        dist = np.hypot(dx, dy)
+        
+        mask = (dist >= self.min_fusion_range_m) & (dist <= self.max_fusion_range_m)
+        valid_points = points[mask]
+        valid_dist = dist[mask]
+        
+        for i, pt in enumerate(valid_points):
+            global_bearing = math.degrees(math.atan2(pt[0] - px, pt[1] - py))
+            rel_bearing = self._normalize_angle_deg(global_bearing - cam_heading)
+            
+            usable_points.append({
+                "x": float(pt[0]), "y": float(pt[1]), "z": float(pt[2]),
+                "distance_m": float(valid_dist[i]),
+                "global_bearing_deg": global_bearing,
+                "relative_bearing_deg": rel_bearing
+            })
         return usable_points
 
     def _refresh_confirmation(self, obj: DiscoveredObject, now: float) -> None:

@@ -13,7 +13,9 @@
 """
 
 from __future__ import annotations
-
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
+from std_msgs.msg import Header
 import json
 from typing import Any, Dict, Optional
 
@@ -55,6 +57,8 @@ class LidarProcessorNode(Node):
         self.declare_parameter("terrain_grid_resolution", TERRAIN_GRID_RESOLUTION)
         self.declare_parameter("terrain_climb_limit", TERRAIN_CLIMB_LIMIT)
         self.declare_parameter("terrain_obstacle_min_height", TERRAIN_OBSTACLE_MIN_HEIGHT)
+        # Large legacy JSON LiDAR topic.  Downstream nodes should consume PC2 topics.
+        self.declare_parameter("publish_legacy_lidar_json", False)
 
         self.info_raw_topic = str(self.get_parameter("info_raw_topic").value)
         self.ground_filter_enabled = bool(self.get_parameter("ground_filter_enabled").value)
@@ -62,15 +66,16 @@ class LidarProcessorNode(Node):
         self.terrain_grid_resolution = float(self.get_parameter("terrain_grid_resolution").value)
         self.terrain_climb_limit = float(self.get_parameter("terrain_climb_limit").value)
         self.terrain_obstacle_min_height = float(self.get_parameter("terrain_obstacle_min_height").value)
+        self.publish_legacy_lidar_json = bool(self.get_parameter("publish_legacy_lidar_json").value)
 
         self.pub_points = self.create_publisher(String, TOPIC_LIDAR_POINTS, 10)
         self.pub_points_count = self.create_publisher(Int32, TOPIC_LIDAR_POINTS_COUNT, 10)
         self.pub_origin = self.create_publisher(PointStamped, TOPIC_LIDAR_ORIGIN, 10)
         self.pub_origin_raw = self.create_publisher(PointStamped, TOPIC_LIDAR_ORIGIN_RAW, 10)
         self.pub_rotation = self.create_publisher(Vector3Stamped, TOPIC_LIDAR_ROTATION, 10)
-        self.pub_detected_map = self.create_publisher(String, TOPIC_LIDAR_DETECTED_MAP, 10)
-        self.pub_all_detected_map = self.create_publisher(String, TOPIC_LIDAR_ALL_DETECTED_MAP, 10)
-        self.pub_terrain_map = self.create_publisher(String, TOPIC_LIDAR_TERRAIN_MAP, 10)
+        self.pub_detected_map = self.create_publisher(PointCloud2, TOPIC_LIDAR_DETECTED_MAP, 10)
+        self.pub_all_detected_map = self.create_publisher(PointCloud2, TOPIC_LIDAR_ALL_DETECTED_MAP, 10)
+        self.pub_terrain_map = self.create_publisher(PointCloud2, TOPIC_LIDAR_TERRAIN_MAP, 10)
         self.pub_terrain_info = self.create_publisher(String, TOPIC_TERRAIN_INFO, 10)
 
         self.create_subscription(String, self.info_raw_topic, self.info_raw_cb, 10)
@@ -79,6 +84,7 @@ class LidarProcessorNode(Node):
             f"pub={TOPIC_LIDAR_DETECTED_MAP} obstacle-only, "
             f"pub={TOPIC_LIDAR_TERRAIN_MAP} terrain-only, "
             f"pub={TOPIC_LIDAR_ALL_DETECTED_MAP} all hits, "
+            f"legacy_json={self.publish_legacy_lidar_json}, "
             f"ground_filter={self.ground_filter_enabled}, "
             f"grid={self.terrain_grid_resolution}, climb_limit={self.terrain_climb_limit}"
         )
@@ -127,6 +133,25 @@ class LidarProcessorNode(Node):
                 "z": to_float(data.get("playerBodyZ")),
             }
         return None
+        
+    def create_pc2(self, payload_dict: Dict[str, Any], frame_id: str) -> PointCloud2:
+        """JSON 포인트 리스트를 바이너리 PointCloud2로 변환 (속도 최적화 버전)"""
+        raw_points = payload_dict.get("points", [])
+        
+        # 리스트 컴프리헨션으로 빠르게 추출
+        points = [
+            [
+                to_float(p.get("position_map", p.get("position", {})).get("x", 0.0)),
+                to_float(p.get("position_map", p.get("position", {})).get("y", 0.0)),
+                to_float(p.get("position_map", p.get("position", {})).get("z", 0.0))
+            ]
+            for p in raw_points if isinstance(p, dict)
+        ]
+            
+        header = Header()
+        header.stamp = self.get_clock().now().to_msg()
+        header.frame_id = frame_id
+        return point_cloud2.create_cloud_xyz32(header, points)
 
     def info_raw_cb(self, msg: String) -> None:
         try:
@@ -179,15 +204,17 @@ class LidarProcessorNode(Node):
         all_payload["origin_y"] = origin_y
 
         self.publish_int(self.pub_points_count, lidar_count)
-        self.publish_json(self.pub_points, points_payload)
-        self.publish_json(self.pub_all_detected_map, all_payload)
-        self.publish_json(self.pub_detected_map, detected_payload)
-        self.publish_json(self.pub_terrain_map, terrain_payload)
-        self.publish_json(self.pub_terrain_info, terrain_info_payload)
+        # JSON serialization of thousands of LiDAR points is expensive.  Keep it
+        # behind a parameter for old debug tools; the normal fast path is PC2.
+        if self.publish_legacy_lidar_json:
+            self.publish_json(self.pub_points, points_payload)
 
+        self.pub_all_detected_map.publish(self.create_pc2(all_payload, MAP_FRAME))
+        self.pub_detected_map.publish(self.create_pc2(detected_payload, MAP_FRAME))
+        self.pub_terrain_map.publish(self.create_pc2(terrain_payload, MAP_FRAME))
+        self.publish_json(self.pub_terrain_info, terrain_info_payload)
         if rotation is not None:
             self.publish_vector3(self.pub_rotation, rotation, UNITY_FRAME)
-
 
 def main(args=None) -> None:
     rclpy.init(args=args)

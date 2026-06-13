@@ -8,7 +8,7 @@ RViz overlay and actual YOLO-LiDAR fusion.
 
 Subscribe:
   /tank/camera/image_compressed     sensor_msgs/CompressedImage
-  /tank/api/info/raw                std_msgs/String
+  /tank/api/info/compact            std_msgs/String
 
 Publish:
   /tank/camera/lidar_projection/image       sensor_msgs/Image
@@ -26,14 +26,15 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import CompressedImage, Image
+from sensor_msgs.msg import CompressedImage, Image, PointCloud2
+from sensor_msgs_py import point_cloud2
 from std_msgs.msg import String
 
 from tank_visual_perception.projection import (
     DEFAULT_PROJECTION_PARAMS,
     compute_camera_pose,
     extract_info_payload,
-    lidar_point_raw_position,
+    map_to_raw_xyz,
     project_point,
     to_float,
     vec3_from_dict,
@@ -43,6 +44,36 @@ from tank_visual_perception.projection import (
 def compressed_msg_to_cv2(msg: CompressedImage) -> Optional[np.ndarray]:
     np_arr = np.frombuffer(msg.data, np.uint8)
     return cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+
+def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
+    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+
+    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
+    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
+    node usable on older sensor_msgs_py versions.
+    """
+    try:
+        arr = point_cloud2.read_points_numpy(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+    except Exception:
+        pts = point_cloud2.read_points(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+        if isinstance(pts, np.ndarray):
+            arr = pts
+        else:
+            arr = np.asarray(list(pts), dtype=np.float32)
+    if arr is None:
+        return np.empty((0, 3), dtype=np.float32)
+    arr = np.asarray(arr)
+    if arr.dtype.fields:
+        arr = np.column_stack((arr["x"], arr["y"], arr["z"]))
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.size == 0:
+        return np.empty((0, 3), dtype=np.float32)
+    return np.ascontiguousarray(arr.reshape(-1, 3), dtype=np.float32)
 
 
 def cv2_to_image_msg(image_bgr: np.ndarray, stamp, frame_id: str) -> Image:
@@ -75,7 +106,8 @@ class LidarCameraOverlayNode(Node):
         super().__init__("lidar_camera_overlay_node")
 
         self.declare_parameter("image_topic", "/tank/camera/image_compressed")
-        self.declare_parameter("info_topic", "/tank/api/info/raw")
+        self.declare_parameter("info_topic", "/tank/api/info/compact")
+        self.declare_parameter("lidar_pc2_topic", "/tank/sensor/lidar/detected_points_map")
         self.declare_parameter("out_image_topic", "/tank/camera/lidar_projection/image")
         self.declare_parameter("out_compressed_topic", "/tank/camera/lidar_projection/compressed")
         self.declare_parameter("out_status_topic", "/tank/camera/lidar_projection/status")
@@ -90,6 +122,7 @@ class LidarCameraOverlayNode(Node):
 
         self.image_topic = str(self.get_parameter("image_topic").value)
         self.info_topic = str(self.get_parameter("info_topic").value)
+        self.lidar_pc2_topic = str(self.get_parameter("lidar_pc2_topic").value)
         self.out_image_topic = str(self.get_parameter("out_image_topic").value)
         self.out_compressed_topic = str(self.get_parameter("out_compressed_topic").value)
         self.out_status_topic = str(self.get_parameter("out_status_topic").value)
@@ -104,8 +137,11 @@ class LidarCameraOverlayNode(Node):
         self._lock = threading.Lock()
         self._latest_info: Optional[Dict[str, Any]] = None
         self._latest_info_stamp = None
+        self._latest_lidar_points = np.empty((0, 3), dtype=np.float32)
+        self._latest_lidar_stamp = None
 
         self.create_subscription(String, self.info_topic, self.on_info, 10)
+        self.create_subscription(PointCloud2, self.lidar_pc2_topic, self.on_lidar_pc2, 10)
         self.create_subscription(CompressedImage, self.image_topic, self.on_image, 10)
         self.pub_overlay_image = self.create_publisher(Image, self.out_image_topic, 10)
         self.pub_overlay_compressed = self.create_publisher(CompressedImage, self.out_compressed_topic, 10)
@@ -114,6 +150,7 @@ class LidarCameraOverlayNode(Node):
         self.get_logger().info("LiDAR-camera overlay node started")
         self.get_logger().info(f"subscribe image: {self.image_topic}")
         self.get_logger().info(f"subscribe info : {self.info_topic}")
+        self.get_logger().info(f"subscribe lidar: {self.lidar_pc2_topic}")
         self.get_logger().info(f"publish image  : {self.out_image_topic}")
         self.get_logger().info(f"projection params: {self.params}")
 
@@ -127,7 +164,16 @@ class LidarCameraOverlayNode(Node):
                 self._latest_info = info
                 self._latest_info_stamp = self.get_clock().now()
         except Exception as exc:
-            self.get_logger().warn(f"failed to parse info raw: {exc}")
+            self.get_logger().warn(f"failed to parse info compact: {exc}")
+
+    def on_lidar_pc2(self, msg: PointCloud2) -> None:
+        try:
+            points = pointcloud2_to_xyz_array(msg)
+            with self._lock:
+                self._latest_lidar_points = points
+                self._latest_lidar_stamp = self.get_clock().now()
+        except Exception as exc:
+            self.get_logger().warn(f"failed to parse lidar PC2: {exc}")
 
     def on_image(self, msg: CompressedImage) -> None:
         image = compressed_msg_to_cv2(msg)
@@ -137,15 +183,16 @@ class LidarCameraOverlayNode(Node):
 
         with self._lock:
             info = self._latest_info
+            lidar_points = self._latest_lidar_points.copy()
 
         if info is None:
             overlay = image.copy()
-            cv2.putText(overlay, "Waiting for /tank/api/info/raw...", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(overlay, f"Waiting for {self.info_topic}...", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2, cv2.LINE_AA)
             self.publish_overlay(overlay, msg.header.stamp, msg.header.frame_id or "tank_camera")
             self.publish_status(0, 0, 0, "waiting_info")
             return
 
-        overlay, projected_count, used_count, total_count = self.draw_lidar_overlay(image, info)
+        overlay, projected_count, used_count, total_count = self.draw_lidar_overlay(image, info, lidar_points)
         if self.draw_text:
             text = f"LiDAR projection: {projected_count}/{used_count} used, total={total_count}"
             cv2.putText(overlay, text, (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 4, cv2.LINE_AA)
@@ -153,7 +200,7 @@ class LidarCameraOverlayNode(Node):
         self.publish_overlay(overlay, msg.header.stamp, msg.header.frame_id or "tank_camera")
         self.publish_status(projected_count, used_count, total_count, "ok")
 
-    def draw_lidar_overlay(self, image: np.ndarray, info: Dict[str, Any]) -> Tuple[np.ndarray, int, int, int]:
+    def draw_lidar_overlay(self, image: np.ndarray, info: Dict[str, Any], lidar_points: np.ndarray) -> Tuple[np.ndarray, int, int, int]:
         h, w = image.shape[:2]
         overlay = image.copy()
         try:
@@ -162,24 +209,26 @@ class LidarCameraOverlayNode(Node):
             cv2.putText(overlay, f"Invalid info: {exc}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
             return overlay, 0, 0, 0
 
-        lidar_points = info.get("lidarPoints", [])
-        if not isinstance(lidar_points, list):
+        if lidar_points.size == 0:
             return overlay, 0, 0, 0
+
+        if isinstance(camera_pos, dict):
+            cam_raw_x = float(camera_pos.get("x", 0.0))
+            cam_raw_z = float(camera_pos.get("z", 0.0))
+        else:
+            cam_raw_x = float(getattr(camera_pos, "x", 0.0))
+            cam_raw_z = float(getattr(camera_pos, "z", 0.0))
 
         projected_count = 0
         used_count = 0
-        total_count = len(lidar_points)
-        for p in lidar_points:
-            if not isinstance(p, dict):
-                continue
-            if self.use_only_detected and not bool(p.get("isDetected", False)):
-                continue
-            distance = to_float(p.get("distance"), 9999.0)
+        total_count = int(lidar_points.shape[0])
+        for x, y, z in lidar_points:
+            map_pos = {"x": float(x), "y": float(y), "z": float(z)}
+            # map.x == raw.x, map.y == raw.z.  Distance filter is only for overlay load limiting.
+            distance = math.hypot(map_pos["x"] - cam_raw_x, map_pos["y"] - cam_raw_z)
             if distance < self.min_distance or distance > self.max_distance:
                 continue
-            pos_raw = lidar_point_raw_position(p)
-            if pos_raw is None:
-                continue
+            pos_raw = map_to_raw_xyz(map_pos)
             used_count += 1
             projected = project_point(
                 point_world_raw=vec3_from_dict(pos_raw),

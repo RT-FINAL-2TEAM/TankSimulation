@@ -90,14 +90,20 @@ def get_turret_angle(info: Dict[str, Any]) -> Tuple[float, float]:
 
 
 def extract_info_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Accept /tank/api/info/raw wrapper or raw /info dict."""
+    """Accept /tank/api/info/raw, /tank/api/info/compact, or raw /info dict.
+
+    Camera projection only needs the LiDAR origin and turret/body angles.  The
+    full lidarPoints array is intentionally not required here so downstream
+    fusion/overlay nodes can subscribe to the lightweight compact topic while
+    consuming actual LiDAR hits from PointCloud2.
+    """
     if not isinstance(payload, dict):
         return None
     if isinstance(payload.get("data"), dict):
         payload = payload["data"]
     if not isinstance(payload, dict):
         return None
-    if "lidarOrigin" not in payload or "lidarPoints" not in payload:
+    if "lidarOrigin" not in payload:
         return None
     return payload
 
