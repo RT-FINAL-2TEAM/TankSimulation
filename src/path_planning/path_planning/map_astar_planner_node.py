@@ -20,6 +20,7 @@ import heapq
 import json
 import math
 import time
+import threading
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -504,6 +505,9 @@ class TeamDynamicAStarPlannerNode(Node):
         self.create_subscription(PointCloud2, TOPIC_LIDAR_DETECTED_MAP, self.lidar_cb, 10)
         self.create_subscription(String, TOPIC_LIDAR_CLUSTERS, self.lidar_clusters_cb, 10)
         self.create_timer(1.0 / max(1.0, PLANNER_HZ), self.timer_cb)
+        self._planning_lock = threading.Lock()
+        self._is_planning = False
+
         self.get_logger().info(
             "Team Dynamic A* planner initialized: "
             f"use_gt_obstacles={self.use_gt_obstacles}, dynamic_replan={self.enable_dynamic_replan}, "
@@ -617,69 +621,104 @@ class TeamDynamicAStarPlannerNode(Node):
         return self.lidar_obstacles.build_bboxes(self.lidar_cluster_eps, self.lidar_cluster_min_samples)
 
     def maybe_plan(self, reason: str) -> None:
+        self._request_plan_async(reason)
+
+    def _request_plan_async(self, reason: str) -> None:
+        if self._is_planning:
+            return
         if self.current_pos is None or self.goal_pos is None:
             return
+
+        self._is_planning = True
         self.last_plan_attempt_wall = self.wall_time()
+
+        start_pos = self.current_pos
+        goal_pos = self.goal_pos
+
         obstacles: List[Dict[str, float]] = []
         if self.use_gt_obstacles:
-            obstacles.extend(self.gt_obstacles)
+            obstacles.extend(deepcopy(self.gt_obstacles))
         lidar_bboxes: List[Dict[str, float]] = []
         if self.enable_dynamic_replan and self.lidar_obstacles.history_count > 0:
-            lidar_bboxes = self.build_lidar_bboxes()
+            lidar_bboxes = deepcopy(self.build_lidar_bboxes())
             obstacles.extend(lidar_bboxes)
-        route: List[Tuple[float, float]] = []
-        route_mode = "direct_astar"
-        if self.use_route_waypoints:
-            try:
-                route_config = self.route_config_file or None
-                waypoints = get_route_waypoints(self.route_map_name, self.route_id, route_config)
-                # Always append the current ROS goal so route A/B remains a corridor hint, not a hard final target.
-                through = list(waypoints) + [self.goal_pos]
-                route = team_plan_path_through_waypoints(
-                    self.current_pos,
-                    through,
-                    obstacles,
-                    static_obstacles=None,
-                    inflate=self.inflate,
-                    clearance_weight=self.route_clearance_weight,
-                    side=self.route_side,
-                )
-                route_mode = f"route_waypoints:{self.route_map_name}/{self.route_id}/{self.route_side}"
-            except Exception as exc:
-                self.get_logger().warn(f"route waypoint planning failed, fallback direct A*: {exc}")
-                route = []
-        if not route:
-            route = plan_global_path(
-                self.current_pos,
-                self.goal_pos,
-                obstacles,
-                width=self.map_width,
-                height=self.map_height,
-                resolution=self.resolution,
-                inflate=self.inflate,
-                use_smoothing=self.use_path_smoothing,
-                max_expansions=self.max_expansions,
-            )
+
+        threading.Thread(
+            target=self._plan_worker,
+            args=(reason, start_pos, goal_pos, obstacles, lidar_bboxes),
+            daemon=True
+        ).start()
+
+    def _plan_worker(
+        self,
+        reason: str,
+        start_pos: Tuple[float, float],
+        goal_pos: Tuple[float, float],
+        obstacles: List[Dict[str, float]],
+        lidar_bboxes: List[Dict[str, float]]
+    ) -> None:
+        try:
+            route: List[Tuple[float, float]] = []
             route_mode = "direct_astar"
-        if route:
-            self.route = route
-            self.route_index = 0
-            self.route_version += 1
-            self.last_plan_wall = self.wall_time()
-            if reason == "lidar_path_blocked":
-                self.last_dynamic_replan_wall = self.last_plan_wall
-            self.plan_request_pending = False
-            self.path_block_hit_count = 0
-            self.last_path_publish_wall = -1e9
-            self.last_replan_reason = reason
-            self.publish_lidar_bboxes(lidar_bboxes)
-            self.get_logger().info(
-                f"A* path updated: reason={reason}, mode={route_mode}, points={len(route)}, "
-                f"obstacles={len(obstacles)}, lidar_bboxes={len(lidar_bboxes)}"
-            )
-        else:
-            self.last_replan_reason = f"plan_failed_{reason}"
-            self.get_logger().warn(f"A* failed: reason={reason}, obstacles={len(obstacles)}")
+            if self.use_route_waypoints:
+                try:
+                    route_config = self.route_config_file or None
+                    waypoints = get_route_waypoints(self.route_map_name, self.route_id, route_config)
+                    through = list(waypoints) + [goal_pos]
+                    route = team_plan_path_through_waypoints(
+                        start_pos,
+                        through,
+                        obstacles,
+                        static_obstacles=None,
+                        inflate=self.inflate,
+                        clearance_weight=self.route_clearance_weight,
+                        side=self.route_side,
+                    )
+                    route_mode = f"route_waypoints:{self.route_map_name}/{self.route_id}/{self.route_side}"
+                except Exception as exc:
+                    self.get_logger().warn(f"route waypoint planning failed, fallback direct A*: {exc}")
+                    route = []
+            if not route:
+                route = plan_global_path(
+                    start_pos,
+                    goal_pos,
+                    obstacles,
+                    width=self.map_width,
+                    height=self.map_height,
+                    resolution=self.resolution,
+                    inflate=self.inflate,
+                    use_smoothing=self.use_path_smoothing,
+                    max_expansions=self.max_expansions,
+                )
+                route_mode = "direct_astar"
+
+            if route:
+                with self._planning_lock:
+                    self.route = route
+                    self.route_index = 0
+                    self.route_version += 1
+                    self.last_plan_wall = self.wall_time()
+                    if reason == "lidar_path_blocked":
+                        self.last_dynamic_replan_wall = self.last_plan_wall
+                    self.plan_request_pending = False
+                    self.path_block_hit_count = 0
+                    self.last_path_publish_wall = -1e9
+                    self.last_replan_reason = reason
+                
+                self.publish_lidar_bboxes(lidar_bboxes)
+                self.publish_path(force=True)
+                self.get_logger().info(
+                    f"A* path updated: reason={reason}, mode={route_mode}, points={len(route)}, "
+                    f"obstacles={len(obstacles)}, lidar_bboxes={len(lidar_bboxes)}"
+                )
+            else:
+                with self._planning_lock:
+                    self.last_replan_reason = f"plan_failed_{reason}"
+                self.get_logger().warn(f"A* failed: reason={reason}, obstacles={len(obstacles)}")
+        except Exception as exc:
+            self.get_logger().error(f"전역 경로 계획 스레드 에러: {exc}")
+        finally:
+            self._is_planning = False
 
     def publish_lidar_bboxes(self, bboxes: List[Dict[str, float]]) -> None:
         msg = String()
