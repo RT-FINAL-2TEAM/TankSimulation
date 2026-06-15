@@ -61,7 +61,7 @@ class StaticMapLoaderNode(Node):
 
         pkg_share = Path(get_package_share_directory("rviz_visualization"))
         default_config = pkg_share / "config" / "static_map_costs.yaml"
-        default_recon_map = pkg_share / "map" / "recon_map.map"
+        default_recon_map = pkg_share / "map" / "finalmap.map"
         default_mission_map = pkg_share / "map" / "mission_map.map"
 
         self.declare_parameter("mode", "recon_only")

@@ -21,7 +21,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     gui_share = get_package_share_directory("rviz_visualization")
     controller_share = get_package_share_directory("control")
-    recon_map_file = os.path.join(gui_share, "map", "recon_map.map")
+    recon_map_file = os.path.join(gui_share, "map", "finalmap.map")
     tank_param_file = os.path.join(controller_share, "config", "tank_parameters.yaml")
     path_planning_share = get_package_share_directory("path_planning")
     potential_share = get_package_share_directory("potential")
@@ -77,7 +77,7 @@ def generate_launch_description():
                 # TankSimulation route A/B strategy is now active in the ROS2 planner.
                 "use_route_waypoints": True,
                 "route_config_file": route_config_file,
-                "route_map_name": "recon_map",
+                "route_map_name": "finalmap",
                 "route_id": "B",
                 "route_side": "east",
                 "route_clearance_weight": 0.4,
