@@ -20,6 +20,7 @@ import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Path as NavPath
 from rclpy.node import Node
 from std_msgs.msg import String
 
@@ -149,6 +150,9 @@ class TeamPathControllerNode(Node):
         self._pivot_turn_count = 0
         self._last_pose_wall_time = 0.0
 
+        self.global_path: list[tuple[float, float]] = []
+        self.trajectory_history: list[tuple[float, float]] = []
+
         self.pub_cmd = self.create_publisher(String, TOPIC_CONTROL_COMMAND, 10)
         self.pub_status = self.create_publisher(String, TOPIC_CONTROL_STATUS, 10)
         self.create_subscription(PoseStamped, TOPIC_PLAYER_POSE, self.player_pose_cb, 10)
@@ -156,6 +160,7 @@ class TeamPathControllerNode(Node):
         self.create_subscription(PoseStamped, TOPIC_GOAL_POSE, self.goal_pose_cb, 10)
         self.create_subscription(PoseStamped, TOPIC_LOOKAHEAD_POSE, self.lookahead_cb, 10)
         self.create_subscription(PoseStamped, TOPIC_LOCAL_TARGET_POSE, self.local_target_cb, 10)
+        self.create_subscription(NavPath, "/tank/global_path", self.global_path_cb, 10)
         self.create_subscription(String, TOPIC_COLLISION_EVENT, self.collision_cb, 10)
         hz = float(self.get_parameter("controller_hz").value)
         self.create_timer(1.0 / max(1.0, hz), self.timer_cb)
@@ -189,6 +194,15 @@ class TeamPathControllerNode(Node):
         self._last_pose_wall_time = time.time()
         if self.last_stuck_check_pos is None:
             self.last_stuck_check_pos = self.current_pos
+        self.trajectory_history.append(self.current_pos)
+        if len(self.trajectory_history) > 5000:
+            self.trajectory_history.pop(0)
+
+    def global_path_cb(self, msg: NavPath) -> None:
+        path = []
+        for pose in msg.poses:
+            path.append((float(pose.pose.position.x), float(pose.pose.position.y)))
+        self.global_path = path
 
     def player_state_cb(self, msg: String) -> None:
         try:
@@ -350,6 +364,16 @@ class TeamPathControllerNode(Node):
         cmd_ws, w_ws, speed_mode = self.calculate_speed(target, yaw_error)
         action = self.make_action(cmd_ws, w_ws, cmd_ad, w_ad)
         self.publish_command(action)
+
+        mean_cte = 0.0
+        max_cte = 0.0
+        if self.global_path and self.trajectory_history:
+            from .trajectory_metrics import calculate_cross_track_error
+            try:
+                mean_cte, max_cte = calculate_cross_track_error(self.trajectory_history, self.global_path)
+            except Exception as exc:
+                self.get_logger().error(f"Failed to calculate CTE: {exc}")
+
         self.publish_status({
             "ok": True,
             "target_source": source,
@@ -364,6 +388,8 @@ class TeamPathControllerNode(Node):
             "speed_mode": speed_mode,
             "mission_complete": self.mission_complete,
             "collision_count": self.collision_count,
+            "mean_cte": mean_cte,
+            "max_cte": max_cte,
             "command": action,
         })
 

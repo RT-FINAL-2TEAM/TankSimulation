@@ -243,7 +243,7 @@ class LidarDbscanClusterNode(Node):
                         "y_min": bbox["z_min"], "y_max": bbox["z_max"],
                         "z_min": bbox["y_min"], "z_max": bbox["y_max"],
                     },
-                    "nearest_origin_distance_m": nearest,
+                    "nearest_tank_distance_m": nearest,
                 }
             )
             
