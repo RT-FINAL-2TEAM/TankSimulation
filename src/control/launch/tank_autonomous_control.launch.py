@@ -37,6 +37,7 @@ def generate_launch_description():
             executable="lidar_processor_node",
             name="tank_lidar_processor_node",
             output="screen",
+            parameters=[{"publish_legacy_lidar_json": True}],
         ),
         # Team visual perception integration:
         # - /detect image from ros_bridge + /info LiDAR raw -> camera LiDAR projection overlay
@@ -96,9 +97,9 @@ def generate_launch_description():
                 "publish_path_period_sec": 5.0,
                 "goal_tolerance": 10.0,
                 "default_goal_enabled": True,
-                # Latest TankSimulation DESTINATION=(120,250)
-                "default_goal_x": 120.0,
-                "default_goal_y": 250.0,
+                # 시뮬레이터 실측 목적지 (105.23, 268.78)
+                "default_goal_x": 105.23,
+                "default_goal_y": 268.78,
             }],
         ),
 

@@ -1,6 +1,6 @@
 finalmap:
   start: [60.0, 27.0]
-  destination: [117.0, 250.0]
+  destination: [105.23, 268.78]  # 시뮬레이터 실측 목적지
   corridor_width: 20.0
   routes:
     # A루트: 서쪽으로 도는 경로 (위협 House002_144, House002_14 우회)
