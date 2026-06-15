@@ -143,9 +143,11 @@ class TeamPathControllerNode(Node):
         self.mission_complete = False
 
         self.last_stuck_check_time = 0.0
-        self.last_stuck_check_pos: Tuple[float, float] = (0.0, 0.0)
+        self.last_stuck_check_pos: Optional[Tuple[float, float]] = None
         self.is_escaping = False
         self.escape_start_time = 0.0
+        self._pivot_turn_count = 0
+        self._last_pose_wall_time = 0.0
 
         self.pub_cmd = self.create_publisher(String, TOPIC_CONTROL_COMMAND, 10)
         self.pub_status = self.create_publisher(String, TOPIC_CONTROL_STATUS, 10)
@@ -182,7 +184,11 @@ class TeamPathControllerNode(Node):
         return max(vals) if vals else default
 
     def player_pose_cb(self, msg: PoseStamped) -> None:
+        import time
         self.current_pos = (float(msg.pose.position.x), float(msg.pose.position.y))
+        self._last_pose_wall_time = time.time()
+        if self.last_stuck_check_pos is None:
+            self.last_stuck_check_pos = self.current_pos
 
     def player_state_cb(self, msg: String) -> None:
         try:
@@ -253,25 +259,40 @@ class TeamPathControllerNode(Node):
             return "STOP", 1.0, "target_stop"
         if abs_err > self.rotate_in_place_angle_deg:
             return "STOP", 1.0, "rotate_before_drive"
+        
+        speed_factor = self.max_speed / 19.45 if self.max_speed > 0.0 else 1.0
         if abs_err > self.slowdown_angle_deg:
-            return "W", clamp(self.turn_ws_weight, 0.1, 1.0), "slow_turn"
-        return "W", clamp(self.straight_ws_weight, 0.1, 1.0), "cruise"
+            w_ws = clamp(self.turn_ws_weight * speed_factor, 0.1, 1.0)
+            return "W", w_ws, "slow_turn"
+            
+        error_scale = 1.0 - (abs_err / self.slowdown_angle_deg) * 0.3
+        w_ws = clamp(self.straight_ws_weight * speed_factor * error_scale, 0.1, 1.0)
+        return "W", w_ws, "cruise"
 
     def escape_command_if_needed(self) -> Optional[Tuple[Dict[str, Any], str]]:
+        import time
         if not self.enable_stuck_escape or self.current_pos is None:
             return None
-        t = self.current_sim_time
+        t = self.current_sim_time if self.current_sim_time > 0.0 else time.time()
         if self.is_escaping:
             elapsed = t - self.escape_start_time
             if elapsed < self.escape_reverse_sec:
                 return self.make_action("S", 1.0, "", 0.0), "escape_reverse"
             if elapsed < self.escape_reverse_sec + self.escape_turn_sec:
-                return self.make_action("W", 0.0, "D", 1.0), "escape_pivot"
+                pivot_dir = "D" if self._pivot_turn_count % 2 == 0 else "A"
+                self._pivot_turn_count += 1
+                return self.make_action("W", 0.4, pivot_dir, 1.0), "escape_pivot"
             self.is_escaping = False
             self.last_stuck_check_time = t
             self.last_stuck_check_pos = self.current_pos
             return None
-        if t > 5.0 and (t - self.last_stuck_check_time) > self.stuck_check_period:
+            
+        if self.last_stuck_check_pos is None:
+            self.last_stuck_check_pos = self.current_pos
+            self.last_stuck_check_time = t
+            return None
+
+        if (t - self.last_stuck_check_time) > self.stuck_check_period:
             moved = get_distance(self.current_pos, self.last_stuck_check_pos)
             if moved < self.stuck_min_movement:
                 self.is_escaping = True
@@ -302,6 +323,12 @@ class TeamPathControllerNode(Node):
         self.pub_status.publish(msg)
 
     def timer_cb(self) -> None:
+        import time
+        if self._last_pose_wall_time > 0.0 and time.time() - self._last_pose_wall_time > 2.0:
+            self.publish_command(empty_action())
+            self.publish_status({"ok": False, "reason": "player_pose_stale_fallback"})
+            return
+
         if self.current_pos is None:
             self.publish_command(empty_action())
             self.publish_status({"ok": False, "reason": "no_player_pose"})
