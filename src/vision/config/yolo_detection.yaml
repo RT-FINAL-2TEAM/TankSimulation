@@ -6,8 +6,8 @@ model:
   iou: 0.70
   max_det: 12
   max_return: 5
-  model_confidence: 0.10
-  fallback_model_confidence: 0.05
+  model_confidence: 0.5
+  fallback_model_confidence: 0.5
   enable_low_conf_fallback: false
   enable_cache: true
   min_interval_sec: 0.05
@@ -53,10 +53,10 @@ classes:
     tank: '#FF0000'
     car: '#FF8C00'
     house: '#B084FF'
-  default_confidence: 0.20
+  default_confidence: 0.5
   confidence_thresholds:
-    tank: 0.25
-    person: 0.25
+    tank: 0.5
+    person: 0.5
 
 bbox_distance:
   # 보류: bbox 기반 거리 추정 알고리즘은 나중에 보조 metadata/fallback으로만 검토한다.

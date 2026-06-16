@@ -129,8 +129,8 @@ class YoloRuntimeConfig:
     iou: float = 0.70
     max_det: int = 20
     max_return: int = 5
-    model_conf: float = 0.10
-    fallback_model_conf: float = 0.05
+    model_conf: float = 0.5
+    fallback_model_conf: float = 0.5
     low_conf_fallback: bool = False
     return_fallback_detections: bool = True
     tracking_enabled: bool = True
@@ -146,7 +146,7 @@ class YoloRuntimeConfig:
     class_fixed_ids: Dict[str, int] = field(default_factory=lambda: {"tank": 1, "rock": 2, "person": 3, "car": 4, "house": 5})
     class_colors: Dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CLASS_COLORS))
     default_box_color: str = "#00FF00"
-    default_confidence: float = 0.20
+    default_confidence: float = 0.5
     class_confidence_thresholds: Dict[str, float] = field(default_factory=dict)
     shadow_filter_enabled: bool = False
     shadow_sigma: float = 35.0
@@ -196,8 +196,8 @@ class YoloRuntimeConfig:
             iou=float(os.getenv("YOLO_IOU", _deep_get(raw, ["model", "iou"], 0.70))),
             max_det=int(os.getenv("YOLO_MAX_DET", _deep_get(raw, ["model", "max_det"], 20))),
             max_return=int(os.getenv("YOLO_MAX_RETURN", _deep_get(raw, ["model", "max_return"], 5))),
-            model_conf=float(os.getenv("YOLO_MODEL_CONF", _deep_get(raw, ["model", "model_confidence"], 0.10))),
-            fallback_model_conf=float(os.getenv("YOLO_FALLBACK_MODEL_CONF", _deep_get(raw, ["model", "fallback_model_confidence"], 0.05))),
+            model_conf=float(os.getenv("YOLO_MODEL_CONF", _deep_get(raw, ["model", "model_confidence"], 0.5))),
+            fallback_model_conf=float(os.getenv("YOLO_FALLBACK_MODEL_CONF", _deep_get(raw, ["model", "fallback_model_confidence"], 0.5))),
             low_conf_fallback=_env_flag("YOLO_LOW_CONF_FALLBACK", bool(_deep_get(raw, ["model", "enable_low_conf_fallback"], False))),
             return_fallback_detections=_env_flag("YOLO_RETURN_FALLBACK_DETECTIONS", True),
             tracking_enabled=_env_flag("YOLO_TRACKING", bool(_deep_get(raw, ["tracking", "enabled"], True))),
@@ -213,7 +213,7 @@ class YoloRuntimeConfig:
             class_fixed_ids=fixed_ids,
             class_colors=colors,
             default_box_color=str(_deep_get(raw, ["classes", "default_box_color"], "#00FF00")),
-            default_confidence=float(os.getenv("YOLO_DEFAULT_CONF", _deep_get(raw, ["classes", "default_confidence"], 0.20))),
+            default_confidence=float(os.getenv("YOLO_DEFAULT_CONF", _deep_get(raw, ["classes", "default_confidence"], 0.5))),
             class_confidence_thresholds={k: float(v) for k, v in thresholds.items()},
             shadow_filter_enabled=_env_flag("YOLO_SHADOW_FILTER", bool(_deep_get(raw, ["preprocess", "shadow_filter_enabled"], False))),
             shadow_sigma=float(os.getenv("YOLO_SHADOW_SIGMA", _deep_get(raw, ["preprocess", "shadow_sigma"], 35.0))),
