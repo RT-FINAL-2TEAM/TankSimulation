@@ -1,7 +1,7 @@
 import json
 import math
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 class ReconLogger:
@@ -37,6 +37,12 @@ class ReconLogger:
         self.total_sim_time: float = 0.0
         self.total_distance: float = 0.0
 
+        # 전차 궤적(노출/발각 사후계산용). [t, x, z, yaw] map 좌표(x=map.x, z=map.y).
+        # 0.5m 이상 이동 시에만 적재해 파일 크기를 억제한다.
+        self.trajectory: list[list] = []
+        self._last_traj_xz: Optional[Tuple[float, float]] = None
+        self._traj_min_step_m: float = 0.5
+
         # terrain roughness 수집
         self._pitch_samples: list[float] = []
         self._roll_samples: list[float] = []
@@ -55,6 +61,17 @@ class ReconLogger:
             "z": round(z, 2),
             "bbox": bbox,
         })
+
+    # -- 전차 궤적 로깅 -----------------------------------------------------
+
+    def log_pose(self, sim_time: float, x: float, z: float, yaw: float = 0.0) -> None:
+        """전차 map 좌표(x=map.x, z=map.y)를 0.5m 간격으로 적재한다."""
+        if self._last_traj_xz is not None:
+            lx, lz = self._last_traj_xz
+            if math.hypot(x - lx, z - lz) < self._traj_min_step_m:
+                return
+        self._last_traj_xz = (x, z)
+        self.trajectory.append([round(sim_time, 2), round(x, 2), round(z, 2), round(yaw, 1)])
 
     # -- 발각(노출) 로깅 ----------------------------------------------------
 
@@ -169,6 +186,7 @@ class ReconLogger:
                 "count": len(self.obstacles_detected),
                 "density_per_100m": density,
             },
+            "trajectory": self.trajectory,
             "obstacles_detected": self.obstacles_detected,
             "exposure": self._build_exposure_summary(),
             "vision_yolo": self._build_vision_summary(),

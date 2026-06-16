@@ -182,7 +182,7 @@ if AUTO_FALLBACK not in ("neutral", "stop"):
 # true:
 # - /info, /get_action, /update_bullet, /collision 같은 데이터를 로그로 남긴다.
 # - 사후 분석, 디버깅, 강화학습 데이터셋 저장에 유용하다.
-SAVE_JSONL = os.environ.get("TANK_SAVE_JSONL", "true").strip().lower() in ("1", "true", "yes", "y")
+SAVE_JSONL = os.environ.get("TANK_SAVE_JSONL", "false").strip().lower() in ("1", "true", "yes", "y")
 
 # JSONL_DIR은 JSONL 로그를 저장할 디렉터리다.
 from datetime import datetime
