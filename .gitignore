@@ -32,3 +32,5 @@ tank_logs/*
 !tank_logs/.gitkeep
 reports/*
 !reports/.gitkeep
+recon_reports/*
+!recon_reports/.gitkeep
