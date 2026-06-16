@@ -22,8 +22,8 @@ def generate_launch_description():
     pkg_share = get_package_share_directory("rviz_visualization")
     rviz_config = os.path.join(pkg_share, "rviz", "tank_recon_mission_map.rviz")
     config_file = os.path.join(pkg_share, "config", "static_map_costs.yaml")
-    recon_map_file = os.path.join(pkg_share, "map", "recon_map.map")
-    mission_map_file = os.path.join(pkg_share, "map", "mission_map.map")
+    recon_map_file = os.path.join(pkg_share, "map", "finalmap.map")
+    mission_map_file = os.path.join(pkg_share, "map", "finalmap.map")
 
     return LaunchDescription(
         [

@@ -138,7 +138,7 @@ TOPIC_LIDAR_CLUSTERS = os.environ.get("TANK_TOPIC_LIDAR_CLUSTERS", "/tank/visual
 
 # TankSimulation route A/B strategy integration.
 USE_ROUTE_WAYPOINTS = env_bool("TANK_PLANNER_USE_ROUTE_WAYPOINTS", False)
-ROUTE_MAP_NAME = os.environ.get("TANK_PLANNER_ROUTE_MAP_NAME", "recon_map")
+ROUTE_MAP_NAME = os.environ.get("TANK_PLANNER_ROUTE_MAP_NAME", "finalmap")
 ROUTE_ID = os.environ.get("TANK_PLANNER_ROUTE_ID", "B")
 ROUTE_SIDE = os.environ.get("TANK_PLANNER_ROUTE_SIDE", "east")
 ROUTE_CLEARANCE_WEIGHT = env_float("TANK_PLANNER_ROUTE_CLEARANCE_WEIGHT", 0.4)

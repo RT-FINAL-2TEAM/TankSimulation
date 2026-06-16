@@ -409,8 +409,8 @@ class RosBridge(Node):
     def update_latest(self, key: str, value: Any) -> None:
         # 공유 상태를 읽거나 쓸 때 Lock을 잡아 thread race condition을 방지한다.
         with self._lock:
-            # 외부에서 받은 값을 deepcopy해서 최신 상태 저장소에 반영한다.
-            self._latest[key] = deepcopy(value)
+            # 외부에서 받은 값을 참조로 최신 상태 저장소에 반영한다. (불필요한 deepcopy 제거)
+            self._latest[key] = value
 
     # --------------------------------------------------------
     # Command callbacks
@@ -497,7 +497,7 @@ class RosBridge(Node):
                 # 다음 /get_action 응답 1회에만 사용할 override 명령을 저장한다.
                 self._one_shot_override = None
                 # override 명령과 출처 문자열을 반환한다.
-                return deepcopy(cmd), "one_shot_override"
+                return cmd.copy(), "one_shot_override"
 
             # 지속 제어 명령이 있고 수신 시각도 기록되어 있는지 확인한다.
             if self._latest_command is not None and self._latest_command_stamp is not None:
@@ -506,7 +506,7 @@ class RosBridge(Node):
                 # 명령이 TTL 안에 있으면 아직 안전하게 사용할 수 있다고 본다.
                 if age <= COMMAND_TTL_SEC:
                     # 최신 지속 제어 명령과 명령 age 정보를 출처 문자열로 반환한다.
-                    return deepcopy(self._latest_command), f"ros2_control_command_age_{age:.3f}s"
+                    return self._latest_command.copy(), f"ros2_control_command_age_{age:.3f}s"
                 self.get_logger().warn(
                     f"latest control command is stale: age={age:.3f}s > ttl={COMMAND_TTL_SEC:.3f}s"
                 )
@@ -526,13 +526,13 @@ class RosBridge(Node):
     # Flask route가 handle_init를 호출하면, 여기서 데이터를 ROS2 topic으로 변환/publish한다.
     def handle_init(self, config: Dict[str, Any]) -> None:
         # 이 endpoint의 ROS2 publish 및 latest 저장용 payload를 만든다.
-        payload = {"route": "/init", "timestamp_wall": now_wall(), "mode": TANK_MODE, "config": deepcopy(config)}
+        payload = {"route": "/init", "timestamp_wall": now_wall(), "mode": TANK_MODE, "config": config}
         # 공유 상태를 읽거나 쓸 때 Lock을 잡아 thread race condition을 방지한다.
         with self._lock:
             # 현재 endpoint의 수신 횟수를 증가시킨다.
             self._count("/init")
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["init_config"] = deepcopy(payload)
+            # latest state에 저장
+            self._latest["init_config"] = payload
         # JSON payload를 String topic으로 publish한다.
         self.publish_json(self.pub_init_config, payload)
 
@@ -544,8 +544,8 @@ class RosBridge(Node):
         with self._lock:
             # 현재 endpoint의 수신 횟수를 증가시킨다.
             self._count("/start")
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["start_event"] = deepcopy(payload)
+            # latest state에 저장
+            self._latest["start_event"] = payload
         self.pub_start_event.publish(Empty())
 
     # Flask route가 handle_info를 호출하면, 여기서 데이터를 ROS2 topic으로 변환/publish한다.
@@ -594,8 +594,8 @@ class RosBridge(Node):
             "distance": data.get("distance"),
         }
 
-        # 원본 endpoint 데이터를 그대로 보존하는 payload를 만든다.
-        raw_payload = {"route": "/info", "timestamp_wall": ts, "data": deepcopy(data)}
+        # 원본 endpoint 데이터를 그대로 보존하는 payload를 만든다. (불필요한 deepcopy 제거)
+        raw_payload = {"route": "/info", "timestamp_wall": ts, "data": data}
         # /info compact topic과 Flask 반환 로그에 사용할 payload를 만든다.
         compact_payload = {"route": "/info", "timestamp_wall": ts, "data": compact}
         # /info에서 자주 쓰는 경량 상태를 별도 stable topic으로 만든다.
@@ -619,25 +619,19 @@ class RosBridge(Node):
         with self._lock:
             # 현재 endpoint의 수신 횟수를 증가시킨다.
             self._count("/info")
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["info_raw"] = deepcopy(raw_payload)
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["info_compact"] = deepcopy(compact_payload)
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["player_state"] = deepcopy(player_state)
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["enemy_state"] = deepcopy(enemy_state)
+            self._latest["info_raw"] = raw_payload
+            self._latest["info_compact"] = compact_payload
+            self._latest["player_state"] = player_state
+            self._latest["enemy_state"] = enemy_state
             # player map 좌표가 생성된 경우에만 latest pose를 갱신한다.
             if player_map:
-                # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-                self._latest["player_pose_map"] = deepcopy(player_map)
+                self._latest["player_pose_map"] = player_map
             # enemy map 좌표가 생성된 경우에만 latest enemy pose를 갱신한다.
             if enemy_map:
-                # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-                self._latest["enemy_pose_map"] = deepcopy(enemy_map)
-            self._latest["sim_status"] = deepcopy(sim_status)
-            self._latest["player_heading"] = deepcopy(player_heading)
-            self._latest["enemy_heading"] = deepcopy(enemy_heading)
+                self._latest["enemy_pose_map"] = enemy_map
+            self._latest["sim_status"] = sim_status
+            self._latest["player_heading"] = player_heading
+            self._latest["enemy_heading"] = enemy_heading
 
         # JSON payload를 String topic으로 publish한다.
         self.publish_json(self.pub_info_raw, raw_payload)
@@ -679,7 +673,7 @@ class RosBridge(Node):
         append_jsonl("info.jsonl", {
             "timestamp_wall": ts,
             "route": "/info",
-            "data": deepcopy(data) if SAVE_FULL_INFO else compact,
+            "data": data if SAVE_FULL_INFO else compact,
             "player_state": player_state,
             "enemy_state": enemy_state,
         })
@@ -712,13 +706,13 @@ class RosBridge(Node):
             "timestamp_wall": ts,
             "mode": TANK_MODE,
             "source": source,
-            "command": deepcopy(command),
+            "command": command,
         }
         # 원본 endpoint 데이터를 그대로 보존하는 payload를 만든다.
         raw_payload = {
             "route": "/get_action",
             "timestamp_wall": ts,
-            "request": deepcopy(data),
+            "request": data,
             "pose_raw": pose_raw,
             "pose_map": pose_map,
             "turret": turret_vec,
@@ -728,14 +722,10 @@ class RosBridge(Node):
         with self._lock:
             # 현재 endpoint의 수신 횟수를 증가시킨다.
             self._count("/get_action")
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["get_action_raw"] = deepcopy(raw_payload)
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["get_action_pose_map"] = deepcopy(pose_map)
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["get_action_response"] = deepcopy(response_payload)
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["player_pose_map"] = deepcopy(pose_map)
+            self._latest["get_action_raw"] = raw_payload
+            self._latest["get_action_pose_map"] = pose_map
+            self._latest["get_action_response"] = response_payload
+            self._latest["player_pose_map"] = pose_map
 
         # JSON payload를 String topic으로 publish한다.
         self.publish_json(self.pub_get_action_raw, raw_payload)
@@ -774,7 +764,7 @@ class RosBridge(Node):
                 "route": "/detect",
                 "timestamp_wall": now_wall(),
                 "bytes": len(image_bytes),
-                "metadata": deepcopy(metadata) if isinstance(metadata, dict) else {},
+                "metadata": metadata if isinstance(metadata, dict) else {},
             }
 
         self.pub_camera_image_compressed.publish(msg)
@@ -785,13 +775,13 @@ class RosBridge(Node):
         # 이 endpoint의 ROS2 publish 및 latest 저장용 payload를 만든다.
         payload = {"route": "/detect", "timestamp_wall": now_wall(), "count": len(detections) if isinstance(detections, list) else None, "detections": detections}
         if isinstance(metadata, dict):
-            payload.update(deepcopy(metadata))
+            payload.update(metadata)
         # 공유 상태를 읽거나 쓸 때 Lock을 잡아 thread race condition을 방지한다.
         with self._lock:
             # 현재 endpoint의 수신 횟수를 증가시킨다.
             self._count("/detect")
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["detect_result"] = deepcopy(payload)
+            # latest state에 저장
+            self._latest["detect_result"] = payload
         # JSON payload를 String topic으로 publish한다.
         self.publish_json(self.pub_detect_result, payload)
         # 시나리오 매니저용 high-level detection event alias를 publish한다.
@@ -802,13 +792,13 @@ class RosBridge(Node):
     # Flask route가 handle_stereo_status를 호출하면, 여기서 데이터를 ROS2 topic으로 변환/publish한다.
     def handle_stereo_status(self, status: Dict[str, Any]) -> None:
         # 이 endpoint의 ROS2 publish 및 latest 저장용 payload를 만든다.
-        payload = {"route": "/stereo_image", "timestamp_wall": now_wall(), **deepcopy(status)}
+        payload = {"route": "/stereo_image", "timestamp_wall": now_wall(), **status}
         # 공유 상태를 읽거나 쓸 때 Lock을 잡아 thread race condition을 방지한다.
         with self._lock:
             # 현재 endpoint의 수신 횟수를 증가시킨다.
             self._count("/stereo_image")
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["stereo_status"] = deepcopy(payload)
+            # latest state에 저장
+            self._latest["stereo_status"] = payload
         # JSON payload를 String topic으로 publish한다.
         self.publish_json(self.pub_stereo_status, payload)
 
@@ -821,13 +811,13 @@ class RosBridge(Node):
         # 포탄이 맞은 대상(hit 필드)을 추출한다.
         target = data.get("hit") if isinstance(data, dict) else None
         # 이 endpoint의 ROS2 publish 및 latest 저장용 payload를 만든다.
-        payload = {"route": "/update_bullet", "timestamp_wall": ts, "data": deepcopy(data), "impact_raw": impact_raw, "impact_map": impact_map, "target": target}
+        payload = {"route": "/update_bullet", "timestamp_wall": ts, "data": data, "impact_raw": impact_raw, "impact_map": impact_map, "target": target}
         # 공유 상태를 읽거나 쓸 때 Lock을 잡아 thread race condition을 방지한다.
         with self._lock:
             # 현재 endpoint의 수신 횟수를 증가시킨다.
             self._count("/update_bullet")
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["bullet"] = deepcopy(payload)
+            # latest state에 저장
+            self._latest["bullet"] = payload
         # JSON payload를 String topic으로 publish한다.
         self.publish_json(self.pub_bullet_raw, payload)
         # point payload를 PointStamped topic으로 publish한다.
@@ -855,8 +845,8 @@ class RosBridge(Node):
         with self._lock:
             # 현재 endpoint의 수신 횟수를 증가시킨다.
             self._count("/set_destination")
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["destination"] = deepcopy(payload)
+            # latest state에 저장
+            self._latest["destination"] = payload
         # JSON payload를 String topic으로 publish한다.
         self.publish_json(self.pub_destination_raw, payload)
         # pose payload를 PoseStamped topic으로 publish한다.
@@ -874,13 +864,12 @@ class RosBridge(Node):
         # 이 이벤트가 bridge에 들어온 wall-clock timestamp를 기록한다.
         ts = now_wall()
         # 이 endpoint의 ROS2 publish 및 latest 저장용 payload를 만든다.
-        payload = {"route": "/update_obstacle", "timestamp_wall": ts, "data": deepcopy(data)}
+        payload = {"route": "/update_obstacle", "timestamp_wall": ts, "data": data}
         # 공유 상태를 읽거나 쓸 때 Lock을 잡아 thread race condition을 방지한다.
         with self._lock:
             # 현재 endpoint의 수신 횟수를 증가시킨다.
             self._count("/update_obstacle")
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["obstacles"] = deepcopy(payload)
+            self._latest["obstacles"] = payload
         # JSON payload를 String topic으로 publish한다.
         self.publish_json(self.pub_obstacle_raw, payload)
         # JSON payload를 String topic으로 publish한다.
@@ -901,13 +890,12 @@ class RosBridge(Node):
         # 충돌 위치를 raw/map point로 변환한다.
         point_raw, point_map = raw_and_map_pose(position, "/collision/position")
         # 이 endpoint의 ROS2 publish 및 latest 저장용 payload를 만든다.
-        payload = {"route": "/collision", "timestamp_wall": ts, "data": deepcopy(data), "point_raw": point_raw, "point_map": point_map, "objectName": data.get("objectName")}
+        payload = {"route": "/collision", "timestamp_wall": ts, "data": data, "point_raw": point_raw, "point_map": point_map, "objectName": data.get("objectName")}
         # 공유 상태를 읽거나 쓸 때 Lock을 잡아 thread race condition을 방지한다.
         with self._lock:
             # 현재 endpoint의 수신 횟수를 증가시킨다.
             self._count("/collision")
-            # latest state에 저장할 때 원본 변경을 피하기 위해 deepcopy한다.
-            self._latest["collision"] = deepcopy(payload)
+            self._latest["collision"] = payload
         # JSON payload를 String topic으로 publish한다.
         self.publish_json(self.pub_collision_raw, payload)
         # point payload를 PointStamped topic으로 publish한다.
@@ -935,17 +923,17 @@ class RosBridge(Node):
                     "raw": "Unity API x,y,z 그대로",
                     "map": "x=raw.x, y=raw.z, z=raw.y",
                 },
-                "route_counts": deepcopy(self._route_counts),
-                "latest": deepcopy(self._latest),
+                "route_counts": self._route_counts.copy(),
+                "latest": self._latest.copy(),
             }
             # 호환 alias topic에 주기적으로 다시 publish할 최신 player pose를 복사한다.
-            latest_pose = deepcopy(self._latest.get("player_pose_map"))
+            latest_pose = self._latest.get("player_pose_map")
             # 최신 player state를 복사해 Lock 밖에서 publish한다.
-            latest_player_state = deepcopy(self._latest.get("player_state"))
+            latest_player_state = self._latest.get("player_state")
             # 최신 enemy state를 복사해 Lock 밖에서 publish한다.
-            latest_enemy_state = deepcopy(self._latest.get("enemy_state"))
+            latest_enemy_state = self._latest.get("enemy_state")
             # 최신 obstacle payload를 복사해 Lock 밖에서 publish한다.
-            latest_obstacles = deepcopy(self._latest.get("obstacles"))
+            latest_obstacles = self._latest.get("obstacles")
 
         # JSON payload를 String topic으로 publish한다.
         self.publish_json(self.pub_state_latest, state)

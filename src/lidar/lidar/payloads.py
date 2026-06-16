@@ -11,6 +11,9 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+import numpy as np
+from sklearn.cluster import DBSCAN
+
 from .config import (
     BBOX_MIN_THICKNESS,
     TERRAIN_CLIMB_LIMIT,
@@ -239,27 +242,19 @@ def filter_lidar_points_by_distance(
 
 
 def cluster_lidar_points(points: Sequence[Point2D], eps: float = 2.0, min_samples: int = 3) -> List[List[Point2D]]:
+    if not points:
+        return []
+    coords = np.asarray([(p[0], p[1]) for p in points], dtype=np.float32)
+    labels = DBSCAN(eps=eps, min_samples=min_samples, algorithm='kd_tree').fit_predict(coords)
+    
     clusters: List[List[Point2D]] = []
-    visited = set()
+    unique_labels = set(labels)
+    unique_labels.discard(-1)
+    
     pts = list(points)
-    for i, _ in enumerate(pts):
-        if i in visited:
-            continue
-        queue = [i]
-        visited.add(i)
-        cluster: List[Point2D] = []
-        while queue:
-            idx = queue.pop(0)
-            p = pts[idx]
-            cluster.append(p)
-            for j, q in enumerate(pts):
-                if j in visited:
-                    continue
-                if distance(p, q) <= eps:
-                    visited.add(j)
-                    queue.append(j)
-        if len(cluster) >= min_samples:
-            clusters.append(cluster)
+    for label in unique_labels:
+        cluster = [pts[idx] for idx, lbl in enumerate(labels) if lbl == label]
+        clusters.append(cluster)
     return clusters
 
 
@@ -291,12 +286,19 @@ def update_lidar_history(
     resolution: float,
     max_points: int,
 ) -> Tuple[List[Point2D], set]:
+    if not points:
+        return history, history_set
     q = max(resolution, 0.1)
-    for x, y in points:
-        rounded = (round(x / q) * q, round(y / q) * q)
+    pts_arr = np.asarray(points, dtype=np.float64)
+    rounded_arr = np.round(pts_arr / q) * q
+    unique_arr = np.unique(rounded_arr, axis=0)
+    
+    for row in unique_arr:
+        rounded = (float(row[0]), float(row[1]))
         if rounded not in history_set:
             history_set.add(rounded)
             history.append(rounded)
+            
     if len(history) > max_points:
         drop = len(history) - max_points
         for p in history[:drop]:

@@ -23,6 +23,7 @@ import threading
 from typing import Any, Dict, Optional, Tuple
 
 import cv2
+import math
 import numpy as np
 import rclpy
 from rclpy.node import Node

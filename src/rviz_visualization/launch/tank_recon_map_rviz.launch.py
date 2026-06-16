@@ -21,9 +21,9 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg_share = get_package_share_directory("rviz_visualization")
-    rviz_config = os.path.join(pkg_share, "rviz", "tank_recon_map.rviz")
+    rviz_config = os.path.join(pkg_share, "rviz", "tank_finalmap.rviz")
     config_file = os.path.join(pkg_share, "config", "static_map_costs.yaml")
-    recon_map_file = os.path.join(pkg_share, "map", "recon_map.map")
+    recon_map_file = os.path.join(pkg_share, "map", "finalmap.map")
 
     return LaunchDescription(
         [

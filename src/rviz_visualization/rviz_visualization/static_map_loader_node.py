@@ -61,7 +61,7 @@ class StaticMapLoaderNode(Node):
 
         pkg_share = Path(get_package_share_directory("rviz_visualization"))
         default_config = pkg_share / "config" / "static_map_costs.yaml"
-        default_recon_map = pkg_share / "map" / "recon_map.map"
+        default_recon_map = pkg_share / "map" / "finalmap.map"
         default_mission_map = pkg_share / "map" / "mission_map.map"
 
         self.declare_parameter("mode", "recon_only")
@@ -149,7 +149,7 @@ class StaticMapLoaderNode(Node):
         self.summary_msg = self._make_summary_msg()
 
         self.get_logger().info(
-            f"Loaded recon map: {len(self.recon_objects)} objects from {self.recon_map_file}"
+            f"Loaded static map (finalmap): {len(self.recon_objects)} objects from {self.recon_map_file}"
         )
         if self.publish_mission:
             self.get_logger().info(

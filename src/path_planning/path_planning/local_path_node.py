@@ -39,6 +39,8 @@ from visualization_msgs.msg import Marker, MarkerArray
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 
+from path_planning.recon_logger import ReconLogger
+
 try:
     import yaml
 except Exception:
@@ -262,6 +264,27 @@ class LocalPathNode(Node):
         self.current_marker_pub = self.create_publisher(MarkerArray, TOPIC_FUSED_OBJECT_MARKERS, 10)
         self.discovered_marker_pub = self.create_publisher(MarkerArray, TOPIC_DISCOVERED_OBJECT_MARKERS, transient_qos)
 
+        self.declare_parameter("route_id", "A")
+        self.declare_parameter("route_map_name", "finalmap")
+        self.declare_parameter("recon_report_dir", "./recon_reports")
+        self.declare_parameter("goal_pose_topic", "/tank/goal/pose")
+        self.declare_parameter("goal_tolerance", 5.0)
+
+        self.route_id = str(self.get_parameter("route_id").value)
+        self.route_map_name = str(self.get_parameter("route_map_name").value)
+        self.recon_report_dir = str(self.get_parameter("recon_report_dir").value)
+        self.goal_pose_topic = str(self.get_parameter("goal_pose_topic").value)
+        self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
+
+        self.recon_logger = ReconLogger(self.route_id, self.route_map_name, self.recon_report_dir)
+        self.sim_time = 0.0
+        self._last_sim_time = 0.0
+        self._report_saved = False
+        self.goal_pos = None
+
+        self.create_subscription(PoseStamped, self.goal_pose_topic, self.goal_pose_cb, 10)
+        self.create_subscription(String, "/tank/event/collision", self.collision_cb, 10)
+
         self.create_service(Trigger, SERVICE_DISCOVERED_SAVE, self.save_service_cb)
         self.create_service(Trigger, SERVICE_DISCOVERED_CLEAR, self.clear_service_cb)
         self.terrain_finalize_client = self.create_client(Trigger, SERVICE_TERRAIN_FINALIZE)
@@ -322,6 +345,9 @@ class LocalPathNode(Node):
     def info_raw_cb(self, msg: String) -> None:
         try:
             payload = json.loads(msg.data)
+            data_part = payload.get("data", {})
+            with self._lock:
+                self.sim_time = float(data_part.get("time", self.sim_time))
             info = extract_info_payload(payload)
             if info is not None:
                 with self._lock:
@@ -340,7 +366,21 @@ class LocalPathNode(Node):
 
     def player_pose_cb(self, msg: PoseStamped) -> None:
         with self._lock:
+            if self.player_pose is not None:
+                dx = msg.pose.position.x - self.player_pose.pose.position.x
+                dy = msg.pose.position.y - self.player_pose.pose.position.y
+                dist = math.hypot(dx, dy)
+                if dist < 10.0:
+                    self.recon_logger.total_distance += dist
             self.player_pose = msg
+
+    def goal_pose_cb(self, msg: PoseStamped) -> None:
+        with self._lock:
+            self.goal_pos = (float(msg.pose.position.x), float(msg.pose.position.y))
+
+    def collision_cb(self, msg: String) -> None:
+        with self._lock:
+            self.recon_logger.collisions += 1
 
     def player_state_cb(self, msg: String) -> None:
         try:
@@ -349,8 +389,12 @@ class LocalPathNode(Node):
                 return
             body = data.get("body")
             with self._lock:
-                if isinstance(body, dict) and body.get("x") is not None:
-                    self.player_heading_deg = float(body.get("x"))
+                if isinstance(body, dict):
+                    if body.get("x") is not None:
+                        self.player_heading_deg = float(body.get("x"))
+                    pitch = float(body.get("y", 0.0))
+                    roll = float(body.get("z", 0.0))
+                    self.recon_logger.log_body_angles(pitch, roll)
                 elif data.get("playerBodyX") is not None:
                     self.player_heading_deg = float(data.get("playerBodyX"))
         except Exception:
@@ -407,6 +451,63 @@ class LocalPathNode(Node):
                 obj for obj in self.discovered
                 if obj.is_confirmed or (now - obj.last_seen_wall) < self.memory_decay_sec
             ]
+
+            # YOLO detections 로깅
+            if self.latest_detections_payload:
+                detections = self.latest_detections_payload.get("detections", [])
+                if isinstance(detections, list):
+                    for det in detections:
+                        class_name = det.get("className", "unknown")
+                        conf = det.get("confidence", 0.0)
+                        bbox = det.get("bbox", [])
+                        turret_x = self.turret_heading_deg if self.turret_heading_deg is not None else 0.0
+                        self.recon_logger.log_vision(self.sim_time, class_name, conf, bbox, turret_x)
+
+            # Lidar clusters 로깅
+            if self.latest_clusters_payload:
+                clusters = self.latest_clusters_payload.get("clusters", [])
+                if isinstance(clusters, list):
+                    for c in clusters:
+                        centroid = c.get("centroid", {})
+                        bbox = c.get("bbox", {})
+                        bbox_list = [bbox.get("x_min", 0.0), bbox.get("x_max", 0.0), bbox.get("y_min", 0.0), bbox.get("y_max", 0.0)]
+                        self.recon_logger.log_obstacle(
+                            self.sim_time,
+                            centroid.get("x", 0.0),
+                            centroid.get("y", 0.0),
+                            bbox_list
+                        )
+
+            # Spotted assets 로깅
+            for obj in self.discovered:
+                if obj.is_confirmed:
+                    if obj.class_name == "person":
+                        self.recon_logger.log_spotted_asset("soldiers", obj.object_id)
+                    elif obj.class_name == "tank":
+                        self.recon_logger.log_spotted_asset("tanks", obj.object_id)
+                    elif obj.class_name in ("tent", "house", "outpost"):
+                        self.recon_logger.log_spotted_asset("outposts", obj.object_id)
+
+            self.recon_logger.total_sim_time = self.sim_time
+
+            # 1) Restart 감지
+            if self.sim_time < self._last_sim_time - 2.0:
+                if not self._report_saved:
+                    self.recon_logger.save_report()
+                self.recon_logger = ReconLogger(self.route_id, self.route_map_name, self.recon_report_dir)
+                self._report_saved = False
+            self._last_sim_time = self.sim_time
+
+            # 2) 도달 감지
+            if self.player_pose and self.goal_pos:
+                px = self.player_pose.pose.position.x
+                py = self.player_pose.pose.position.y
+                dist = math.hypot(px - self.goal_pos[0], py - self.goal_pos[1])
+                if dist < self.goal_tolerance:
+                    if not self._report_saved:
+                        self.recon_logger.reached = True
+                        self.recon_logger.save_report()
+                        self._report_saved = True
 
             # 퍼블리싱 전 안전하게 복사
             fused_to_pub = list(fused)
