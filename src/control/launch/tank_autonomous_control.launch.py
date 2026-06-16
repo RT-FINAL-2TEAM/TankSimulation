@@ -132,6 +132,14 @@ def generate_launch_description():
             output="screen",
             parameters=[{
                 "config_file": os.path.join(path_planning_share, "config", "fusion_mapping.yaml"),
+                # 도착 로깅(route_*.json의 reached) 기준을 컨트롤러 정지 기준(10m)과 일치시킨다.
+                # (불일치 시 컨트롤러는 ~8m에서 종료해도 local_path는 5m 기준이라 reached가 안 찍힘)
+                "goal_tolerance": 10.0,
+                # ★ route_id를 반드시 전달해야 정찰 리포트가 route_{A|B}.json으로 올바로 저장된다.
+                #   (미전달 시 local_path가 기본값 'A'로 고정 → B 주행도 route_A.json에 덮어써져
+                #    route_B.json이 영영 안 생긴다)
+                "route_id": LaunchConfiguration("route_id"),
+                "route_map_name": "finalmap",
             }],
         ),
         Node(

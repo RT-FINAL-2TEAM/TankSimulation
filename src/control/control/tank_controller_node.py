@@ -127,6 +127,10 @@ class TeamPathControllerNode(Node):
         self.enable_local_target = bool(self.get_parameter("enable_local_target").value)
         self.target_ttl_sec = float(self.get_parameter("target_ttl_sec").value)
         self.mission_type = str(self.get_parameter("mission_type").value).lower()
+        self.slowdown_angle_deg = float(self.get_parameter("slowdown_angle_deg").value)
+        self.stop_distance = float(self.get_parameter("stop_distance").value)
+        self.enable_stuck_escape = bool(self.get_parameter("enable_stuck_escape").value)
+        self.stuck_check_period = float(self.get_parameter("stuck_check_period").value)
         self.stuck_min_movement = float(self.get_parameter("stuck_min_movement").value)
         self.escape_reverse_sec = float(self.get_parameter("escape_reverse_sec").value)
         self.escape_turn_sec = float(self.get_parameter("escape_turn_sec").value)
@@ -333,7 +337,12 @@ class TeamPathControllerNode(Node):
             self.last_stuck_check_pos = self.current_pos
             return None
             
-        if self.last_stuck_check_pos is None:
+        # 첫 호출(또는 baseline 미초기화) 시 stuck 판정 기준점을 현재 상태/시각으로 잡고
+        # 한 주기(stuck_check_period)만큼 실제 주행할 시간을 준다.
+        # ※ last_stuck_check_time은 0.0으로 초기화되는데 sim_time은 이미 크기 때문에,
+        #   이 시각 가드가 없으면 출발 첫 사이클에 (t-0)>period 가 즉시 참이 되고
+        #   moved≈0 으로 "끼임" 오판 → 출발 직후 계속 후진하는 버그가 난다.
+        if self.last_stuck_check_pos is None or self.last_stuck_check_time <= 0.0:
             self.last_stuck_check_pos = self.current_pos
             self.last_stuck_check_yaw = self.current_yaw
             self.last_stuck_check_time = t
@@ -398,6 +407,12 @@ class TeamPathControllerNode(Node):
         cmd_ad, w_ad, yaw_error, desired_yaw = self.calculate_steering(target)
         cmd_ws, w_ws, speed_mode = self.calculate_speed(target, yaw_error)
         action = self.make_action(cmd_ws, w_ws, cmd_ad, w_ad)
+        if speed_mode == "goal_reached":
+            # 목적지 도달 시 시뮬레이터 일시정지 요청.
+            # 브릿지 select_action_command가 latest_command를 그대로 반환하므로
+            # 이 control 필드가 /get_action 응답에 실려 시뮬로 전달된다.
+            # (시뮬이 get_action 응답의 control:pause를 지원하면 정지, 미지원이면 STOP만 적용 — 무해)
+            action["control"] = "pause"
         self.publish_command(action)
 
         mean_cte = 0.0

@@ -498,6 +498,10 @@ class TeamDynamicAStarPlannerNode(Node):
         self.pub_points = self.create_publisher(String, TOPIC_PATH_POINTS, 10)
         self.pub_status = self.create_publisher(String, TOPIC_PLANNER_STATUS, 10)
         self.pub_lidar_bboxes = self.create_publisher(String, TOPIC_LIDAR_BBOXES, 10)
+        # 정찰/자율 시나리오에서 controller·local_path가 "도착"을 판정하려면 goal이 필요하다.
+        # planner가 보유한 goal_pos(기본 목적지 또는 sim이 /set_destination으로 준 값)를
+        # /tank/goal/pose로 주기 발행해 자율 스택의 단일 goal 소스로 삼는다.
+        self.pub_goal = self.create_publisher(PoseStamped, TOPIC_GOAL_POSE, 10)
 
         self.create_subscription(PoseStamped, TOPIC_PLAYER_POSE, self.player_pose_cb, 10)
         self.create_subscription(PoseStamped, TOPIC_GOAL_POSE, self.goal_pose_cb, 10)
@@ -505,6 +509,8 @@ class TeamDynamicAStarPlannerNode(Node):
         self.create_subscription(PointCloud2, TOPIC_LIDAR_DETECTED_MAP, self.lidar_cb, 10)
         self.create_subscription(String, TOPIC_LIDAR_CLUSTERS, self.lidar_clusters_cb, 10)
         self.create_timer(1.0 / max(1.0, PLANNER_HZ), self.timer_cb)
+        # goal을 2Hz로 주기 발행한다(구독자가 volatile QoS라 latch가 통하지 않으므로 주기 발행).
+        self.create_timer(0.5, self.publish_goal)
         self._planning_lock = threading.Lock()
         self._is_planning = False
 
@@ -761,6 +767,20 @@ class TeamDynamicAStarPlannerNode(Node):
         msg = String()
         msg.data = json.dumps(payload, ensure_ascii=False)
         self.pub_points.publish(msg)
+
+    def publish_goal(self) -> None:
+        # planner의 현재 goal을 /tank/goal/pose로 주기 발행한다.
+        # controller(도착 시 정지·종료)와 local_path(도착 로깅)가 동일 goal을 공유하게 한다.
+        if self.goal_pos is None:
+            return
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = MAP_FRAME
+        msg.pose.position.x = float(self.goal_pos[0])
+        msg.pose.position.y = float(self.goal_pos[1])
+        msg.pose.position.z = 0.0
+        msg.pose.orientation.w = 1.0
+        self.pub_goal.publish(msg)
 
     def publish_lookahead(self) -> Optional[Tuple[float, float]]:
         if self.current_pos is None or not self.route:

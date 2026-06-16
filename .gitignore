@@ -25,6 +25,7 @@ trash/
 Thumbs.db
 
 .agents/
+.claude
 
 # Ignore logs and reports but keep folders
 tank_logs/*

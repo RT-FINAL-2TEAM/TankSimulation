@@ -25,7 +25,7 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
-      Name: Recon Map Markers
+      Name: Static Map (finalmap)
       Topic:
         Value: /tank/rviz/recon_map_markers
       Value: true

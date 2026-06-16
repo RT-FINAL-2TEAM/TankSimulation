@@ -149,7 +149,7 @@ class StaticMapLoaderNode(Node):
         self.summary_msg = self._make_summary_msg()
 
         self.get_logger().info(
-            f"Loaded recon map: {len(self.recon_objects)} objects from {self.recon_map_file}"
+            f"Loaded static map (finalmap): {len(self.recon_objects)} objects from {self.recon_map_file}"
         )
         if self.publish_mission:
             self.get_logger().info(
