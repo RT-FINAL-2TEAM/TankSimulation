@@ -97,7 +97,6 @@ class TeamPathControllerNode(Node):
         self.declare_parameter("enable_local_target", ENABLE_LOCAL_TARGET)
         self.declare_parameter("target_ttl_sec", TARGET_TTL_SEC)
         self.declare_parameter("mission_type", "mission")  # 'recon', 'mission', 'return'
-        self.declare_parameter("goal_tolerance", GOAL_TOLERANCE)
         self.declare_parameter("heading_deadband_deg", HEADING_DEADBAND_DEG)
         self.declare_parameter("steering_full_error_deg", STEERING_FULL_ERROR_DEG)
         self.declare_parameter("min_ad_weight", MIN_AD_WEIGHT)

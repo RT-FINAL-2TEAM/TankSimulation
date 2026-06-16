@@ -1,4 +1,4 @@
-1finalmap:
+finalmap:
   start: [60.0, 30.0]
   destination: [105.23, 275.0]  # 시뮬레이터 실측 적전차 위치 (목적지)
   corridor_width: 20.0
