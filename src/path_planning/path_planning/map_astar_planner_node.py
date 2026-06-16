@@ -520,7 +520,14 @@ class TeamDynamicAStarPlannerNode(Node):
         return time.monotonic()
 
     def player_pose_cb(self, msg: PoseStamped) -> None:
-        self.current_pos = (float(msg.pose.position.x), float(msg.pose.position.y))
+        new_pos = (float(msg.pose.position.x), float(msg.pose.position.y))
+        if self.current_pos is not None:
+            if get_distance(self.current_pos, new_pos) > 10.0:
+                self.get_logger().info("Teleport/Restart detected. Triggering replan from new start.")
+                self.route = []
+                self.plan_request_pending = True
+                self.plan_request_reason = "teleport_detected"
+        self.current_pos = new_pos
 
     def goal_pose_cb(self, msg: PoseStamped) -> None:
         new_goal = (float(msg.pose.position.x), float(msg.pose.position.y))

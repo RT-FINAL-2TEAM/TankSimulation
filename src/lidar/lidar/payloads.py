@@ -286,12 +286,19 @@ def update_lidar_history(
     resolution: float,
     max_points: int,
 ) -> Tuple[List[Point2D], set]:
+    if not points:
+        return history, history_set
     q = max(resolution, 0.1)
-    for x, y in points:
-        rounded = (round(x / q) * q, round(y / q) * q)
+    pts_arr = np.asarray(points, dtype=np.float64)
+    rounded_arr = np.round(pts_arr / q) * q
+    unique_arr = np.unique(rounded_arr, axis=0)
+    
+    for row in unique_arr:
+        rounded = (float(row[0]), float(row[1]))
         if rounded not in history_set:
             history_set.add(rounded)
             history.append(rounded)
+            
     if len(history) > max_points:
         drop = len(history) - max_points
         for p in history[:drop]:

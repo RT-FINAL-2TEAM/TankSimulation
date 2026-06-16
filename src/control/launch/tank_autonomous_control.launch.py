@@ -14,7 +14,8 @@ Prerequisite:
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import SetEnvironmentVariable
+from launch.actions import SetEnvironmentVariable, DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -28,7 +29,28 @@ def generate_launch_description():
     route_config_file = os.path.join(path_planning_share, "config", "routes.yaml")
     apf_weights_file = os.path.join(potential_share, "config", "apf_weight_profiles.yaml")
 
+    mission_type_arg = DeclareLaunchArgument(
+        'mission_type',
+        default_value='mission',
+        description='Mission scenario: recon, mission, return'
+    )
+    
+    route_id_arg = DeclareLaunchArgument(
+        'route_id',
+        default_value='A',
+        description='Route to use: A, B'
+    )
+    
+    route_side_arg = DeclareLaunchArgument(
+        'route_side',
+        default_value='west',
+        description='Side bias for A*: west (for A), east (for B)'
+    )
+
     return LaunchDescription([
+        mission_type_arg,
+        route_id_arg,
+        route_side_arg,
         SetEnvironmentVariable("TANK_START_CONTROL", "start"),
         SetEnvironmentVariable("TANK_APF_PASSTHROUGH_WHEN_CLEAR", "true"),
 
@@ -79,8 +101,8 @@ def generate_launch_description():
                 "use_route_waypoints": True,
                 "route_config_file": route_config_file,
                 "route_map_name": "finalmap",
-                "route_id": "B",
-                "route_side": "east",
+                "route_id": LaunchConfiguration("route_id"),
+                "route_side": LaunchConfiguration("route_side"),
                 "route_clearance_weight": 0.4,
                 # DBSCAN cluster bboxes are used when dynamic replanning is enabled.
                 "use_lidar_cluster_bboxes": True,
@@ -97,9 +119,9 @@ def generate_launch_description():
                 "publish_path_period_sec": 5.0,
                 "goal_tolerance": 10.0,
                 "default_goal_enabled": True,
-                # 시뮬레이터 실측 목적지 (105.23, 268.78)
+                # 시뮬레이터 실측 목적지 (적전차 위치: 105.23, 275.0)
                 "default_goal_x": 105.23,
-                "default_goal_y": 268.78,
+                "default_goal_y": 275.0,
             }],
         ),
 
@@ -158,6 +180,7 @@ def generate_launch_description():
                 "controller_hz": 10.0,
                 "enable_local_target": True,
                 "target_ttl_sec": 2.0,
+                "mission_type": LaunchConfiguration("mission_type"),
                 "goal_tolerance": 10.0,
                 "heading_deadband_deg": 5.0,
                 "steering_full_error_deg": 45.0,

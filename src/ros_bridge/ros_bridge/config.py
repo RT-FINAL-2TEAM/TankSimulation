@@ -245,17 +245,16 @@ YOLO_ASYNC_MAX_RESULT_AGE_MS = float(os.environ.get("TANK_YOLO_ASYNC_MAX_RESULT_
 # - Y: 높이 방향으로 해석
 # - Z: 전후/진행 평면 방향으로 해석
 BLUE_START = (
-    float(os.environ.get("TANK_BLUE_START_X", "60")),  # blStartX: 아군 전차 시작 X 좌표
-    float(os.environ.get("TANK_BLUE_START_Y", "8")),   # blStartY: 아군 전차 시작 Y 좌표(Alt)
-    float(os.environ.get("TANK_BLUE_START_Z", "30")),  # blStartZ: 아군 전차 시작 Z 좌표(Pos 두 번째 값)
+    float(os.environ.get("TANK_BLUE_START_X", "60.0")),  # blStartX: 아군 전차 시작 X 좌표
+    float(os.environ.get("TANK_BLUE_START_Y", "8")),       # blStartY: 아군 전차 시작 Y 좌표(Alt)
+    float(os.environ.get("TANK_BLUE_START_Z", "30.0")),    # blStartZ: 아군 전차 시작 Z 좌표(Pos 두 번째 값)
 )
 
 # RED_START는 적 전차 시작 좌표다.
-# 공식 /init 응답에서는 rdStartX, rdStartY, rdStartZ로 전달된다.
 RED_START = (
-    float(os.environ.get("TANK_RED_START_X", "59")),   # rdStartX: 적 전차 시작 X 좌표
-    float(os.environ.get("TANK_RED_START_Y", "10")),   # rdStartY: 적 전차 시작 Y 좌표
-    float(os.environ.get("TANK_RED_START_Z", "280")),  # rdStartZ: 적 전차 시작 Z 좌표
+    float(os.environ.get("TANK_RED_START_X", "105.23")),   # rdStartX: 적 전차 시작 X 좌표
+    float(os.environ.get("TANK_RED_START_Y", "10")),       # rdStartY: 적 전차 시작 Y 좌표
+    float(os.environ.get("TANK_RED_START_Z", "295.0")),    # rdStartZ: 적 전차 시작 Z 좌표
 )
 
 
