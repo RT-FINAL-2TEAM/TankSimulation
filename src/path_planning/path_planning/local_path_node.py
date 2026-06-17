@@ -78,6 +78,7 @@ def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
     return np.ascontiguousarray(arr.reshape(-1, 3), dtype=np.float32)
 
 SERVICE_TERRAIN_FINALIZE = "/tank/terrain/finalize_map"
+TOPIC_FUSION_DEBUG_STATUS = "/tank/debug/fusion/status"
 
 from lidar.config import TOPIC_LIDAR_DETECTED_MAP
 from path_planning.config import (
@@ -217,7 +218,8 @@ class LocalPathNode(Node):
         self.mapping_enabled = bool(self._cfg(["mapping", "enabled"], True))
         self.merge_radius_m = float(self._cfg(["mapping", "merge_radius_m"], 5.0))
         self.ema_alpha = float(self._cfg(["mapping", "position_ema_alpha"], 0.35))
-        self.add_classes = set(str(x).lower() for x in self._cfg(["mapping", "add_classes"], ["person", "rock", "tank", "wall", "tent"]))
+        self.add_classes = set(str(x).lower() for x in self._cfg(["mapping", "add_classes"], ["person", "rock", "tank", "car", "house", "tent"]))
+        self.merge_radius_by_class = dict(self._cfg(["mapping", "merge_radius_by_class"], {}) or {})
         self.save_directory = Path(str(self._cfg(["mapping", "save_directory"], "~/tank_discovered_maps"))).expanduser()
         self.save_latest_filename = str(self._cfg(["mapping", "save_latest_filename"], "discovered_objects_latest.map"))
         self.save_timestamped_copy = bool(self._cfg(["mapping", "save_timestamped_copy"], True))
@@ -231,8 +233,12 @@ class LocalPathNode(Node):
 
         # [핵심 변경 1] 고스트 방지 및 메모리 누수 방지 파라미터
         self.drop_stale_async_detection = bool(self._cfg(["async_detection", "drop_stale"], True))
-        self.max_async_result_age_ms = float(self._cfg(["async_detection", "max_result_age_ms"], 100.0))  # 300ms -> 100ms로 조임
-        self.max_sync_diff_sec = float(self._cfg(["fusion", "max_sync_diff_sec"], 0.15))  # 카메라/라이다 시차 150ms 초과시 퓨전 포기
+        self.max_async_result_age_ms = float(self._cfg(["async_detection", "max_result_age_ms"], 300.0))
+        self.max_sync_diff_sec = float(self._cfg(["fusion", "max_sync_diff_sec"], 0.50))
+        # 기본값은 drop이 아니라 warning이다. /detect와 /info/LiDAR는 서로 다른 HTTP route이므로
+        # 0.15초 strict drop을 걸면 YOLO와 LiDAR가 모두 정상이어도 fused_objects가 0개가 될 수 있다.
+        self.drop_on_sync_mismatch = bool(self._cfg(["fusion", "drop_on_sync_mismatch"], False))
+        self.debug_fusion_enabled = bool(self._cfg(["debug", "fusion_status"], True))
         self.memory_decay_sec = float(self._cfg(["mapping", "memory_decay_sec"], 10.0))  # 10초간 안 보이면 메모리에서 삭제
 
         self.current_lifetime_sec = float(self._cfg(["rviz", "current_object_lifetime_sec"], 1.2))
@@ -256,6 +262,8 @@ class LocalPathNode(Node):
         self.discovered: List[DiscoveredObject] = []
         self.fused_current: List[Dict[str, Any]] = []
         self._next_id = 1
+        self._last_fusion_debug: Optional[Dict[str, Any]] = None
+        self._last_cluster_assignment_stats: Dict[str, Any] = {}
 
         transient_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -277,6 +285,7 @@ class LocalPathNode(Node):
         self.discovered_pub = self.create_publisher(String, TOPIC_DISCOVERED_OBJECTS, transient_qos)
         self.current_marker_pub = self.create_publisher(MarkerArray, TOPIC_FUSED_OBJECT_MARKERS, 10)
         self.discovered_marker_pub = self.create_publisher(MarkerArray, TOPIC_DISCOVERED_OBJECT_MARKERS, transient_qos)
+        self.fusion_debug_pub = self.create_publisher(String, TOPIC_FUSION_DEBUG_STATUS, 10)
 
         self.declare_parameter("route_id", "A")
         self.declare_parameter("route_map_name", "finalmap")
@@ -292,7 +301,6 @@ class LocalPathNode(Node):
 
         self.recon_logger = ReconLogger(self.route_id, self.route_map_name, self.recon_report_dir)
         self.sim_time = 0.0
-        self.player_heading_deg = 0.0
         self._last_sim_time = 0.0
         self._report_saved = False
         self.goal_pos = None
@@ -396,7 +404,7 @@ class LocalPathNode(Node):
                 if dist < 10.0:
                     self.recon_logger.total_distance += dist
             self.player_pose = msg
-            # 노출/발각 사후계산용 궤적(map x=position.x, z=position.y). yaw는 차체 헤딩.
+            # Recon report trajectory logging: map x=position.x, map y/z=position.y, yaw=body heading.
             self.recon_logger.log_pose(
                 self.sim_time,
                 float(msg.pose.position.x),
@@ -575,35 +583,88 @@ class LocalPathNode(Node):
             # 퍼블리싱 전 안전하게 복사
             fused_to_pub = list(fused)
             discovered_to_pub = list(self.discovered)
+            fusion_debug_to_pub = dict(self._last_fusion_debug) if self._last_fusion_debug else None
 
         self.publish_fused(fused_to_pub)
         self.publish_current_markers(fused_to_pub)
         self.publish_discovered(discovered_to_pub)
+        self.publish_fusion_debug(fusion_debug_to_pub)
 
     def compute_fused_objects_locked(self) -> List[Dict[str, Any]]:
-        if self.player_pose is None or self.latest_detections_payload is None or self.latest_lidar_points.shape[0] == 0:
-            return []
+        debug = self._make_fusion_debug_base_locked()
+
+        def finish(reason: str, fused: Optional[List[Dict[str, Any]]] = None, **extra: Any) -> List[Dict[str, Any]]:
+            result = fused or []
+            if self.debug_fusion_enabled:
+                debug.update(extra)
+                debug["reject_reason"] = reason
+                debug["fused_count"] = len(result)
+                debug["success"] = len(result) > 0
+                self._last_fusion_debug = debug
+            return result
+
+        if self.player_pose is None:
+            return finish("no_player_pose")
+        if self.latest_detections_payload is None:
+            return finish("no_detection_payload")
+        if self.latest_lidar_points.shape[0] == 0:
+            return finish("no_lidar_points")
 
         raw_detections = self.latest_detections_payload.get("detections", [])
         if not isinstance(raw_detections, list):
-            return []
+            return finish("detections_not_list")
 
         if self._is_stale_async_detection_payload(self.latest_detections_payload):
-            return []
+            return finish(
+                "stale_async_detection",
+                async_result_age_ms=self._as_float(self.latest_detections_payload.get("resultAgeMs"), -1.0),
+                max_async_result_age_ms=self.max_async_result_age_ms,
+            )
 
-        # Camera/LiDAR time synchronization.  Too old detections create ghost boxes.
+        # Camera/LiDAR time synchronization.
+        # Fusion이 DBSCAN cluster를 우선 사용하므로, 가능하면 detection timestamp와 cluster timestamp를 비교한다.
+        # 단, 기본값은 hard drop이 아니라 warning이다. strict drop은 config에서 drop_on_sync_mismatch=true일 때만 수행한다.
         det_ts = self._as_float(self.latest_detections_payload.get("timestamp_wall", 0.0))
         lidar_ts = self._as_float(self.latest_lidar_ts, 0.0)
-        if det_ts > 0 and lidar_ts > 0 and abs(det_ts - lidar_ts) > self.max_sync_diff_sec:
-            return []
+        cluster_ts = self._extract_cluster_timestamp(self.latest_clusters_payload)
+        sync_ref_ts = cluster_ts if self.prefer_clusters and cluster_ts > 0.0 else lidar_ts
+        sync_ref_name = "cluster" if self.prefer_clusters and cluster_ts > 0.0 else "lidar_pc2"
+        sync_diff_sec = abs(det_ts - sync_ref_ts) if det_ts > 0 and sync_ref_ts > 0 else -1.0
+        debug.update({
+            "det_ts": det_ts,
+            "lidar_ts": lidar_ts,
+            "cluster_ts": cluster_ts,
+            "sync_ref": sync_ref_name,
+            "sync_diff_sec": sync_diff_sec,
+            "max_sync_diff_sec": self.max_sync_diff_sec,
+            "sync_warning": bool(sync_diff_sec >= 0.0 and sync_diff_sec > self.max_sync_diff_sec),
+            "drop_on_sync_mismatch": self.drop_on_sync_mismatch,
+        })
+        if sync_diff_sec >= 0.0 and sync_diff_sec > self.max_sync_diff_sec and self.drop_on_sync_mismatch:
+            return finish("sync_mismatch_drop")
 
         parsed_detections: List[ParsedDetection] = []
+        dropped_low_conf = 0
+        dropped_bad_bbox = 0
         for det in raw_detections:
             parsed = self._parse_detection(det)
             if parsed is not None:
                 parsed_detections.append(parsed)
+            elif isinstance(det, dict):
+                conf = self._as_float(det.get("confidence"), 0.0)
+                if conf < self.min_detection_conf:
+                    dropped_low_conf += 1
+                else:
+                    dropped_bad_bbox += 1
+        debug.update({
+            "raw_detection_count": len(raw_detections),
+            "parsed_detection_count": len(parsed_detections),
+            "dropped_low_conf": dropped_low_conf,
+            "dropped_bad_bbox": dropped_bad_bbox,
+            "min_detection_conf": self.min_detection_conf,
+        })
         if not parsed_detections:
-            return []
+            return finish("no_parsed_detection")
 
         image_w, image_h = self._extract_image_size(self.latest_detections_payload)
         px = float(self.player_pose.pose.position.x)
@@ -613,10 +674,18 @@ class LocalPathNode(Node):
 
         projection_context = self._build_projection_context(int(image_w), int(image_h)) if self.use_projection_fusion else None
         projected_clusters = self._project_clusters(projection_context, px, py, int(image_w), int(image_h)) if projection_context else []
+        debug.update({
+            "image_w": float(image_w),
+            "image_h": float(image_h),
+            "projection_enabled": bool(self.use_projection_fusion),
+            "projection_context_ok": projection_context is not None,
+            "projected_cluster_count": len(projected_clusters),
+            "semantic_requires_cluster": self.semantic_requires_cluster,
+            "prefer_clusters": self.prefer_clusters,
+            "allow_angle_fallback": self.allow_angle_fallback,
+        })
 
         # Preferred path: global one-to-one YOLO bbox <-> DBSCAN cluster assignment.
-        # This prevents a large rock bbox from taking a nearby person cluster simply
-        # because the rock detection appeared earlier in the YOLO list.
         if self.prefer_clusters and projected_clusters:
             fused = self._fuse_with_global_cluster_assignment(
                 parsed_detections,
@@ -628,16 +697,25 @@ class LocalPathNode(Node):
                 float(image_w),
                 float(image_h),
             )
+            debug.update(self._last_cluster_assignment_stats)
             if fused:
-                return fused
+                return finish("ok_projection_cluster", fused)
 
         # Strict mode: no semantic object is emitted unless YOLO and DBSCAN cluster agree.
         if self.semantic_requires_cluster:
-            return []
+            if projection_context is None:
+                return finish("strict_no_projection_context")
+            if not projected_clusters:
+                return finish("strict_no_projected_cluster")
+            return finish("strict_no_cluster_assignment")
 
         # Legacy fallback path kept only for emergency debugging when semantic_requires_cluster=false.
         angle_points = self._build_angle_lidar_points(px, py) if self.allow_angle_fallback else []
         projected_points = self._project_raw_lidar_points(projection_context, px, py, int(image_w), int(image_h)) if projection_context else []
+        debug.update({
+            "projected_point_count": len(projected_points),
+            "angle_point_count": len(angle_points),
+        })
 
         fused: List[Dict[str, Any]] = []
         assigned_cluster_ids: set[int] = set()
@@ -656,7 +734,9 @@ class LocalPathNode(Node):
             if obj is not None:
                 obj.update(parsed.metadata())
                 fused.append(obj)
-        return fused
+        if fused:
+            return finish("ok_fallback_path", fused)
+        return finish("fallback_no_match")
 
     def update_discovered_map_locked(self, fused: List[Dict[str, Any]]) -> None:
         if not self.mapping_enabled:
@@ -919,12 +999,19 @@ class LocalPathNode(Node):
         image_h: float,
     ) -> List[Dict[str, Any]]:
         candidates: List[Dict[str, Any]] = []
+        per_class_candidates: Dict[str, int] = {}
         for det_index, parsed in enumerate(parsed_detections):
             for cluster in projected_clusters:
                 cand = self._cluster_detection_candidate(det_index, parsed, cluster, image_w, image_h)
                 if cand is not None:
                     candidates.append(cand)
+                    per_class_candidates[parsed.class_name] = per_class_candidates.get(parsed.class_name, 0) + 1
         if not candidates:
+            self._last_cluster_assignment_stats = {
+                "cluster_candidate_count": 0,
+                "cluster_selected_count": 0,
+                "cluster_candidate_classes": {},
+            }
             return []
 
         # A cluster that is plausible for multiple detections should go to the best
@@ -958,6 +1045,14 @@ class LocalPathNode(Node):
             used_detections.add(det_index)
             if cluster_id >= 0:
                 used_clusters.add(cluster_id)
+
+        self._last_cluster_assignment_stats = {
+            "cluster_candidate_count": len(candidates),
+            "cluster_selected_count": len(selected),
+            "cluster_candidate_classes": per_class_candidates,
+            "cluster_best_score": float(candidates[0]["score"]) if candidates else None,
+            "cluster_best_center_norm": float(candidates[0]["center_norm"]) if candidates else None,
+        }
 
         fused: List[Dict[str, Any]] = []
         for cand in selected:
@@ -1136,6 +1231,13 @@ class LocalPathNode(Node):
         msg = String()
         msg.data = json.dumps(payload, ensure_ascii=False)
         self.fused_pub.publish(msg)
+
+    def publish_fusion_debug(self, payload: Optional[Dict[str, Any]]) -> None:
+        if not self.debug_fusion_enabled or payload is None:
+            return
+        msg = String()
+        msg.data = json.dumps(payload, ensure_ascii=False)
+        self.fusion_debug_pub.publish(msg)
 
     def publish_discovered(self, discovered_list: List[DiscoveredObject]) -> None:
         confirmed_count = sum(1 for obj in discovered_list if obj.is_confirmed)
@@ -1341,6 +1443,40 @@ class LocalPathNode(Node):
     # ------------------------------------------------------------------
     # Math / parsing helpers
     # ------------------------------------------------------------------
+    def _make_fusion_debug_base_locked(self) -> Dict[str, Any]:
+        det_payload = self.latest_detections_payload if isinstance(self.latest_detections_payload, dict) else {}
+        cluster_payload = self.latest_clusters_payload if isinstance(self.latest_clusters_payload, dict) else {}
+        raw_dets = det_payload.get("detections", []) if isinstance(det_payload.get("detections", []), list) else []
+        clusters = cluster_payload.get("clusters", []) if isinstance(cluster_payload.get("clusters", []), list) else []
+        return {
+            "timestamp_wall": time.time(),
+            "frame_id": self.map_frame,
+            "has_player_pose": self.player_pose is not None,
+            "has_detection_payload": isinstance(self.latest_detections_payload, dict),
+            "has_info": self.latest_info is not None,
+            "has_cluster_payload": isinstance(self.latest_clusters_payload, dict),
+            "lidar_point_count": int(self.latest_lidar_points.shape[0]) if isinstance(self.latest_lidar_points, np.ndarray) else 0,
+            "raw_detection_count": len(raw_dets),
+            "cluster_count": len(clusters),
+        }
+
+    def _extract_cluster_timestamp(self, payload: Optional[Dict[str, Any]]) -> float:
+        if not isinstance(payload, dict):
+            return 0.0
+        for key in ("timestamp_ros_sec", "timestamp_wall", "stamp_sec"):
+            if payload.get(key) is not None:
+                return self._as_float(payload.get(key), 0.0)
+        return 0.0
+
+    def _merge_radius_for_class(self, class_name: str) -> float:
+        try:
+            value = self.merge_radius_by_class.get(str(class_name).lower())
+            if value is not None:
+                return float(value)
+        except Exception:
+            pass
+        return float(self.merge_radius_m)
+
     def _is_stale_async_detection_payload(self, payload: Dict[str, Any]) -> bool:
         if not self.drop_stale_async_detection or not isinstance(payload, dict):
             return False
@@ -1416,18 +1552,9 @@ class LocalPathNode(Node):
         return None
 
     def _find_existing_discovered(self, class_name: str, x: float, y: float, track_id: Optional[int] = None) -> Optional[DiscoveredObject]:
-        if self.track_id_merge_enabled and track_id is not None:
-            best_track = None
-            best_track_d = 1e9
-            for obj in self.discovered:
-                if obj.track_id != track_id:
-                    continue
-                d = math.hypot(obj.map_x - x, obj.map_y - y)
-                if d < best_track_d:
-                    best_track_d = d
-                    best_track = obj
-            if best_track is not None and best_track_d <= self.track_id_merge_radius_m:
-                return best_track
+        # 중복 저장 방지는 YOLO trackId보다 tank_map 좌표 기반이 우선이다.
+        # trackId는 시야 이탈/재진입 시 바뀔 수 있으므로 보조 merge 조건으로만 사용한다.
+        merge_radius = self._merge_radius_for_class(class_name)
 
         best = None
         best_d = 1e9
@@ -1438,8 +1565,23 @@ class LocalPathNode(Node):
             if d < best_d:
                 best_d = d
                 best = obj
-        if best is not None and best_d <= self.merge_radius_m:
+        if best is not None and best_d <= merge_radius:
             return best
+
+        if self.track_id_merge_enabled and track_id is not None:
+            best_track = None
+            best_track_d = 1e9
+            for obj in self.discovered:
+                if obj.track_id != track_id:
+                    continue
+                if not self.merge_across_classes and obj.class_name != class_name:
+                    continue
+                d = math.hypot(obj.map_x - x, obj.map_y - y)
+                if d < best_track_d:
+                    best_track_d = d
+                    best_track = obj
+            if best_track is not None and best_track_d <= self.track_id_merge_radius_m:
+                return best_track
         return None
 
     @staticmethod

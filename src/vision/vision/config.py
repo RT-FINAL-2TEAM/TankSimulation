@@ -31,13 +31,15 @@ DEFAULT_CLASS_COLORS = {
     "person": "#00FFFF",
     "rock": "#FFA500",
     "tank": "#FF0000",
+    "car": "#FF66CC",
+    "house": "#AA66FF",
     "wall": "#00FF00",
     "tent": "#FFFF00",
 }
 
 DEFAULT_CONFIG_ENV_KEYS = ("TANK_YOLO_CONFIG", "YOLO_CONFIG")
 DEFAULT_MODEL_ENV_KEYS = ("TANK_YOLO_MODEL_PATH", "YOLO_MODEL_PATH")
-DEFAULT_MODEL_FILENAME = os.getenv("TANK_YOLO_DEFAULT_MODEL", "best_300.pt")
+DEFAULT_MODEL_FILENAME = os.getenv("TANK_YOLO_DEFAULT_MODEL", "best_final.pt")
 DEFAULT_CONFIG_FILENAME = os.getenv("TANK_YOLO_DEFAULT_CONFIG", "yolo_detection.yaml")
 DEFAULT_IMGSZ = env_int("TANK_YOLO_IMGSZ", 416)
 DEFAULT_IOU = env_float("TANK_YOLO_IOU", 0.70)

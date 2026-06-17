@@ -90,14 +90,23 @@ def get_turret_angle(info: Dict[str, Any]) -> Tuple[float, float]:
 
 
 def extract_info_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Accept /tank/api/info/raw wrapper or raw /info dict."""
+    """Accept /tank/api/info/raw, /tank/api/info/compact wrapper, or raw /info dict.
+
+    Projection only needs camera pose inputs such as lidarOrigin and turret angles.
+    The compact /info topic intentionally removes the heavy lidarPoints array, so
+    requiring lidarPoints here makes local_path_node/lidar_camera_overlay_node lose
+    latest_info when TANK_SAVE_FULL_INFO=false.
+    """
     if not isinstance(payload, dict):
         return None
     if isinstance(payload.get("data"), dict):
         payload = payload["data"]
     if not isinstance(payload, dict):
         return None
-    if "lidarOrigin" not in payload or "lidarPoints" not in payload:
+
+    # lidarOrigin is sufficient for compute_camera_pose(). playerTurretX/Y are
+    # optional because get_turret_angle() already defaults missing values to 0.0.
+    if "lidarOrigin" not in payload:
         return None
     return payload
 

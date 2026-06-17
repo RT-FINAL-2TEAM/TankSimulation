@@ -1,139 +1,85 @@
-# YOLO + LiDAR fusion and discovered-map configuration.
-# 이 값들은 나중에 LiDAR 팀/강화학습 팀이 쉽게 조정할 수 있도록 코드 밖으로 분리한다.
-
 frame:
   map_frame: tank_map
-
 camera:
-  # Tank Challenge Q&A 기준 Turret View FOV.
   horizontal_fov_deg: 47.81061
   vertical_fov_deg: 28.0
-  # /detect topic payload에 image_shape가 없을 때 사용할 fallback.
   default_image_width: 1920
   default_image_height: 1057
-  # 현재 1차 구현은 body heading 기준이다.
-  # 추후 turret/camera extrinsic이 확정되면 body_plus_turret 또는 projection 방식으로 바꿀 수 있다.
   heading_source: body
-
 fusion:
-  # 실제 객체 위치 추정은 projection fusion을 먼저 사용한다.
-  # semantic object는 YOLO + DBSCAN LiDAR cluster가 같이 매칭될 때만 만든다.
   method: projection_then_cluster_then_angle
-  allow_angle_fallback: false
-
-  # bbox 중심각과 LiDAR point bearing을 매칭할 때 추가로 허용할 각도 여유.
-  # strict projection cluster 모드에서는 fallback용 값이다.
+  allow_angle_fallback: true
   angle_gate_extra_deg: 4.0
-
   max_fusion_range_m: 45.0
   min_fusion_range_m: 0.5
   min_lidar_points_per_object: 3
-  # 가까운 point 일부의 median으로 객체 위치를 안정화한다.
   use_nearest_points: 20
-
-  # bbox confidence가 이 값보다 작으면 fusion/map update 대상에서 제외한다.
-  # 현재 로그 기준 person conf는 높고 rock conf가 낮을 수 있으므로 0.20 유지.
-  min_detection_confidence: 0.20
-
-  # ------------------------------------------------------------
-  # Strict YOLO + LiDAR DBSCAN cluster matching
-  # ------------------------------------------------------------
-  # YOLO만 있거나 LiDAR cluster만 있는 경우는 semantic object로 만들지 않는다.
+  min_detection_confidence: 0.2
   semantic_requires_cluster: true
-
-  # person은 bbox가 좁고 화면 하단에 걸리는 경우가 많아서 rock보다 완화한다.
-  # 사람이 계속 안 붙으면 cluster_match_max_score를 2.30까지 올리고,
-  # 오검출/엉뚱한 cluster 매칭이 늘면 1.80~1.95로 낮춘다.
   cluster_match_max_center_norm: 1.75
-  cluster_match_max_score: 2.10
-
-  # 여러 detection이 같은 cluster를 노릴 때 점수 차이가 너무 작으면 reject한다.
-  # 값이 작을수록 덜 버리고, 값이 클수록 애매한 매칭을 더 많이 버린다.
-  cluster_match_ambiguity_delta: 0.10
-
-  # 거리가 가까운 cluster에 과도하게 끌리지 않도록 낮게 둔다.
+  cluster_match_max_score: 2.1
+  cluster_match_ambiguity_delta: 0.1
   cluster_match_distance_weight: 0.0015
-
-  # 큰 bbox가 작은 객체 cluster를 가져가는 것을 막기 위한 penalty.
-  # rock bbox가 person cluster를 뺏으면 0.60~0.85로 올린다.
   cluster_match_bbox_area_weight: 0.45
-
-  # class별 bbox anchor 위치.
-  # person은 LiDAR가 다리/하단에 찍히는 경우가 많아서 bbox 하단 쪽으로 둔다.
-  # 0.50 = bbox 중앙, 0.90 = bbox 하단 근처.
-  cluster_match_person_anchor_y: 0.90
-  cluster_match_default_anchor_y: 0.50
-
-  # person 전용 허용 범위. x축은 비교적 엄격, y축은 하단 projection 오차를 더 허용한다.
-  cluster_match_person_x_limit: 1.80
-  cluster_match_person_y_limit: 2.80
-
-  # Camera/LiDAR timestamp 차이가 이 값보다 크면 fusion을 포기한다.
-  max_sync_diff_sec: 0.15
-
+  cluster_match_person_anchor_y: 0.9
+  cluster_match_default_anchor_y: 0.5
+  cluster_match_person_x_limit: 1.8
+  cluster_match_person_y_limit: 2.8
+  max_sync_diff_sec: 0.5
+  drop_on_sync_mismatch: false
 projection:
-  # 팀원이 수동 보정한 LiDAR-camera extrinsic을 실제 YOLO-LiDAR matching에 사용한다.
   enabled: true
   prefer_dbscan_clusters: true
-
-  # 일반 point projection margin.
   bbox_margin_px: 16.0
-
-  # DBSCAN cluster projection margin.
-  # person bbox가 화면 하단에 붙어 있고 projection 오차가 있으면 기존 18px로는 쉽게 reject된다.
   cluster_bbox_margin_px: 45.0
-
-  # strict cluster matching에서는 cluster 후보를 우선 사용한다.
   min_projected_lidar_points: 2
   min_cluster_points: 2
   use_only_detected_points: true
-
   params:
     tx: 0.28
     ty: 0.02
-    tz: 11.80
+    tz: 11.8
     yaw_offset: -0.9
     pitch_offset: -0.9
     roll_offset: -0.3
     hfov: 86.0
     vfov: 60.2
-
 static_matching:
-  # recon_map에 이미 있는 장애물 주변 detection은 새 객체로 추가하지 않는다.
   add_only_unmatched_to_recon: true
   static_match_radius_m: 4.0
-  # true면 같은 category끼리만 static match한다. false면 주변 static obstacle이 있으면 이미 알려진 객체로 본다.
   same_category_only: true
-
 async_detection:
-  # TANK_YOLO_ASYNC=true일 때 직전 프레임 detection이 너무 오래되면 fusion에서 제외한다.
   drop_stale: true
   max_result_age_ms: 300
-
 mapping:
   enabled: true
-  merge_radius_m: 5.0
+  merge_radius_m: 3.0
   position_ema_alpha: 0.35
-  # 저장할 class. YOLO public className 기준.
-  # 저장할 class. YOLO public className 기준.
-  # 새 모델 class: car, person, tank, rock, house. tent는 기존 호환성을 위해 유지한다.
-  add_classes: [person, rock, tank, tent, car, house]
+  add_classes:
+  - person
+  - rock
+  - tank
+  - tent
+  - car
+  - house
   save_directory: ~/tank_discovered_maps
   save_latest_filename: discovered_objects_latest.map
-  # true면 save service 호출 시 timestamp가 붙은 archive 파일도 같이 만든다.
   save_timestamped_copy: true
-  # candidate object는 RViz/topic에는 표시하지만, 파일 저장은 confirmed object만 수행한다.
   save_confirmed_only: true
   min_confirm_observations: 5
   min_confirm_age_sec: 1.0
-  # trackId가 있으면 같은 trackId를 우선 같은 candidate로 병합한다.
   track_id_merge_enabled: true
   track_id_merge_radius_m: 10.0
-  # trackId가 없거나 class가 흔들리는 경우에도 가까운 객체는 같은 candidate로 먼저 병합한다.
-  merge_across_classes: true
+  merge_across_classes: false
   class_vote_by_confidence: true
   memory_decay_sec: 10.0
-
+  merge_radius_by_class:
+    person: 1.0
+    rock: 1.5
+    car: 2.5
+    tank: 3.0
+    house: 4.0
+    tent: 3.0
 rviz:
   current_object_lifetime_sec: 1.2
   discovered_marker_z_offset: 1.5
@@ -151,3 +97,5 @@ rviz:
     car: '#FF66CC'
     house: '#AA66FF'
     unknown: '#FFFFFF'
+debug:
+  fusion_status: true
