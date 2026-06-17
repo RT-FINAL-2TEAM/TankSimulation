@@ -96,6 +96,29 @@ def lateral_cmd(cmd_str):
         return ""
 
 
+def nearest_seg_index(px, pz, path):
+    """경로 폴리라인에서 가장 가까운 세그먼트 시작 인덱스."""
+    best_i, best_d = 0, float("inf")
+    for i in range(len(path) - 1):
+        d = seg_point_dist(px, pz, path[i][0], path[i][1], path[i + 1][0], path[i + 1][1])
+        if d < best_d:
+            best_d, best_i = d, i
+    return best_i
+
+
+def curvature_at(path, i):
+    """경로 i번째 정점의 방향변화각(도)/길이 — 코너일수록 큼."""
+    if i <= 0 or i >= len(path) - 1:
+        return 0.0
+    a = (path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1])
+    b = (path[i + 1][0] - path[i][0], path[i + 1][1] - path[i][1])
+    na, nb = math.hypot(*a), math.hypot(*b)
+    if na < 1e-6 or nb < 1e-6:
+        return 0.0
+    c = max(-1.0, min(1.0, (a[0] * b[0] + a[1] * b[1]) / (na * nb)))
+    return math.degrees(math.acos(c)) / max(1.0, (na + nb) / 2.0)
+
+
 # --------------------------------------------------------------------------- #
 # 점수 계산
 # --------------------------------------------------------------------------- #
@@ -107,6 +130,9 @@ def analyze_route(d):
         return None  # 진단 데이터 없음(옛 런) → 재주행 필요
 
     follow_errs, apf_angles = [], []
+    fe_curv = []          # (추종오차, 곡률) — 코너컷 vs 직선이탈 분해용
+    track_angles = []     # 이동방향 vs 목표(local_target) 각도 — 제어 추종
+    prev_p = None
     for s in samples:
         p = s.get("p")
         if not p:
@@ -116,11 +142,22 @@ def analyze_route(d):
             fe = point_to_path(p[0], p[1], path)
             if fe is not None:
                 follow_errs.append(fe)
+                if len(path) >= 3:
+                    fe_curv.append((fe, curvature_at(path, nearest_seg_index(p[0], p[1], path))))
         look, ltgt = s.get("look"), s.get("ltgt")
         if look and ltgt:
             a = angle_at(p, look, ltgt)
             if a is not None:
                 apf_angles.append(a)
+        # 제어 추종: 직전 대비 실제 이동방향 vs local_target 방향 각도
+        if prev_p is not None and ltgt:
+            mv = (p[0] - prev_p[0], p[1] - prev_p[1])
+            tg = (ltgt[0] - p[0], ltgt[1] - p[1])
+            nm, nt = math.hypot(*mv), math.hypot(*tg)
+            if nm > 0.05 and nt > 0.3:
+                cc = max(-1.0, min(1.0, (mv[0] * tg[0] + mv[1] * tg[1]) / (nm * nt)))
+                track_angles.append(math.degrees(math.acos(cc)))
+        prev_p = p
 
     # 제어 채터: A↔D 토글
     toggles, last = 0, ""
@@ -135,6 +172,18 @@ def analyze_route(d):
     def stat(xs):
         return {"mean": round(sum(xs) / len(xs), 2), "max": round(max(xs), 2), "n": len(xs)} if xs else None
 
+    # 추종오차 분해: 곡률 하위/상위 33%에서 비교 → 코너에서 크면 lookahead 코너컷, 직선에서도 크면 코리더/제어
+    fe_straight = fe_corner = None
+    if len(fe_curv) >= 6:
+        order = sorted(range(len(fe_curv)), key=lambda j: fe_curv[j][1])
+        k = max(1, len(order) // 3)
+        fe_straight = round(sum(fe_curv[j][0] for j in order[:k]) / k, 2)
+        fe_corner = round(sum(fe_curv[j][0] for j in order[-k:]) / k, 2)
+    track = None
+    if track_angles:
+        track = {"mean": round(sum(track_angles) / len(track_angles), 1),
+                 "over90": sum(1 for a in track_angles if a > 90), "n": len(track_angles)}
+
     return {
         "samples": len(samples),
         "duration_s": round(dur, 1),
@@ -143,6 +192,8 @@ def analyze_route(d):
             "planned_path_swaps": len(planned),
         },
         "follow_error_m": stat(follow_errs),
+        "follow_decomp": {"straight_m": fe_straight, "corner_m": fe_corner},
+        "control_track": track,
         "apf_disagree_deg": stat(apf_angles),
         "control_chatter": {"ad_toggles": toggles, "per_min": round(toggles / dur * 60.0, 1)},
         "_samples": samples,
@@ -237,20 +288,29 @@ def render_overlay(rid, d, res, out_dir):
 # 마크다운
 # --------------------------------------------------------------------------- #
 def verdict(res):
-    """4점수로 1차 원인 추정."""
+    """원인 분해로 1차 진단 — 추종오차를 코너컷(lookahead) / 직선이탈(코리더·제어)로 가른다."""
     fe = (res["follow_error_m"] or {}).get("mean", 0) or 0
     apf = (res["apf_disagree_deg"] or {}).get("mean", 0) or 0
     churn = res["route_churn"]["route_version_changes"]
     chat = res["control_chatter"]["per_min"]
+    dec = res.get("follow_decomp") or {}
+    st, co = dec.get("straight_m"), dec.get("corner_m")
+    trk = res.get("control_track") or {}
     flags = []
     if churn >= 5:
-        flags.append(f"경로 churn 높음(재계획 {churn}회)")
-    if fe >= 5:
-        flags.append(f"추종오차 큼(평균 {fe}m → 제어/APF가 경로 못 따라감)")
+        flags.append(f"경로 churn 높음(재계획 {churn}회) → planner 재계획 점검")
+    if fe >= 3:
+        if st is not None and co is not None and co - st >= 1.0:
+            flags.append(f"추종오차 {fe}m, **코너에서 큼**(직선 {st}/코너 {co}m) → lookahead 코너컷 → **lookahead 단축**")
+        elif st is not None and co is not None and (st - co >= 0.5 or trk.get("mean", 0) >= 40):
+            flags.append(f"추종오차 {fe}m, **직선에서도 큼**(직선 {st}/코너 {co}m) + 제어추종 {trk.get('mean','?')}°·"
+                         f"반대이동 {trk.get('over90','?')}회 → 좁은 코리더 벽충돌·stuck → **코리더 넓히기**")
+        else:
+            flags.append(f"추종오차 {fe}m (직선 {st}/코너 {co}m) → 경로 여유·lookahead 점검")
     if apf >= 30:
-        flags.append(f"APF 불일치 큼(평균 {apf}° → APF가 경로와 싸움)")
+        flags.append(f"APF 불일치 {apf}° → APF가 경로와 싸움")
     if chat >= 60:
-        flags.append(f"제어 채터 높음({chat}/분 → 제어 떨림, 팀원)")
+        flags.append(f"제어 채터 {chat}/분 → 제어 떨림(팀원)")
     return flags or ["뚜렷한 이상치 없음(또는 데이터 부족)"]
 
 
@@ -283,6 +343,10 @@ def render_md(results, gt, out_dir, figs):
              f"{cell(rB,'route_churn','route_version_changes')} | 경로(planner) |")
     L.append(f"| 추종오차 평균(m) | {cell(rA,'follow_error_m','mean')} | {cell(rB,'follow_error_m','mean')} | 제어/APF |")
     L.append(f"| 추종오차 최대(m) | {cell(rA,'follow_error_m','max')} | {cell(rB,'follow_error_m','max')} | 제어/APF |")
+    L.append(f"| └ 직선/코너 추종오차(m) | {cell(rA,'follow_decomp','straight_m')}/{cell(rA,'follow_decomp','corner_m')} | "
+             f"{cell(rB,'follow_decomp','straight_m')}/{cell(rB,'follow_decomp','corner_m')} | 코너↑=lookahead, 직선↑=코리더/제어 |")
+    L.append(f"| └ 제어추종각(°)/반대이동 | {cell(rA,'control_track','mean')}/{cell(rA,'control_track','over90')} | "
+             f"{cell(rB,'control_track','mean')}/{cell(rB,'control_track','over90')} | 크면 제어가 목표 못 쫓음 |")
     L.append(f"| APF 불일치 평균(°) | {cell(rA,'apf_disagree_deg','mean')} | {cell(rB,'apf_disagree_deg','mean')} | APF |")
     L.append(f"| 제어 채터(A/D 토글/분) | {cell(rA,'control_chatter','per_min')} | {cell(rB,'control_chatter','per_min')} | 제어(팀원) |")
     L.append("")

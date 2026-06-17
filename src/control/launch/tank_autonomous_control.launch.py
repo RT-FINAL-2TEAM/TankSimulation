@@ -119,7 +119,9 @@ def generate_launch_description():
                 "lidar_cluster_min_samples": 3,
                 "lidar_history_resolution": 0.5,
                 "max_lidar_history_points": 1500,
-                "lookahead_distance": 8.0,
+                # 8→5: 좁은 굽잇길에서 8m 앞을 보면 코너를 잘라 경로 밖으로 나감(B 코너오차).
+                # 짧게 보면 더 바짝 추종. A도 벽 가까운 선을 더 잘 잡음.
+                "lookahead_distance": 5.0,
                 "publish_path_period_sec": 5.0,
                 "goal_tolerance": 10.0,
                 "default_goal_enabled": True,
@@ -163,7 +165,7 @@ def generate_launch_description():
                 "k_att": 3.0,
                 "k_rep": 60.0,
                 "tangent_gain_scale": 1.0,
-                "local_target_distance": 8.0,   # planner lookahead_distance(8m)와 정합
+                "local_target_distance": 5.0,   # planner lookahead_distance(5m)와 정합
                 "max_repulsive_norm": 20.0,
                 "max_result_norm": 20.0,
                 "min_obstacle_distance": 1.5,
