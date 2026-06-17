@@ -480,6 +480,15 @@ class TeamDynamicAStarPlannerNode(Node):
         self.route_map_name = str(self.get_parameter("route_map_name").value)
         self.route_id = str(self.get_parameter("route_id").value)
         self.route_side = str(self.get_parameter("route_side").value)
+        # route_side는 route_id로 결정된다(A=서/B=동). launch에서 route_side를 빠뜨려 기본값(west)이
+        # 들어와도 B가 동쪽으로 가도록 route_id에 맞춰 자동 보정한다(side-bias가 웨이포인트와 싸우는 버그 방지).
+        _side_by_id = {"A": "west", "B": "east"}
+        _expected_side = _side_by_id.get(self.route_id.strip().upper())
+        if _expected_side and self.route_side != _expected_side:
+            self.get_logger().warn(
+                f"route_side='{self.route_side}'가 route_id='{self.route_id}' 기대값('{_expected_side}')과 "
+                f"불일치 → '{_expected_side}'로 보정")
+            self.route_side = _expected_side
         self.route_clearance_weight = float(self.get_parameter("route_clearance_weight").value)
         self.route_config_file = str(self.get_parameter("route_config_file").value)
         self.use_static_map = bool(self.get_parameter("use_static_map").value)
