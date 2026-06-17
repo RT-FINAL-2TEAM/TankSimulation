@@ -40,10 +40,11 @@ from recon_eval import threat_geometry as tg  # noqa: E402
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_REPORT_DIR = os.path.join(PROJECT_ROOT, "recon_reports")
 DEFAULT_MAP = os.path.join(PROJECT_ROOT, "src", "rviz_visualization", "map", "finalmap.map")
+DEFAULT_ROUTES = os.path.join(PROJECT_ROOT, "src", "path_planning", "config", "routes.yaml")
 
 # 출발/목적 (routes.yaml finalmap 기준). 우회비 직선거리 계산에 사용.
 START_XY = (60.0, 30.0)
-GOAL_XY = (105.23, 275.0)
+GOAL_XY = (110.0, 276.5)
 
 # 위험도 가중치 (은밀성 우선: 발견 W1 / 노출 W2 높게). 합 1.0.
 DEFAULT_WEIGHTS = {"W1": 0.35, "W2": 0.30, "W3": 0.10, "W4": 0.15, "W5": 0.10}
@@ -436,6 +437,160 @@ def compute_perception_accuracy(m: dict, gt_objects: List[Dict[str, Any]]) -> di
 # --------------------------------------------------------------------------- #
 # 렌더링
 # --------------------------------------------------------------------------- #
+def _setup_korean_font() -> None:
+    """matplotlib 한글 라벨이 □로 깨지지 않게 Noto Sans CJK 등록(없으면 폴백)."""
+    from matplotlib import font_manager
+    import matplotlib.pyplot as plt
+    for cjk in ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"):
+        if os.path.exists(cjk):
+            try:
+                font_manager.fontManager.addfont(cjk)
+                plt.rcParams["font.family"] = font_manager.FontProperties(fname=cjk).get_name()
+                break
+            except Exception:
+                pass
+    plt.rcParams["axes.unicode_minus"] = False
+
+
+def render_exposure_figure(rid: str,
+                           trajectory: Optional[List[Tuple[float, float, float]]],
+                           threats: List[Dict[str, Any]],
+                           gt_objects: List[Dict[str, Any]],
+                           gt_bboxes: List[Dict[str, float]],
+                           exposure: Optional[dict],
+                           out_dir: str) -> Optional[str]:
+    """실제 주행 궤적 + 초소(House002) 시야(FOV)/반경 + 실제 발각 지점을 PNG로 그린다.
+
+    발각 판정은 보고서 수치와 동일하게 tg.is_threat_active(반경+FOV±30°+LoS)를 그대로 쓴다.
+    matplotlib이 없거나 궤적 미수집이면 None을 반환(보고서는 그림 없이 계속).
+    """
+    if not trajectory:
+        return None
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Wedge, Circle
+    except Exception as e:  # pragma: no cover - 환경 의존
+        print(f"[경고] matplotlib 미설치 — 노출 지도 생략: {e}", file=sys.stderr)
+        return None
+    _setup_korean_font()
+
+    xs = [float(p[1]) for p in trajectory]
+    zs = [float(p[2]) for p in trajectory]
+
+    fig, ax = plt.subplots(figsize=(10, 10), dpi=130)
+
+    # 1) GT 장애물(맥락) — 위협 아닌 정적객체만 옅은 점으로
+    cls_color = {"Tree": "#7fae7f", "Rock": "#a9742f", "Car": "#ff8c1a",
+                 "Tent": "#c2a36b", "Human": "#cfcfcf"}
+    for o in gt_objects:
+        if o.get("is_threat"):
+            continue
+        name = str(o.get("prefabName", ""))
+        cls = next((k for k in cls_color if name.startswith(k)), None)
+        if cls is None:
+            continue
+        ax.scatter([o["x"]], [o["z"]], s=12, color=cls_color[cls], alpha=0.45, zorder=1)
+
+    # 2) 위협 시야: House002=부채꼴(25m·±30°), 그 외=반경 원
+    for th in threats:
+        tx, tz = float(th["x"]), float(th["z"])
+        if str(th.get("type")) == "House002" or str(th.get("prefabName", "")).startswith("House002"):
+            center_mpl = 90.0 - float(th.get("yaw", 0.0))   # atan2(dx,dz)→matplotlib(+x,CCW): 90-yaw
+            ax.add_patch(Wedge((tx, tz), tg.HOUSE_RADIUS_M,
+                               center_mpl - tg.HOUSE_FOV_HALF_DEG, center_mpl + tg.HOUSE_FOV_HALF_DEG,
+                               facecolor="#d62728", alpha=0.13, edgecolor="#d62728", lw=0.8, zorder=2))
+        else:
+            ax.add_patch(Circle((tx, tz), tg.threat_radius(th),
+                                facecolor="#d62728", alpha=0.10, edgecolor="#d62728", lw=0.8, zorder=2))
+        ax.scatter([tx], [tz], marker="s", s=70, facecolors="none",
+                   edgecolors="#d62728", linewidths=1.6, zorder=5)
+        ax.annotate(str(th.get("prefabName", "")), (tx, tz), fontsize=6, color="#a01b1c",
+                    xytext=(3, 3), textcoords="offset points", zorder=6)
+
+    # 3) 실제 주행 궤적 + 진행 방향 화살표(연속점에서 유도 — 로깅 heading 의존 X)
+    ax.plot(xs, zs, "-", color="#1f6fd6", lw=1.8, alpha=0.9, zorder=4, label="실제 주행 궤적")
+    step = max(1, len(trajectory) // 12)
+    for i in range(step, len(trajectory), step):
+        ax.annotate("", xy=(xs[i], zs[i]), xytext=(xs[i - 1], zs[i - 1]),
+                    arrowprops=dict(arrowstyle="->", color="#1f6fd6", alpha=0.6), zorder=4)
+
+    # 4) 발각 지점(빨강) + 발각 초소로 연결선 — 보고서 노출시간과 동일 판정
+    ex, ez = [], []
+    for p in trajectory:
+        x, z = float(p[1]), float(p[2])
+        for th in threats:
+            if tg.is_threat_active((x, z), th, gt_bboxes):
+                ex.append(x)
+                ez.append(z)
+                ax.plot([x, float(th["x"])], [z, float(th["z"])],
+                        color="#d62728", lw=0.5, alpha=0.30, zorder=3)
+                break
+    if ex:
+        ax.scatter(ex, ez, s=26, color="#d62728", edgecolors="black", linewidths=0.4,
+                   zorder=7, label=f"발각 샘플({len(ex)})")
+
+    # 5) 출발/목적
+    ax.scatter([xs[0]], [zs[0]], marker="o", s=130, color="#1a9850",
+               edgecolors="black", zorder=8, label="출발")
+    ax.scatter([GOAL_XY[0]], [GOAL_XY[1]], marker="^", s=150, color="black",
+               edgecolors="white", zorder=8, label="목적지")
+
+    det = exposure["detection_count"] if exposure else 0
+    dwell = exposure["total_fov_dwell_s"] if exposure else 0.0
+    ax.set_title(f"route_{rid} 실주행·위협 노출 — 발각 {det}회 · 노출 {dwell:.2f}s", fontsize=11)
+    ax.set_xlim(0, 300)
+    ax.set_ylim(0, 300)
+    ax.set_aspect("equal")
+    ax.set_xlabel("map x (동→) [m]")
+    ax.set_ylabel("map z (북↑, 위쪽이 목적지) [m]")
+    ax.grid(True, alpha=0.2)
+    ax.legend(loc="upper left", fontsize=8, framealpha=0.9)
+    out = os.path.join(out_dir, f"exposure_{rid}.png")
+    fig.tight_layout()
+    fig.savefig(out, bbox_inches="tight")
+    plt.close(fig)
+    return out
+
+
+def render_route_overview(map_path: str, routes_path: str, out_dir: str) -> Optional[str]:
+    """A/B '계획 경로'를 새 맵 위에 1장으로 그린다(scripts/visualize_routes.py 재사용).
+
+    실주행 노출 지도(5장)와 달리 '설계된' 전역경로를 맥락으로 보여준다(런타임과 동일하게
+    웨이포인트+목적지 A*). 모듈/맵 로드 실패 시 None을 반환(보고서는 그림 없이 계속).
+    """
+    try:
+        import yaml as _yaml
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))          # scripts/
+        sys.path.insert(0, os.path.join(PROJECT_ROOT, "src", "path_planning"))   # team_path_planning
+        from path_planning.team_path_planning import load_static_obstacles_from_map
+        import visualize_routes as vr
+    except Exception as e:  # pragma: no cover - 환경 의존
+        print(f"[경고] 계획 경로 지도 생략(모듈 로드 실패): {e}", file=sys.stderr)
+        return None
+    try:
+        planning_obs = load_static_obstacles_from_map(map_path)
+        raw_objs = vr.load_raw_objects(map_path)
+        with open(routes_path, encoding="utf-8") as f:
+            rd = _yaml.safe_load(f)["finalmap"]
+        start = tuple(rd["start"])
+        goal = tuple(rd["destination"])
+        routes_paths: Dict[str, Any] = {}
+        wps: Dict[str, Any] = {}
+        for rid, side, color in (("A", "west", "#1f77b4"), ("B", "east", "#2ca02c")):
+            wp = [tuple(p) for p in rd["routes"][rid]]
+            wps[rid] = wp
+            routes_paths[rid] = (vr.plan_route(start, wp, goal, side, planning_obs, 5.0, 0.4), color)
+        out = os.path.join(out_dir, "route_overlay.png")
+        vr.render_overlay(out, planning_obs, raw_objs, routes_paths, start, goal, wps)
+        return out
+    except Exception as e:  # pragma: no cover
+        print(f"[경고] 계획 경로 지도 생성 실패: {e}", file=sys.stderr)
+        return None
+
+
 def _fmt(v: Any, na: str = "—") -> str:
     return na if v is None else (f"{v:g}" if isinstance(v, float) else str(v))
 
@@ -450,7 +605,9 @@ def _pick_better(a: Any, b: Any, lower_better: bool = True) -> Tuple[str, str]:
 
 def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict[str, Optional[dict]],
                     scored: Dict[str, dict], perception: Dict[str, dict],
-                    rec: dict, weights: Dict[str, float], norm_mode: str) -> str:
+                    rec: dict, weights: Dict[str, float], norm_mode: str,
+                    figures: Optional[Dict[str, Optional[str]]] = None,
+                    overview_fig: Optional[str] = None) -> str:
     L: List[str] = []
     rk = " / ".join(f"route_{r}" for r in routes)
     L.append(f"# 정찰 보고서 — {rk}")
@@ -466,6 +623,12 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
     L.append(f"- 위험도 가중치: " + ", ".join(f"{k}={v}" for k, v in weights.items()) + f" · 정규화: `{norm_mode}`")
     L.append(f"- 입력 루트: {', '.join('route_' + r for r in routes)}")
     L.append("")
+    if overview_fig:
+        L.append(f"![A/B 계획 경로 (새 맵)]({os.path.basename(overview_fig)})")
+        L.append("")
+        L.append("> A(서·파랑)/B(동·초록) **계획 경로**를 맵 위에 표시 (▲=목적지, ★=적전차 리스폰). "
+                 "실제 주행 궤적·발각은 5장 참고.")
+        L.append("")
 
     # 2. 주행 요약
     L.append("## 2. 주행 요약")
@@ -523,6 +686,10 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
     # 5. 위험도·은밀성 점수 분해
     L.append("## 5. 위험도·은밀성 점수 분해")
     L.append("")
+    if figures and any(v for v in figures.values()):
+        L.append("> 각 루트 지도: **파란 선** = 실제 주행 궤적, **빨강 부채꼴** = 초소(House002) 시야"
+                 "(반경 25m·정면 ±30°·시선차단 반영), **빨강 점** = 실제로 시야에 들어 발각된 샘플.")
+        L.append("")
     for r in routes:
         L.append(f"### route_{r} — 위험도 총점 **{scored[r]['risk_total']:.3f}**" +
                  ("" if scored[r]["valid"] else " ⚠️(무효 런)"))
@@ -543,6 +710,11 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
             L.append("|---|---|---|---|---|")
             for e in exp["per_threat"][:6]:
                 L.append(f"| {e['threat']} | {e['detections']} | {e['fov_dwell_s']} | {e['max_continuous_s']} | {_fmt(e['min_dist_m'])} |")
+            L.append("")
+
+        fig = (figures or {}).get(r)
+        if fig:
+            L.append(f"![route_{r} 실주행·위협 노출 지도]({os.path.basename(fig)})")
             L.append("")
 
     # 6. 센서 인지 정확도
@@ -604,10 +776,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--route-b", default=None, help="route_B.json 직접 지정(폴백)")
     p.add_argument("-o", "--output", default=None, help="출력 md 경로 (기본 <input>/recon_report.md)")
     p.add_argument("--map", default=DEFAULT_MAP, help="GT 맵 파일 (기본 finalmap.map)")
+    p.add_argument("--routes", default=DEFAULT_ROUTES,
+                   help="계획 경로 개요 그림용 routes.yaml (기본 path_planning/config/routes.yaml)")
     p.add_argument("--norm", choices=["reference", "minmax"], default="reference", help="정규화 방식")
     for k in ("w1", "w2", "w3", "w4", "w5"):
         p.add_argument(f"--{k}", type=float, default=None, help=f"가중치 {k.upper()} 오버라이드")
     p.add_argument("--stdout", action="store_true", help="파일 대신 표준출력")
+    p.add_argument("--no-figures", action="store_true",
+                   help="노출 지도 PNG(exposure_*.png) 생성/임베드 생략")
     return p
 
 
@@ -652,17 +828,36 @@ def main(argv: Optional[List[str]] = None) -> int:
                        "valid": valid, "warnings": warns}
 
     rec = recommend(scored)
-    md = render_markdown(routes, metrics, exposures, scored, perception, rec, weights, args.norm)
+
+    # 노출 지도(PNG)는 md와 같은 폴더에 생성해 basename으로 임베드한다. stdout/--no-figures면 생략.
+    figures: Dict[str, Optional[str]] = {}
+    overview_fig: Optional[str] = None
+    out = None
+    if not args.stdout:
+        out = args.output or os.path.join(
+            args.input if os.path.isdir(args.input) else os.path.dirname(args.input) or ".",
+            "recon_report.md")
+        if not args.no_figures:
+            out_dir = os.path.dirname(out) or "."
+            overview_fig = render_route_overview(args.map, args.routes, out_dir)
+            for rid in routes:
+                figures[rid] = render_exposure_figure(
+                    rid, metrics[rid]["trajectory"], threats, gt_objects, gt_bboxes,
+                    exposures[rid], out_dir)
+
+    md = render_markdown(routes, metrics, exposures, scored, perception, rec, weights,
+                         args.norm, figures, overview_fig)
 
     if args.stdout:
         print(md)
     else:
-        out = args.output or os.path.join(
-            args.input if os.path.isdir(args.input) else os.path.dirname(args.input) or ".",
-            "recon_report.md")
         with open(out, "w", encoding="utf-8") as f:
             f.write(md)
         print(f"[완료] 정찰 보고서 작성: {out}")
+        made = ([f"계획경로 1"] if overview_fig else []) + \
+               ([f"노출 지도 {sum(1 for v in figures.values() if v)}"] if any(figures.values()) else [])
+        if made:
+            print("  그림: " + " · ".join(made) + " (recon_reports/*.png)")
         if rec["winner"]:
             print(f"  추천: route_{rec['winner']} (신뢰도 {rec['confidence']})")
 
