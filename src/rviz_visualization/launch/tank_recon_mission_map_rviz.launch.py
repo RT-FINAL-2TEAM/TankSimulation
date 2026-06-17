@@ -51,6 +51,20 @@ def generate_launch_description():
                 name="tank_rviz_visualizer_node",
                 output="screen",
             ),
+            Node(
+                package="rviz_visualization",
+                executable="terrain_record_finalize_node",
+                name="terrain_record_finalize_node",
+                output="screen",
+                parameters=[
+                    {
+                        "input_topic": "/tank/sensor/lidar/all_detected_points_map",
+                        "map_frame": "tank_map",
+                        "auto_finalize_after_idle_sec": 0.0,
+                    }
+                ],
+            ),
+
             ExecuteProcess(cmd=["rviz2", "-d", rviz_config], output="screen"),
         ]
     )

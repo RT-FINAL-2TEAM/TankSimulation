@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ROS2 node: LiDAR detected map points -> lightweight DBSCAN clusters.
+(Optimized with PointCloud2, NumPy and Scikit-Learn)
 
 Team command compatibility:
   ros2 run tank_visual_perception lidar_dbscan_cluster_node \
@@ -10,10 +11,10 @@ Team command compatibility:
     -p min_cluster_size:=2
 
 Subscribe:
-  /tank/sensor/lidar/detected_points_map      std_msgs/String
-
+  /tank/sensor/lidar/detected_points_map      sensor_msgs/PointCloud2 <-- 바이너리 최적화됨
+  /tank/player/pose                           geometry_msgs/PoseStamped
 Publish:
-  /tank/visual_perception/lidar_clusters      std_msgs/String
+  /tank/visual_perception/lidar_clusters      std_msgs/String         <-- 가벼운 BBox 메타데이터 유지
   /tank/rviz/lidar_cluster_markers            visualization_msgs/MarkerArray
 """
 
@@ -22,146 +23,45 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List
+
+import numpy as np
+try:
+    from sklearn.cluster import DBSCAN as SklearnDBSCAN
+except Exception:  # pragma: no cover - optional acceleration dependency.
+    SklearnDBSCAN = None
 
 import rclpy
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, PoseStamped
 from rclpy.node import Node
 from std_msgs.msg import ColorRGBA, String
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
 from visualization_msgs.msg import Marker, MarkerArray
-
-Point2D = Tuple[float, float]
-Point3D = Tuple[float, float, float]
 
 
 @dataclass
 class Cluster:
     cluster_id: int
-    points: List[Point3D]
+    points: np.ndarray  # (N, 3) numpy array
 
     @property
     def count(self) -> int:
         return len(self.points)
 
     @property
-    def centroid(self) -> Point3D:
-        n = max(1, len(self.points))
-        return (
-            sum(p[0] for p in self.points) / n,
-            sum(p[1] for p in self.points) / n,
-            sum(p[2] for p in self.points) / n,
-        )
+    def centroid(self) -> np.ndarray:
+        return np.mean(self.points, axis=0)
 
     @property
     def bbox(self) -> Dict[str, float]:
-        xs = [p[0] for p in self.points]
-        ys = [p[1] for p in self.points]
-        zs = [p[2] for p in self.points]
+        mins = np.min(self.points, axis=0)
+        maxs = np.max(self.points, axis=0)
         return {
-            "x_min": min(xs), "x_max": max(xs),
-            "y_min": min(ys), "y_max": max(ys),
-            "z_min": min(zs), "z_max": max(zs),
+            "x_min": float(mins[0]), "x_max": float(maxs[0]),
+            "y_min": float(mins[1]), "y_max": float(maxs[1]),
+            "z_min": float(mins[2]), "z_max": float(maxs[2]),
         }
-
-
-def _to_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def _extract_position_map(point: Dict[str, Any]) -> Optional[Point3D]:
-    pos = point.get("position_map")
-    if isinstance(pos, dict):
-        return (_to_float(pos.get("x")), _to_float(pos.get("y")), _to_float(pos.get("z")))
-
-    # Conservative fallback for older payloads.
-    pos = point.get("position")
-    if isinstance(pos, dict):
-        if "z" in pos:
-            # lidar raw convention: map.x=raw.x, map.y=raw.z, map.z=raw.y
-            return (_to_float(pos.get("x")), _to_float(pos.get("z")), _to_float(pos.get("y")))
-        return (_to_float(pos.get("x")), _to_float(pos.get("y")), 0.0)
-
-    if point.get("map_x") is not None and point.get("map_y") is not None:
-        return (_to_float(point.get("map_x")), _to_float(point.get("map_y")), _to_float(point.get("map_z")))
-    return None
-
-
-def parse_lidar_payload(payload: Dict[str, Any]) -> List[Point3D]:
-    raw_points = payload.get("points") if isinstance(payload, dict) else []
-    if isinstance(raw_points, dict):
-        raw_points = raw_points.get("points", [])
-    if not isinstance(raw_points, list):
-        return []
-
-    points: List[Point3D] = []
-    for p in raw_points:
-        if not isinstance(p, dict):
-            continue
-        pos = _extract_position_map(p)
-        if pos is None:
-            continue
-        if not all(math.isfinite(v) for v in pos):
-            continue
-        points.append(pos)
-    return points
-
-
-def _dist2(a: Point3D, b: Point3D) -> float:
-    dx = a[0] - b[0]
-    dy = a[1] - b[1]
-    return dx * dx + dy * dy
-
-
-def dbscan(points: Sequence[Point3D], eps: float, min_samples: int) -> List[int]:
-    """Small dependency-free DBSCAN over map-plane x/y."""
-    n = len(points)
-    if n == 0:
-        return []
-
-    eps2 = eps * eps
-    labels = [-99] * n  # -99: unvisited, -1: noise, >=0: cluster id
-
-    neighbors_cache: List[Optional[List[int]]] = [None] * n
-
-    def neighbors(i: int) -> List[int]:
-        cached = neighbors_cache[i]
-        if cached is not None:
-            return cached
-        res = [j for j in range(n) if _dist2(points[i], points[j]) <= eps2]
-        neighbors_cache[i] = res
-        return res
-
-    cluster_id = 0
-    for i in range(n):
-        if labels[i] != -99:
-            continue
-        neigh = neighbors(i)
-        if len(neigh) < min_samples:
-            labels[i] = -1
-            continue
-
-        labels[i] = cluster_id
-        seeds = list(neigh)
-        k = 0
-        while k < len(seeds):
-            j = seeds[k]
-            if labels[j] == -1:
-                labels[j] = cluster_id
-            if labels[j] != -99:
-                k += 1
-                continue
-            labels[j] = cluster_id
-            neigh_j = neighbors(j)
-            if len(neigh_j) >= min_samples:
-                for candidate in neigh_j:
-                    if candidate not in seeds:
-                        seeds.append(candidate)
-            k += 1
-        cluster_id += 1
-    return labels
 
 
 def make_color(r: float, g: float, b: float, a: float = 1.0) -> ColorRGBA:
@@ -181,11 +81,97 @@ def point_msg(x: float, y: float, z: float = 0.0) -> Point:
     return p
 
 
+def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
+    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+
+    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
+    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
+    node usable on older sensor_msgs_py versions.
+    """
+    try:
+        arr = point_cloud2.read_points_numpy(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+    except Exception:
+        pts = point_cloud2.read_points(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+        if isinstance(pts, np.ndarray):
+            arr = pts
+        else:
+            arr = np.asarray(list(pts), dtype=np.float32)
+    if arr is None:
+        return np.empty((0, 3), dtype=np.float32)
+    arr = np.asarray(arr)
+    if arr.dtype.fields:
+        arr = np.column_stack((arr["x"], arr["y"], arr["z"]))
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.size == 0:
+        return np.empty((0, 3), dtype=np.float32)
+    return np.ascontiguousarray(arr.reshape(-1, 3), dtype=np.float32)
+
+
+def fallback_dbscan_labels(points_2d: np.ndarray, eps: float, min_samples: int) -> np.ndarray:
+    """Small dependency-free DBSCAN over map-plane x/y."""
+    n = int(points_2d.shape[0])
+    if n == 0:
+        return np.empty((0,), dtype=np.int32)
+
+    eps2 = float(eps) * float(eps)
+    labels = np.full(n, -99, dtype=np.int32)  # -99: unvisited, -1: noise, >=0: cluster id
+    neighbors_cache: Dict[int, np.ndarray] = {}
+
+    def neighbors(i: int) -> np.ndarray:
+        cached = neighbors_cache.get(i)
+        if cached is not None:
+            return cached
+        diff = points_2d - points_2d[i]
+        dist2 = np.einsum("ij,ij->i", diff, diff)
+        out = np.flatnonzero(dist2 <= eps2)
+        neighbors_cache[i] = out
+        return out
+
+    cluster_id = 0
+    min_pts = max(int(min_samples), 1)
+    for i in range(n):
+        if labels[i] != -99:
+            continue
+        neigh = neighbors(i)
+        if len(neigh) < min_pts:
+            labels[i] = -1
+            continue
+
+        labels[i] = cluster_id
+        seeds = list(int(v) for v in neigh)
+        seed_seen = set(seeds)
+        k = 0
+        while k < len(seeds):
+            j = seeds[k]
+            if labels[j] == -1:
+                labels[j] = cluster_id
+            if labels[j] != -99:
+                k += 1
+                continue
+            labels[j] = cluster_id
+            neigh_j = neighbors(j)
+            if len(neigh_j) >= min_pts:
+                for candidate in neigh_j:
+                    candidate = int(candidate)
+                    if candidate not in seed_seen:
+                        seeds.append(candidate)
+                        seed_seen.add(candidate)
+            k += 1
+        cluster_id += 1
+    labels[labels == -99] = -1
+    return labels
+
+
 class LidarDbscanClusterNode(Node):
     def __init__(self) -> None:
         super().__init__("lidar_dbscan_cluster_node")
 
         self.declare_parameter("input_topic", "/tank/sensor/lidar/detected_points_map")
+        self.declare_parameter("pose_topic", "/tank/player/pose")
         self.declare_parameter("clusters_topic", "/tank/visual_perception/lidar_clusters")
         self.declare_parameter("markers_topic", "/tank/rviz/lidar_cluster_markers")
         self.declare_parameter("frame_id", "tank_map")
@@ -197,6 +183,7 @@ class LidarDbscanClusterNode(Node):
         self.declare_parameter("text_height", 1.0)
 
         self.input_topic = str(self.get_parameter("input_topic").value)
+        self.pose_topic = str(self.get_parameter("pose_topic").value)
         self.clusters_topic = str(self.get_parameter("clusters_topic").value)
         self.markers_topic = str(self.get_parameter("markers_topic").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
@@ -207,55 +194,89 @@ class LidarDbscanClusterNode(Node):
         self.bbox_min_thickness = float(self.get_parameter("bbox_min_thickness").value)
         self.text_height = float(self.get_parameter("text_height").value)
 
-        self.sub = self.create_subscription(String, self.input_topic, self.on_lidar, 10)
+        self.tank_x = 0.0
+        self.tank_y = 0.0
+
+        # [수정됨] JSON(String) 구독을 PointCloud2 구독으로 변경
+        self.sub = self.create_subscription(PointCloud2, self.input_topic, self.on_lidar, 10)
+        self.sub_pose = self.create_subscription(PoseStamped, self.pose_topic, self.on_pose, 10)
+        
         self.pub_clusters = self.create_publisher(String, self.clusters_topic, 10)
         self.pub_markers = self.create_publisher(MarkerArray, self.markers_topic, 10)
+        
+        if SklearnDBSCAN is not None:
+            self.dbscan_algo = SklearnDBSCAN(
+                eps=max(self.eps, 0.001),
+                min_samples=max(self.min_samples, 1),
+                algorithm="kd_tree",
+            )
+            self.cluster_algorithm = "sklearn_dbscan_2d_map_xy"
+        else:
+            self.dbscan_algo = None
+            self.cluster_algorithm = "fallback_dbscan_2d_map_xy"
+            self.get_logger().warn("scikit-learn is not installed; using dependency-free DBSCAN fallback")
 
         self.get_logger().info(
-            f"lidar_dbscan_cluster_node started: input={self.input_topic}, eps={self.eps}, "
+            f"lidar_dbscan_cluster_node started: input={self.input_topic}(PC2), eps={self.eps}, "
             f"min_samples={self.min_samples}, min_cluster_size={self.min_cluster_size}"
         )
 
-    def on_lidar(self, msg: String) -> None:
+    def on_pose(self, msg: PoseStamped) -> None:
+        self.tank_x = float(msg.pose.position.x)
+        self.tank_y = float(msg.pose.position.y)
+
+    def on_lidar(self, msg: PointCloud2) -> None:
         try:
-            payload = json.loads(msg.data)
-            if not isinstance(payload, dict):
-                return
+            # JSON 파싱 없이 바이너리 PointCloud2를 즉시 NumPy 배열로 변환
+            points = pointcloud2_to_xyz_array(msg)
         except Exception as exc:
-            self.get_logger().warn(f"failed to parse lidar payload: {exc}")
+            self.get_logger().warn(f"failed to read PointCloud2: {exc}")
             return
 
-        points = parse_lidar_payload(payload)
-        if self.max_points > 0 and len(points) > self.max_points:
-            step = max(1, len(points) // self.max_points)
-            points = points[::step][: self.max_points]
+        original_point_count = len(points)
+        
+        if original_point_count == 0:
+            return
 
-        labels = dbscan(points, max(self.eps, 0.001), max(self.min_samples, 1))
-        grouped: Dict[int, List[Point3D]] = {}
-        noise_count = 0
-        for p, label in zip(points, labels):
-            if label < 0:
-                noise_count += 1
-                continue
-            grouped.setdefault(label, []).append(p)
+        # 다운샘플링: 랜덤 샘플링을 사용하여 공간 정보를 고르게 유지
+        if self.max_points > 0 and original_point_count > self.max_points:
+            indices = np.random.choice(original_point_count, self.max_points, replace=False)
+            points = points[indices]
 
+        # DBSCAN 클러스터링 (2D x,y 기준)
+        points_2d = points[:, :2]
+        if self.dbscan_algo is not None:
+            labels = self.dbscan_algo.fit_predict(points_2d)
+        else:
+            labels = fallback_dbscan_labels(points_2d, max(self.eps, 0.001), max(self.min_samples, 1))
+
+        # 결과 그룹화
         clusters: List[Cluster] = []
+        noise_count = np.sum(labels == -1)
+        
+        unique_labels = set(labels)
+        unique_labels.discard(-1) # 노이즈 라벨 제거
+
         new_id = 0
-        for _label, group in sorted(grouped.items()):
-            if len(group) < self.min_cluster_size:
-                noise_count += len(group)
+        for label in unique_labels:
+            mask = (labels == label)
+            group_points = points[mask]
+            
+            if len(group_points) < self.min_cluster_size:
+                noise_count += len(group_points)
                 continue
-            clusters.append(Cluster(new_id, group))
+                
+            clusters.append(Cluster(new_id, group_points))
             new_id += 1
 
-        self.publish_clusters(clusters, len(points), noise_count)
+        self.publish_clusters(clusters, len(points), int(noise_count))
         self.publish_markers(clusters)
 
     def publish_clusters(self, clusters: List[Cluster], point_count: int, noise_count: int) -> None:
         data = {
             "timestamp_ros_sec": self.get_clock().now().nanoseconds * 1e-9,
             "frame_id": self.frame_id,
-            "algorithm": "dbscan_2d_map_xy",
+            "algorithm": self.cluster_algorithm,
             "eps": self.eps,
             "min_samples": self.min_samples,
             "min_cluster_size": self.min_cluster_size,
@@ -264,16 +285,23 @@ class LidarDbscanClusterNode(Node):
             "cluster_count": len(clusters),
             "clusters": [],
         }
+        
         for c in clusters:
-            cx, cy, cz = c.centroid
-            nearest = min(math.hypot(p[0], p[1]) for p in c.points) if c.points else None
+            cx, cy, cz = float(c.centroid[0]), float(c.centroid[1]), float(c.centroid[2])
+            
+            # [최적화] NumPy 벡터 연산으로 가장 가까운 거리 계산
+            if c.count > 0:
+                distances = np.hypot(c.points[:, 0] - self.tank_x, c.points[:, 1] - self.tank_y)
+                nearest = float(np.min(distances))
+            else:
+                nearest = None
+                
             bbox = c.bbox
             data["clusters"].append(
                 {
                     "id": c.cluster_id,
                     "count": c.count,
                     "centroid": {"x": cx, "y": cy, "z": cz},
-                    # raw coordinate mirrors the project policy: raw.x=map.x, raw.y=map.z, raw.z=map.y
                     "centroid_raw": {"x": cx, "y": cz, "z": cy},
                     "bbox": bbox,
                     "bbox_raw": {
@@ -281,9 +309,10 @@ class LidarDbscanClusterNode(Node):
                         "y_min": bbox["z_min"], "y_max": bbox["z_max"],
                         "z_min": bbox["y_min"], "z_max": bbox["y_max"],
                     },
-                    "nearest_origin_distance_m": nearest,
+                    "nearest_tank_distance_m": nearest,
                 }
             )
+            
         out = String()
         out.data = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
         self.pub_clusters.publish(out)
@@ -301,7 +330,7 @@ class LidarDbscanClusterNode(Node):
 
         marker_id = 1
         for c in clusters:
-            cx, cy, cz = c.centroid
+            cx, cy, cz = float(c.centroid[0]), float(c.centroid[1]), float(c.centroid[2])
             bbox = c.bbox
             sx = max(self.bbox_min_thickness, bbox["x_max"] - bbox["x_min"])
             sy = max(self.bbox_min_thickness, bbox["y_max"] - bbox["y_min"])
@@ -352,7 +381,13 @@ class LidarDbscanClusterNode(Node):
             text.pose.orientation.w = 1.0
             text.scale.z = self.text_height
             text.color = make_color(1.0, 1.0, 1.0, 1.0)
-            nearest = min(math.hypot(p[0], p[1]) for p in c.points) if c.points else 0.0
+            
+            if c.count > 0:
+                distances = np.hypot(c.points[:, 0] - self.tank_x, c.points[:, 1] - self.tank_y)
+                nearest = float(np.min(distances))
+            else:
+                nearest = 0.0
+                
             text.text = f"cluster {c.cluster_id}\nN={c.count}\nD={nearest:.1f}m"
             arr.markers.append(text)
 

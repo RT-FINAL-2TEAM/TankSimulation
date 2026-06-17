@@ -32,13 +32,13 @@ http://Ubuntu_IP:5000/debug/yolo
 - Terminal 1: ros_bridge 실행 (주의 : 192.168.0.??에는 Windows 시뮬레이터 PC의 실제 IP 입력)
 
 1) 기본 실행 + 웹 live view ON + 기존 동기식 YOLO:
-TANK_ALLOWED_CLIENTS=127.0.0.1,::1,192.168.0.?? TANK_MODE=monitor TANK_LIVE_VIEW=true TANK_YOLO_ASYNC=false ros2 run ros_bridge ros_bridge
+TANK_ALLOWED_CLIENTS=127.0.0.1,::1,192.168.0.33 TANK_MODE=monitor TANK_LIVE_VIEW=true TANK_YOLO_ASYNC=false ros2 run ros_bridge ros_bridge
 
 2) 웹 live view ON + async YOLO production /detect 사용:
-TANK_ALLOWED_CLIENTS=127.0.0.1,::1,192.168.0.?? TANK_MODE=monitor TANK_LIVE_VIEW=true TANK_LIVE_VIEW_FPS=30 TANK_YOLO_ASYNC=true TANK_YOLO_ASYNC_MAX_RESULT_AGE_MS=700 TANK_YOLO_ASYNC_WAIT_FOR_FRESH_MS=0 TANK_REQUEST_LOG=false ros2 run ros_bridge ros_bridge
+TANK_ALLOWED_CLIENTS=127.0.0.1,::1,192.168.0.33 TANK_MODE=monitor TANK_LIVE_VIEW=true TANK_YOLO_ASYNC=true TANK_YOLO_ASYNC_MAX_RESULT_AGE_MS=300 ros2 run ros_bridge ros_bridge
 
 3) 웹 live view OFF:
-TANK_ALLOWED_CLIENTS=127.0.0.1,::1,192.168.0.?? TANK_MODE=monitor TANK_LIVE_VIEW=false TANK_YOLO_ASYNC=false ros2 run ros_bridge ros_bridge
+TANK_ALLOWED_CLIENTS=127.0.0.1,::1,192.168.0.82 TANK_MODE=monitor TANK_LIVE_VIEW=false TANK_YOLO_ASYNC=false ros2 run ros_bridge ros_bridge
 
 웹 확인:
 http://Ubuntu_IP:5000/view
@@ -86,10 +86,10 @@ ls -lh ~/tank_discovered_maps
 - Terminal 1: ros_bridge auto 모드 실행 (주의 : 192.168.0.??에는 Windows 시뮬레이터 PC의 실제 IP 입력)
 
 1) 기본 실행 + 웹 live view ON + 기존 동기식 YOLO:
-TANK_ALLOWED_CLIENTS=127.0.0.1,::1,192.168.0.?? TANK_MODE=auto TANK_LIVE_VIEW=true TANK_YOLO_ASYNC=false ros2 run ros_bridge ros_bridge
+TANK_ALLOWED_CLIENTS=127.0.0.1,::1,192.168.0.82 TANK_MODE=auto TANK_LIVE_VIEW=true TANK_YOLO_ASYNC=false ros2 run ros_bridge ros_bridge
 
 2) 웹 live view ON + async YOLO production /detect 사용:
-TANK_ALLOWED_CLIENTS=127.0.0.1,::1,192.168.0.?? TANK_MODE=auto TANK_LIVE_VIEW=true TANK_LIVE_VIEW_FPS=30 TANK_YOLO_ASYNC=true TANK_YOLO_ASYNC_MAX_RESULT_AGE_MS=700 TANK_YOLO_ASYNC_WAIT_FOR_FRESH_MS=0 TANK_REQUEST_LOG=false ros2 run ros_bridge ros_bridge
+TANK_ALLOWED_CLIENTS=127.0.0.1,::1,192.168.0.82 TANK_MODE=auto TANK_LIVE_VIEW=true TANK_YOLO_ASYNC=true TANK_YOLO_ASYNC_MAX_RESULT_AGE_MS=300 ros2 run ros_bridge ros_bridge
 
 웹 확인:
 http://Ubuntu_IP:5000/view
@@ -127,43 +127,15 @@ ls -lh ~/tank_discovered_maps
 ========================================================================================================================
 
 ========================================================================================================================
-3. 웹 live view / async YOLO 옵션 설명
+# discovered map 저장
+ros2 service call /tank/map/discovered/save std_srvs/srv/Trigger "{}"
 
-TANK_LIVE_VIEW=true
-- ros_bridge 안에서 /view, /video_feed를 제공
-- YOLO를 다시 실행하지 않고 /detect 최신 이미지와 detection 결과만 화면에 표시
-- 브라우저 주소: http://Ubuntu_IP:5000/view
+# discovered map 메모리 초기화
+ros2 service call /tank/map/discovered/clear std_srvs/srv/Trigger "{}"
 
-TANK_YOLO_ASYNC=false
-- 기존 방식
-- /detect 요청마다 YOLO 결과를 기다린 뒤 현재 detection 반환
-- 정확도/동기화 확인 단계에서는 이 방식 추천
+# terrain map 누적 데이터 초기화
+ros2 service call /tank/terrain/reset_map std_srvs/srv/Trigger "{}"
 
-TANK_YOLO_ASYNC=true
-- async worker 방식
-- /detect는 최신 image를 worker에 넘기고, 직전 완료 detection을 즉시 반환
-- YOLO 때문에 simulator loop가 느려질 때 사용
-- 단, 현재 LiDAR와 직전 YOLO bbox가 섞일 수 있으므로 TANK_YOLO_ASYNC_MAX_RESULT_AGE_MS를 너무 크게 두지 말 것
-
-TANK_YOLO_ASYNC_MAX_RESULT_AGE_MS=700
-- async detection 결과가 너무 오래되면 local_path_node에서 fusion 제외
-- 기본 추천값: 700
-
-TANK_YOLO_ASYNC_WAIT_FOR_FRESH_MS=0
-- async detection 결과가 stale이어도 /detect 응답을 기다리지 않고 최신 완료 결과를 즉시 사용
-
-TANK_PUBLISH_DETECT_IMAGE=false
-- /detect 원본 JPEG를 ROS compressed image topic으로 매번 중계하지 않아 HTTP/ROS 복사 부담 감소
-
-TANK_REQUEST_LOG=false
-- 고주기 /info, /get_action, /detect 요청 로그를 끄고 Windows 콘솔 출력 병목을 줄임
-
-디버그 확인:
-curl http://127.0.0.1:5000/debug/live_view
-curl http://127.0.0.1:5000/debug/yolo
-
-ROS topic 확인:
-ros2 topic echo /tank/perception/detections --once --full-length
-ros2 topic echo /tank/perception/fused_objects --once --full-length
-ros2 topic echo /tank/map/discovered/objects --once --full-length
+# terrain map 최종 생성/저장
+ros2 service call /tank/terrain/finalize_map std_srvs/srv/Trigger "{}"
 ========================================================================================================================

@@ -2,8 +2,8 @@
 # Static map / risk-map configuration for Tank Challenge RViz and planning preparation.
 #
 # Purpose
-# - recon_map.map is treated as drone reconnaissance information known before driving.
-# - mission_map.map is treated as the actual mission world / ground truth for comparison.
+# - finalmap.map is treated as drone reconnaissance information known before driving.
+# - finalmap.map is also treated as the actual mission world / ground truth for comparison.
 # - Live sensor fusion is intentionally not handled here.
 # - RL-derived weights can later replace the values below without changing code.
 

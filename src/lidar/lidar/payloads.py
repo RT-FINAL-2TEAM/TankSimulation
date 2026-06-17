@@ -9,10 +9,22 @@ lidar 패키지로 제한된다.
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from .config import BBOX_MIN_THICKNESS
+import numpy as np
+try:
+    from sklearn.cluster import DBSCAN as SklearnDBSCAN
+except Exception:  # pragma: no cover - optional acceleration dependency.
+    SklearnDBSCAN = None
+
+from .config import (
+    BBOX_MIN_THICKNESS,
+    TERRAIN_CLIMB_LIMIT,
+    TERRAIN_GRID_RESOLUTION,
+    TERRAIN_OBSTACLE_MIN_HEIGHT,
+)
 from .coordinate_utils import lidar_point_with_map_position, to_float
+from .terrain_utils import split_terrain_obstacle_points
 
 Point2D = Tuple[float, float]
 BBox2D = Dict[str, float]
@@ -39,6 +51,142 @@ def iter_detected_points(raw_points: Any) -> Iterable[Dict[str, Any]]:
     return (p for p in raw_points if isinstance(p, dict) and bool(p.get("isDetected", False)))
 
 
+def _converted_points(source_points: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    points: List[Dict[str, Any]] = []
+    for point in source_points:
+        converted = lidar_point_with_map_position(point)
+        if converted is not None:
+            points.append(converted)
+    return points
+
+
+def _base_payload(
+    points: Sequence[Dict[str, Any]],
+    *,
+    timestamp_wall: float,
+    map_frame: str,
+    source: str,
+    lidar_origin_map_for_correction: Optional[Dict[str, Any]] = None,
+    lidar_rotation_deg: Optional[Dict[str, Any]] = None,
+    player_body_deg: Optional[Dict[str, Any]] = None,
+    terrain_filter: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "route": "/info",
+        "timestamp_wall": timestamp_wall,
+        "source": source,
+        "frame_id": map_frame,
+        "coordinate_policy": "position_map: x=raw.x, y=raw.z, z=raw.y",
+        "count": len(points),
+        "points": list(points),
+    }
+    if lidar_origin_map_for_correction is not None:
+        payload["lidar_origin_map_for_correction"] = lidar_origin_map_for_correction
+    if lidar_rotation_deg is not None:
+        payload["lidar_rotation_deg"] = lidar_rotation_deg
+    if player_body_deg is not None:
+        payload["player_body_deg"] = player_body_deg
+    if terrain_filter is not None:
+        payload["terrain_filter"] = terrain_filter
+    return payload
+
+
+def build_classified_lidar_payloads(
+    lidar_points: Any,
+    *,
+    timestamp_wall: float,
+    map_frame: str,
+    ground_filter_enabled: bool = True,
+    lidar_origin_map_for_correction: Optional[Dict[str, Any]] = None,
+    lidar_rotation_deg: Optional[Dict[str, Any]] = None,
+    player_body_deg: Optional[Dict[str, Any]] = None,
+    grid_resolution: float = TERRAIN_GRID_RESOLUTION,
+    climb_limit: float = TERRAIN_CLIMB_LIMIT,
+    obstacle_min_height: float = TERRAIN_OBSTACLE_MIN_HEIGHT,
+) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """Build four map-frame payloads from raw simulator lidarPoints.
+
+    Returns:
+        detected_obstacle_payload, terrain_payload, all_detected_payload, terrain_info_payload
+    """
+    source_points = list(iter_detected_points(lidar_points))
+
+    if ground_filter_enabled and source_points:
+        obstacle_raw, terrain_raw, stats = split_terrain_obstacle_points(
+            source_points,
+            grid_resolution=grid_resolution,
+            climb_limit=climb_limit,
+            obstacle_min_height=obstacle_min_height,
+        )
+        filter_stats = stats.to_dict()
+        filter_method = "grid_local_ground_steep_cell"
+    else:
+        obstacle_raw = source_points
+        terrain_raw = []
+        filter_stats = {
+            "input_points": len(source_points),
+            "obstacle_points": len(source_points),
+            "terrain_points": 0,
+            "grid_resolution": grid_resolution,
+            "climb_limit": climb_limit,
+            "obstacle_min_height": obstacle_min_height,
+        }
+        filter_method = "disabled"
+
+    obstacle_points = _converted_points(obstacle_raw)
+    terrain_points = _converted_points(terrain_raw)
+    all_points = _converted_points(source_points)
+
+    common_meta = {
+        "enabled": bool(ground_filter_enabled),
+        "method": filter_method,
+        **filter_stats,
+    }
+    detected_payload = _base_payload(
+        obstacle_points,
+        timestamp_wall=timestamp_wall,
+        map_frame=map_frame,
+        source="lidarPoints/obstacle_only",
+        lidar_origin_map_for_correction=lidar_origin_map_for_correction,
+        lidar_rotation_deg=lidar_rotation_deg,
+        player_body_deg=player_body_deg,
+        terrain_filter=common_meta,
+    )
+    terrain_payload = _base_payload(
+        terrain_points,
+        timestamp_wall=timestamp_wall,
+        map_frame=map_frame,
+        source="lidarPoints/terrain_only",
+        lidar_origin_map_for_correction=lidar_origin_map_for_correction,
+        lidar_rotation_deg=lidar_rotation_deg,
+        player_body_deg=player_body_deg,
+        terrain_filter=common_meta,
+    )
+    all_payload = _base_payload(
+        all_points,
+        timestamp_wall=timestamp_wall,
+        map_frame=map_frame,
+        source="lidarPoints/all_detected",
+        lidar_origin_map_for_correction=lidar_origin_map_for_correction,
+        lidar_rotation_deg=lidar_rotation_deg,
+        player_body_deg=player_body_deg,
+        terrain_filter=common_meta,
+    )
+    terrain_info_payload = {
+        "route": "/info",
+        "timestamp_wall": timestamp_wall,
+        "frame_id": map_frame,
+        "source": "lidar_terrain_separation",
+        "terrain_filter": common_meta,
+        "counts": {
+            "all_detected": len(all_points),
+            "obstacle": len(obstacle_points),
+            "terrain": len(terrain_points),
+        },
+    }
+    return detected_payload, terrain_payload, all_payload, terrain_info_payload
+
+
 def build_detected_map_payload(
     lidar_points: Any,
     timestamp_wall: float,
@@ -46,30 +194,17 @@ def build_detected_map_payload(
     ground_filter_enabled: bool = False,
     origin_y: float = 8.0,
 ) -> Dict[str, Any]:
-    source_points = list(iter_detected_points(lidar_points))
-    if ground_filter_enabled and source_points:
-        try:
-            from .perception_utils import filter_ground_points
-            source_points = filter_ground_points(source_points, origin_y)
-        except Exception:
-            # Node code may log the exception if it needs detail; this utility stays side-effect free.
-            pass
+    """Backward-compatible helper used by older callers.
 
-    points = []
-    for point in source_points:
-        converted = lidar_point_with_map_position(point)
-        if converted is not None:
-            points.append(converted)
-
-    return {
-        "route": "/info",
-        "timestamp_wall": timestamp_wall,
-        "source": "lidarPoints",
-        "frame_id": map_frame,
-        "coordinate_policy": "position_map: x=raw.x, y=raw.z, z=raw.y",
-        "count": len(points),
-        "points": points,
-    }
+    It now returns the obstacle-only payload when ground_filter_enabled=True.
+    """
+    detected_payload, _, _, _ = build_classified_lidar_payloads(
+        lidar_points,
+        timestamp_wall=timestamp_wall,
+        map_frame=map_frame,
+        ground_filter_enabled=ground_filter_enabled,
+    )
+    return detected_payload
 
 
 def parse_lidar_points_payload(payload: Any) -> List[Point2D]:
@@ -110,28 +245,77 @@ def filter_lidar_points_by_distance(
 
 
 def cluster_lidar_points(points: Sequence[Point2D], eps: float = 2.0, min_samples: int = 3) -> List[List[Point2D]]:
+    if not points:
+        return []
+    coords = np.asarray([(p[0], p[1]) for p in points], dtype=np.float32)
+    if SklearnDBSCAN is not None:
+        labels = SklearnDBSCAN(eps=eps, min_samples=min_samples, algorithm="kd_tree").fit_predict(coords)
+    else:
+        labels = _fallback_dbscan_labels(coords, eps=eps, min_samples=min_samples)
+    
     clusters: List[List[Point2D]] = []
-    visited = set()
+    unique_labels = set(labels)
+    unique_labels.discard(-1)
+    
     pts = list(points)
-    for i, _ in enumerate(pts):
-        if i in visited:
-            continue
-        queue = [i]
-        visited.add(i)
-        cluster: List[Point2D] = []
-        while queue:
-            idx = queue.pop(0)
-            p = pts[idx]
-            cluster.append(p)
-            for j, q in enumerate(pts):
-                if j in visited:
-                    continue
-                if distance(p, q) <= eps:
-                    visited.add(j)
-                    queue.append(j)
-        if len(cluster) >= min_samples:
-            clusters.append(cluster)
+    for label in unique_labels:
+        cluster = [pts[idx] for idx, lbl in enumerate(labels) if lbl == label]
+        clusters.append(cluster)
     return clusters
+
+
+def _fallback_dbscan_labels(points_2d: np.ndarray, eps: float, min_samples: int) -> np.ndarray:
+    n = int(points_2d.shape[0])
+    if n == 0:
+        return np.empty((0,), dtype=np.int32)
+
+    eps2 = float(eps) * float(eps)
+    labels = np.full(n, -99, dtype=np.int32)
+    neighbors_cache: Dict[int, np.ndarray] = {}
+
+    def neighbors(i: int) -> np.ndarray:
+        cached = neighbors_cache.get(i)
+        if cached is not None:
+            return cached
+        diff = points_2d - points_2d[i]
+        dist2 = np.einsum("ij,ij->i", diff, diff)
+        out = np.flatnonzero(dist2 <= eps2)
+        neighbors_cache[i] = out
+        return out
+
+    cluster_id = 0
+    min_pts = max(int(min_samples), 1)
+    for i in range(n):
+        if labels[i] != -99:
+            continue
+        neigh = neighbors(i)
+        if len(neigh) < min_pts:
+            labels[i] = -1
+            continue
+
+        labels[i] = cluster_id
+        seeds = list(int(v) for v in neigh)
+        seed_seen = set(seeds)
+        k = 0
+        while k < len(seeds):
+            j = seeds[k]
+            if labels[j] == -1:
+                labels[j] = cluster_id
+            if labels[j] != -99:
+                k += 1
+                continue
+            labels[j] = cluster_id
+            neigh_j = neighbors(j)
+            if len(neigh_j) >= min_pts:
+                for candidate in neigh_j:
+                    candidate = int(candidate)
+                    if candidate not in seed_seen:
+                        seeds.append(candidate)
+                        seed_seen.add(candidate)
+            k += 1
+        cluster_id += 1
+    labels[labels == -99] = -1
+    return labels
 
 
 def lidar_clusters_to_bboxes(clusters: Sequence[Sequence[Point2D]], min_thickness: float = BBOX_MIN_THICKNESS) -> List[BBox2D]:
@@ -162,12 +346,19 @@ def update_lidar_history(
     resolution: float,
     max_points: int,
 ) -> Tuple[List[Point2D], set]:
+    if not points:
+        return history, history_set
     q = max(resolution, 0.1)
-    for x, y in points:
-        rounded = (round(x / q) * q, round(y / q) * q)
+    pts_arr = np.asarray(points, dtype=np.float64)
+    rounded_arr = np.round(pts_arr / q) * q
+    unique_arr = np.unique(rounded_arr, axis=0)
+    
+    for row in unique_arr:
+        rounded = (float(row[0]), float(row[1]))
         if rounded not in history_set:
             history_set.add(rounded)
             history.append(rounded)
+            
     if len(history) > max_points:
         drop = len(history) - max_points
         for p in history[:drop]:

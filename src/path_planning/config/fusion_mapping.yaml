@@ -58,7 +58,7 @@ static_matching:
 async_detection:
   # TANK_YOLO_ASYNC=true일 때 직전 프레임 detection이 너무 오래되면 fusion에서 제외한다.
   drop_stale: true
-  max_result_age_ms: 700
+  max_result_age_ms: 300
 
 mapping:
   enabled: true

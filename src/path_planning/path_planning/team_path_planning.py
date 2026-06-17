@@ -364,7 +364,9 @@ def plan_path_through_waypoints(
 
     full_path: list[tuple[float, float]] = []
     prev = start_pos
-    for wp in waypoints:
+    # 현재 위치보다 z축(북쪽)으로 뒤쳐진 웨이포인트는 이미 지나온 것으로 간주하고 버림 (후진/루프 방지)
+    valid_waypoints = [wp for wp in waypoints if wp[1] >= start_pos[1] - 10.0]
+    for wp in valid_waypoints:
         start_grid = (int(prev[0] / res), int(prev[1] / res))
         goal_grid = _snap_goal(grid, int(wp[0] / res), int(wp[1] / res), side)
         grid_path = astar_search(grid, start_grid, goal_grid, cost_map=cost_map)

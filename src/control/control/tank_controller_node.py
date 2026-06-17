@@ -20,6 +20,7 @@ import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Path as NavPath
 from rclpy.node import Node
 from std_msgs.msg import String
 
@@ -89,10 +90,13 @@ class TeamPathControllerNode(Node):
             pass
 
         self.declare_parameter("tank_param_file", default_param_file)
-        self.declare_parameter("controller_hz", CONTROLLER_HZ)
+        self.declare_parameter("controller_hz", 10.0)
+        self.declare_parameter("max_speed", 25.0)
+        self.declare_parameter("max_yaw_rate", 2.0)
+        self.declare_parameter("goal_tolerance", 10.0)
         self.declare_parameter("enable_local_target", ENABLE_LOCAL_TARGET)
         self.declare_parameter("target_ttl_sec", TARGET_TTL_SEC)
-        self.declare_parameter("goal_tolerance", GOAL_TOLERANCE)
+        self.declare_parameter("mission_type", "mission")  # 'recon', 'mission', 'return'
         self.declare_parameter("heading_deadband_deg", HEADING_DEADBAND_DEG)
         self.declare_parameter("steering_full_error_deg", STEERING_FULL_ERROR_DEG)
         self.declare_parameter("min_ad_weight", MIN_AD_WEIGHT)
@@ -118,10 +122,11 @@ class TeamPathControllerNode(Node):
         self.straight_ws_weight = float(self.get_parameter("straight_ws_weight").value)
         self.turn_ws_weight = float(self.get_parameter("turn_ws_weight").value)
         self.rotate_in_place_angle_deg = float(self.get_parameter("rotate_in_place_angle_deg").value)
-        self.slowdown_angle_deg = float(self.get_parameter("slowdown_angle_deg").value)
-        self.stop_distance = float(self.get_parameter("stop_distance").value)
-        self.enable_stuck_escape = bool(self.get_parameter("enable_stuck_escape").value)
-        self.stuck_check_period = float(self.get_parameter("stuck_check_period").value)
+        self.max_yaw_rate = float(self.get_parameter("max_yaw_rate").value)
+        self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
+        self.enable_local_target = bool(self.get_parameter("enable_local_target").value)
+        self.target_ttl_sec = float(self.get_parameter("target_ttl_sec").value)
+        self.mission_type = str(self.get_parameter("mission_type").value).lower()
         self.stuck_min_movement = float(self.get_parameter("stuck_min_movement").value)
         self.escape_reverse_sec = float(self.get_parameter("escape_reverse_sec").value)
         self.escape_turn_sec = float(self.get_parameter("escape_turn_sec").value)
@@ -143,9 +148,15 @@ class TeamPathControllerNode(Node):
         self.mission_complete = False
 
         self.last_stuck_check_time = 0.0
-        self.last_stuck_check_pos: Tuple[float, float] = (0.0, 0.0)
+        self.last_stuck_check_pos: Optional[Tuple[float, float]] = None
+        self.last_stuck_check_yaw: float = 0.0
         self.is_escaping = False
         self.escape_start_time = 0.0
+        self._pivot_turn_count = 0
+        self._last_pose_wall_time = 0.0
+
+        self.global_path: list[tuple[float, float]] = []
+        self.trajectory_history: list[tuple[float, float]] = []
 
         self.pub_cmd = self.create_publisher(String, TOPIC_CONTROL_COMMAND, 10)
         self.pub_status = self.create_publisher(String, TOPIC_CONTROL_STATUS, 10)
@@ -154,6 +165,7 @@ class TeamPathControllerNode(Node):
         self.create_subscription(PoseStamped, TOPIC_GOAL_POSE, self.goal_pose_cb, 10)
         self.create_subscription(PoseStamped, TOPIC_LOOKAHEAD_POSE, self.lookahead_cb, 10)
         self.create_subscription(PoseStamped, TOPIC_LOCAL_TARGET_POSE, self.local_target_cb, 10)
+        self.create_subscription(NavPath, "/tank/global_path", self.global_path_cb, 10)
         self.create_subscription(String, TOPIC_COLLISION_EVENT, self.collision_cb, 10)
         hz = float(self.get_parameter("controller_hz").value)
         self.create_timer(1.0 / max(1.0, hz), self.timer_cb)
@@ -182,7 +194,28 @@ class TeamPathControllerNode(Node):
         return max(vals) if vals else default
 
     def player_pose_cb(self, msg: PoseStamped) -> None:
-        self.current_pos = (float(msg.pose.position.x), float(msg.pose.position.y))
+        import time
+        new_pos = (float(msg.pose.position.x), float(msg.pose.position.y))
+        if getattr(self, 'current_pos', None) is not None:
+            if get_distance(self.current_pos, new_pos) > 10.0:
+                self.get_logger().info("Teleport/Restart detected. Resetting mission complete flag.")
+                self.mission_complete = False
+                self._stop_published_count = 0
+                self.is_escaping = False
+                self.global_path = []
+        self.current_pos = new_pos
+        self._last_pose_wall_time = time.time()
+        if self.last_stuck_check_pos is None:
+            self.last_stuck_check_pos = self.current_pos
+        self.trajectory_history.append(self.current_pos)
+        if len(self.trajectory_history) > 5000:
+            self.trajectory_history.pop(0)
+
+    def global_path_cb(self, msg: NavPath) -> None:
+        path = []
+        for pose in msg.poses:
+            path.append((float(pose.pose.position.x), float(pose.pose.position.y)))
+        self.global_path = path
 
     def player_state_cb(self, msg: String) -> None:
         try:
@@ -248,38 +281,75 @@ class TeamPathControllerNode(Node):
         abs_err = abs(yaw_error)
         if self.goal_pos is not None and get_distance(self.current_pos, self.goal_pos) < self.goal_tolerance:
             self.mission_complete = True
+            
+            # 시나리오(mission_type)에 따른 도착 후 행동 분기
+            if self.mission_type == "mission":
+                self.fire_cmd = True  # 목표 도달 시 사격 (파괴 임무)
+            else:
+                self.fire_cmd = False # 정찰(recon)이나 복귀(return) 시 사격 금지
+
+            if not hasattr(self, '_stop_published_count'):
+                self._stop_published_count = 0
+            self._stop_published_count += 1
+            if self._stop_published_count > 10:
+                self.get_logger().info(f"Mission Complete [{self.mission_type}]: Destination Reached. Terminating Control Node.")
+                import sys
+                sys.exit(0)
             return "STOP", 1.0, "goal_reached"
         if get_distance(self.current_pos, target) < 1.0 and self.goal_pos and get_distance(target, self.goal_pos) < self.stop_distance:
             return "STOP", 1.0, "target_stop"
         if abs_err > self.rotate_in_place_angle_deg:
             return "STOP", 1.0, "rotate_before_drive"
+        
+        speed_factor = self.max_speed / 19.45 if self.max_speed > 0.0 else 1.0
         if abs_err > self.slowdown_angle_deg:
-            return "W", clamp(self.turn_ws_weight, 0.1, 1.0), "slow_turn"
-        return "W", clamp(self.straight_ws_weight, 0.1, 1.0), "cruise"
+            w_ws = clamp(self.turn_ws_weight * speed_factor, 0.1, 1.0)
+            return "W", w_ws, "slow_turn"
+            
+        error_scale = 1.0 - (abs_err / self.slowdown_angle_deg) * 0.3
+        w_ws = clamp(self.straight_ws_weight * speed_factor * error_scale, 0.1, 1.0)
+        return "W", w_ws, "cruise"
 
-    def escape_command_if_needed(self) -> Optional[Tuple[Dict[str, Any], str]]:
+    def escape_command_if_needed(self, target: Optional[Tuple[float, float]] = None) -> Optional[Tuple[Dict[str, Any], str]]:
+        import time
         if not self.enable_stuck_escape or self.current_pos is None:
             return None
-        t = self.current_sim_time
+        t = self.current_sim_time if self.current_sim_time > 0.0 else time.time()
         if self.is_escaping:
             elapsed = t - self.escape_start_time
             if elapsed < self.escape_reverse_sec:
                 return self.make_action("S", 1.0, "", 0.0), "escape_reverse"
             if elapsed < self.escape_reverse_sec + self.escape_turn_sec:
-                return self.make_action("W", 0.0, "D", 1.0), "escape_pivot"
+                pivot_dir = "D"
+                if target is not None and self.current_pos is not None:
+                    dx = target[0] - self.current_pos[0]
+                    dy = target[1] - self.current_pos[1]
+                    desired_yaw = math.degrees(math.atan2(dx, dy))
+                    yaw_error = normalize_angle(desired_yaw - self.current_yaw)
+                    pivot_dir = "D" if yaw_error > 0 else "A"
+                return self.make_action("W", 0.4, pivot_dir, 1.0), "escape_pivot"
             self.is_escaping = False
             self.last_stuck_check_time = t
             self.last_stuck_check_pos = self.current_pos
             return None
-        if t > 5.0 and (t - self.last_stuck_check_time) > self.stuck_check_period:
+            
+        if self.last_stuck_check_pos is None:
+            self.last_stuck_check_pos = self.current_pos
+            self.last_stuck_check_yaw = self.current_yaw
+            self.last_stuck_check_time = t
+            return None
+
+        if (t - self.last_stuck_check_time) > self.stuck_check_period:
             moved = get_distance(self.current_pos, self.last_stuck_check_pos)
-            if moved < self.stuck_min_movement:
+            yaw_moved = abs(normalize_angle(self.current_yaw - self.last_stuck_check_yaw))
+            if moved < self.stuck_min_movement and yaw_moved < 15.0:
                 self.is_escaping = True
                 self.escape_start_time = t
-                self.get_logger().warn(f"stuck detected: moved={moved:.2f}m, starting escape")
+                self.get_logger().warn(f"stuck detected: moved={moved:.2f}m, yaw_moved={yaw_moved:.2f}deg, starting escape")
                 return self.make_action("S", 1.0, "", 0.0), "escape_start_reverse"
             self.last_stuck_check_time = t
             self.last_stuck_check_pos = self.current_pos
+            self.last_stuck_check_yaw = self.current_yaw
         return None
 
     def make_action(self, cmd_ws: str, w_ws: float, cmd_ad: str, w_ad: float) -> Dict[str, Any]:
@@ -302,6 +372,12 @@ class TeamPathControllerNode(Node):
         self.pub_status.publish(msg)
 
     def timer_cb(self) -> None:
+        import time
+        if self._last_pose_wall_time > 0.0 and time.time() - self._last_pose_wall_time > 2.0:
+            self.publish_command(empty_action())
+            self.publish_status({"ok": False, "reason": "player_pose_stale_fallback"})
+            return
+
         if self.current_pos is None:
             self.publish_command(empty_action())
             self.publish_status({"ok": False, "reason": "no_player_pose"})
@@ -312,7 +388,7 @@ class TeamPathControllerNode(Node):
             self.publish_status({"ok": False, "reason": source, "current": {"x": self.current_pos[0], "y": self.current_pos[1]}})
             return
 
-        escape = self.escape_command_if_needed()
+        escape = self.escape_command_if_needed(target)
         if escape is not None:
             action, mode = escape
             self.publish_command(action)
@@ -323,6 +399,16 @@ class TeamPathControllerNode(Node):
         cmd_ws, w_ws, speed_mode = self.calculate_speed(target, yaw_error)
         action = self.make_action(cmd_ws, w_ws, cmd_ad, w_ad)
         self.publish_command(action)
+
+        mean_cte = 0.0
+        max_cte = 0.0
+        if self.global_path and self.trajectory_history:
+            from .trajectory_metrics import calculate_cross_track_error
+            try:
+                mean_cte, max_cte = calculate_cross_track_error(self.trajectory_history, self.global_path)
+            except Exception as exc:
+                self.get_logger().error(f"Failed to calculate CTE: {exc}")
+
         self.publish_status({
             "ok": True,
             "target_source": source,
@@ -337,6 +423,8 @@ class TeamPathControllerNode(Node):
             "speed_mode": speed_mode,
             "mission_complete": self.mission_complete,
             "collision_count": self.collision_count,
+            "mean_cte": mean_cte,
+            "max_cte": max_cte,
             "command": action,
         })
 

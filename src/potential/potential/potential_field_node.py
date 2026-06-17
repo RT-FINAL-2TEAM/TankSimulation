@@ -34,10 +34,13 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Point, PoseStamped, Vector3Stamped
 from rclpy.node import Node
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -53,6 +56,7 @@ except Exception:  # pragma: no cover
 # Global defaults are centralized in potential.config. ROS2 parameters below keep
 # launch-time override compatibility.
 from lidar.payloads import parse_lidar_points_payload
+from path_planning.config import PREFAB_HALF_SIZES
 from potential.config import (
     ANGLE_EPSILON_DEG,
     ANGULAR_GAIN_K_THETA,
@@ -117,6 +121,36 @@ class ForceBreakdown:
 
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
+    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+
+    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
+    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
+    node usable on older sensor_msgs_py versions.
+    """
+    try:
+        arr = point_cloud2.read_points_numpy(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+    except Exception:
+        pts = point_cloud2.read_points(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+        if isinstance(pts, np.ndarray):
+            arr = pts
+        else:
+            arr = np.asarray(list(pts), dtype=np.float32)
+    if arr is None:
+        return np.empty((0, 3), dtype=np.float32)
+    arr = np.asarray(arr)
+    if arr.dtype.fields:
+        arr = np.column_stack((arr["x"], arr["y"], arr["z"]))
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.size == 0:
+        return np.empty((0, 3), dtype=np.float32)
+    return np.ascontiguousarray(arr.reshape(-1, 3), dtype=np.float32)
 
 
 def get_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
@@ -285,6 +319,72 @@ def calc_repulsive_force(
     return rep, tan, total_potential
 
 
+def segment_intersect_bbox(px: float, pz: float, qx: float, qz: float, bbox: Dict[str, float]) -> bool:
+    xmin, xmax = bbox.get("x_min", 0.0), bbox.get("x_max", 0.0)
+    zmin, zmax = bbox.get("z_min", 0.0), bbox.get("z_max", 0.0)
+    if min(px, qx) > xmax or max(px, qx) < xmin: return False
+    if min(pz, qz) > zmax or max(pz, qz) < zmin: return False
+    
+    t0 = 0.0
+    t1 = 1.0
+    dx = qx - px
+    dz = qz - pz
+    
+    if abs(dx) > 1e-6:
+        tx1 = (xmin - px) / dx
+        tx2 = (xmax - px) / dx
+        t0 = max(t0, min(tx1, tx2))
+        t1 = min(t1, max(tx1, tx2))
+    elif px < xmin or px > xmax:
+        return False
+
+    if abs(dz) > 1e-6:
+        tz1 = (zmin - pz) / dz
+        tz2 = (zmax - pz) / dz
+        t0 = max(t0, min(tz1, tz2))
+        t1 = min(t1, max(tz1, tz2))
+    elif pz < zmin or pz > zmax:
+        return False
+
+    return t0 <= t1
+
+def check_los(tank_x: float, tank_z: float, threat_x: float, threat_z: float, gt_obstacles: List[Dict[str, float]]) -> bool:
+    for obs in gt_obstacles:
+        xmin, xmax = obs.get("x_min", 0.0), obs.get("x_max", 0.0)
+        zmin, zmax = obs.get("z_min", 0.0), obs.get("z_max", 0.0)
+        if xmin <= threat_x <= xmax and zmin <= threat_z <= zmax:
+            continue
+        if segment_intersect_bbox(tank_x, tank_z, threat_x, threat_z, obs):
+            return False
+    return True
+
+def is_threat_active(pos: Tuple[float, float], threat: Dict[str, Any], gt_obstacles: List[Dict[str, float]]) -> bool:
+    tx, tz = pos
+    dx = tx - float(threat.get("x", 0.0))
+    dz = tz - float(threat.get("z", 0.0))
+    dist = math.hypot(dx, dz)
+    
+    t_type = str(threat.get("type", "unknown"))
+    prefab_name = str(threat.get("prefabName", ""))
+    
+    if t_type == "House002" or prefab_name.startswith("House002"):
+        if dist > 25.0:
+            return False
+        target_yaw = math.degrees(math.atan2(dx, dz))
+        yaw_diff = abs(normalize_angle_deg(target_yaw - float(threat.get("yaw", 0.0))))
+        if yaw_diff > 30.0:
+            return False
+        if check_los(tx, tz, float(threat["x"]), float(threat["z"]), gt_obstacles):
+            return True
+        return False
+    elif t_type == "Tank001" or prefab_name.startswith("Tank001"):
+        if dist > 20.0:
+            return False
+        if check_los(tx, tz, float(threat["x"]), float(threat["z"]), gt_obstacles):
+            return True
+        return False
+    return dist <= 25.0
+
 def calc_resultant_force(
     pos: Tuple[float, float],
     target: Tuple[float, float],
@@ -301,6 +401,7 @@ def calc_resultant_force(
     use_threats: bool,
     threat_radius: float,
     k_threat: float,
+    gt_obstacles: List[Dict[str, float]],
 ) -> ForceBreakdown:
     att, u_att = calc_attractive_force(pos, target, k_att, max_att)
     rep, tan, u_rep = calc_repulsive_force(
@@ -312,11 +413,12 @@ def calc_resultant_force(
     if use_threats:
         tx, ty = 0.0, 0.0
         for threat in threats:
-            threat_pos = (float(threat.get("x", 0.0)), float(threat.get("z", 0.0)))
-            f, pot = _repulsive_from_point(pos, threat_pos, k_threat, threat_radius)
-            tx += f[0]
-            ty += f[1]
-            u_threat += pot
+            if is_threat_active(pos, threat, gt_obstacles):
+                threat_pos = (float(threat.get("x", 0.0)), float(threat.get("z", 0.0)))
+                f, pot = _repulsive_from_point(pos, threat_pos, k_threat, threat_radius)
+                tx += f[0]
+                ty += f[1]
+                u_threat += pot
         threat_force = limit_norm((tx, ty), max_rep)
 
     result = (
@@ -507,6 +609,46 @@ def parse_threats_from_map(map_path: str) -> List[Dict[str, Any]]:
         )
     return threats
 
+def prefab_half_size(name: str) -> Tuple[float, float]:
+    lname = str(name).lower()
+    for key, value in PREFAB_HALF_SIZES.items():
+        if key.lower() in lname:
+            return value
+    return 1.0, 1.0
+
+def obstacle_to_bbox(obs: Dict[str, Any]) -> Optional[Dict[str, float]]:
+    if all(k in obs for k in ("x_min", "x_max", "z_min", "z_max")):
+        try:
+            return {"x_min": float(obs["x_min"]), "x_max": float(obs["x_max"]), "z_min": float(obs["z_min"]), "z_max": float(obs["z_max"])}
+        except Exception:
+            return None
+    pos = obs.get("position") if isinstance(obs.get("position"), dict) else None
+    if pos is None:
+        return None
+    try:
+        x = float(pos.get("x", 0.0))
+        z = float(pos.get("z", 0.0))
+    except Exception:
+        return None
+    hw, hl = prefab_half_size(str(obs.get("prefabName", "")))
+    return {"x_min": x - hw, "x_max": x + hw, "z_min": z - hl, "z_max": z + hl}
+
+def parse_obstacles_payload(payload: Any) -> List[Dict[str, float]]:
+    bboxes: List[Dict[str, float]] = []
+    obstacles = []
+    if isinstance(payload, list):
+        obstacles = payload
+    elif isinstance(payload, dict):
+        obstacles = payload.get("obstacles", payload.get("data", {}).get("obstacles", []))
+    if not isinstance(obstacles, list):
+        obstacles = []
+    for item in obstacles:
+        if isinstance(item, dict):
+            bbox = obstacle_to_bbox(item)
+            if bbox is not None:
+                bboxes.append(bbox)
+    return bboxes
+
 
 def filter_obstacles_for_apf(
     obstacles: List[Tuple[float, float]],
@@ -590,13 +732,14 @@ class TeamPotentialFieldNode(Node):
 
         default_map = ""
         try:
-            default_map = os.path.join(get_package_share_directory("rviz_visualization"), "map", "recon_map.map")
+            default_map = os.path.join(get_package_share_directory("rviz_visualization"), "map", "finalmap.map")
         except Exception:
             pass
 
         # ROS2 parameter mirror of global variables.
         self.declare_parameter("target_pose_topic", TARGET_POSE_TOPIC)
         self.declare_parameter("fallback_goal_topic", FALLBACK_GOAL_TOPIC)
+        self.declare_parameter("lidar_points_topic", "/tank/sensor/lidar/detected_points_map")
         self.declare_parameter("hz", APF_HZ)
         self.declare_parameter("k_att", K_ATTRACTIVE)
         self.declare_parameter("k_rep", K_REPULSIVE)
@@ -636,6 +779,7 @@ class TeamPotentialFieldNode(Node):
 
         self.target_pose_topic = str(self.get_parameter("target_pose_topic").value)
         self.fallback_goal_topic = str(self.get_parameter("fallback_goal_topic").value)
+        self.lidar_points_topic = str(self.get_parameter("lidar_points_topic").value)
         self.hz = float(self.get_parameter("hz").value)
         self.k_att = float(self.get_parameter("k_att").value)
         self.k_rep = float(self.get_parameter("k_rep").value)
@@ -684,6 +828,7 @@ class TeamPotentialFieldNode(Node):
         self.discovered_obstacles: List[Tuple[float, float]] = []
         self.cluster_obstacles: List[Tuple[float, float]] = []
         self.obstacles: List[Tuple[float, float]] = []
+        self.gt_obstacles: List[Dict[str, float]] = []
 
         self.pub_rep = self.create_publisher(Vector3Stamped, "/tank/potential/repulsive_vector", 10)
         self.pub_att = self.create_publisher(Vector3Stamped, "/tank/potential/attractive_vector", 10)
@@ -699,7 +844,8 @@ class TeamPotentialFieldNode(Node):
         self.create_subscription(PoseStamped, self.target_pose_topic, self.target_cb, 10)
         if self.fallback_goal_topic != self.target_pose_topic:
             self.create_subscription(PoseStamped, self.fallback_goal_topic, self.fallback_goal_cb, 10)
-        self.create_subscription(String, LIDAR_POINTS_TOPIC, self.lidar_cb, 10)
+        self.create_subscription(PointCloud2, self.lidar_points_topic, self.lidar_cb, 10)
+        self.create_subscription(String, "/tank/map/obstacles", self.gt_obstacles_cb, 10)
         if self.use_lidar_clusters:
             self.create_subscription(String, self.lidar_clusters_topic, self.lidar_clusters_cb, 10)
         if self.use_discovered_objects:
@@ -711,7 +857,8 @@ class TeamPotentialFieldNode(Node):
             f"target_topic={self.target_pose_topic}, kA={self.k_att}, kR={self.k_rep}, "
             f"g*={self.influence_radius}, tangent={self.use_tangential_force}, "
             f"threats={len(self.threats)}, discovered={self.use_discovered_objects}, "
-            f"strategy={self.motion_strategy}, clusters={self.use_lidar_clusters}, profile={self.apf_weight_profile_name}"
+            f"strategy={self.motion_strategy}, lidar_pc2={self.lidar_points_topic}, "
+            f"clusters={self.use_lidar_clusters}, profile={self.apf_weight_profile_name}"
         )
 
     # -------------------------------------------------------------------------
@@ -728,11 +875,16 @@ class TeamPotentialFieldNode(Node):
     def fallback_goal_cb(self, msg: PoseStamped) -> None:
         self.fallback_goal = (float(msg.pose.position.x), float(msg.pose.position.y))
 
-    def lidar_cb(self, msg: String) -> None:
+    def lidar_cb(self, msg: PointCloud2) -> None:
         try:
-            self.raw_obstacles = parse_lidar_points_payload(json.loads(msg.data))
+            points = pointcloud2_to_xyz_array(msg)
+            if points.size == 0:
+                self.raw_obstacles = []
+                return
+            # APF uses only map-plane x/y.  Filtering/voxel limiting is done in timer_cb.
+            self.raw_obstacles = [(float(x), float(y)) for x, y in points[:, :2]]
         except Exception as exc:
-            self.get_logger().warn(f"failed to parse lidar APF points: {exc}")
+            self.get_logger().warn(f"failed to parse lidar APF PointCloud2: {exc}")
 
     def lidar_clusters_cb(self, msg: String) -> None:
         try:
@@ -745,6 +897,13 @@ class TeamPotentialFieldNode(Node):
             self.discovered_obstacles = parse_discovered_objects_payload(json.loads(msg.data))
         except Exception as exc:
             self.get_logger().warn(f"failed to parse discovered APF objects: {exc}")
+
+    def gt_obstacles_cb(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+            self.gt_obstacles = parse_obstacles_payload(payload)
+        except Exception as exc:
+            self.get_logger().warn(f"failed to parse gt obstacles for APF: {exc}")
 
     # -------------------------------------------------------------------------
     # Publishing helpers
@@ -859,6 +1018,7 @@ class TeamPotentialFieldNode(Node):
             use_threats=self.use_threat_avoidance,
             threat_radius=self.threat_radius,
             k_threat=self.k_threat_rep,
+            gt_obstacles=self.gt_obstacles,
         )
 
         clear = (

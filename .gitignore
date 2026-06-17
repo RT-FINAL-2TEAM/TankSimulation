@@ -24,3 +24,11 @@ trash/
 # OS specific
 .DS_Store
 Thumbs.db
+
+.agents/
+
+# Ignore logs and reports but keep folders
+tank_logs/*
+!tank_logs/.gitkeep
+reports/*
+!reports/.gitkeep

@@ -75,6 +75,8 @@ import math
 # JSON 문자열로 들어오므로 json 파싱이 필요하다.
 import json
 
+import numpy as np
+
 # 타입 힌트용 import.
 #
 # Any:
@@ -89,7 +91,7 @@ import json
 # Optional:
 #   아직 값이 들어오지 않았을 수 있는 변수에 사용.
 #   예: Optional[PoseStamped] = None
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 ############################################################
@@ -104,8 +106,10 @@ import rclpy
 # PoseStamped:
 #   위치 + 자세 + frame_id + timestamp를 함께 담는 메시지.
 #   ros_bridge에서 아군/적/목표 위치를 이 타입으로 publish한다.
-from geometry_msgs.msg import PoseStamped, Vector3Stamped
+from geometry_msgs.msg import PointStamped, PoseStamped, Vector3Stamped
 from nav_msgs.msg import Path as NavPath
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
 
 # Node:
 #   rclpy 기반 ROS2 node의 기본 클래스.
@@ -252,6 +256,37 @@ from .marker_utils import (
 )
 
 
+
+
+def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
+    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+
+    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
+    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
+    node usable on older sensor_msgs_py versions.
+    """
+    try:
+        arr = point_cloud2.read_points_numpy(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+    except Exception:
+        pts = point_cloud2.read_points(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+        if isinstance(pts, np.ndarray):
+            arr = pts
+        else:
+            arr = np.asarray(list(pts), dtype=np.float32)
+    if arr is None:
+        return np.empty((0, 3), dtype=np.float32)
+    arr = np.asarray(arr)
+    if arr.dtype.fields:
+        arr = np.column_stack((arr["x"], arr["y"], arr["z"]))
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.size == 0:
+        return np.empty((0, 3), dtype=np.float32)
+    return np.ascontiguousarray(arr.reshape(-1, 3), dtype=np.float32)
+
 ############################################################
 # 5. RViz Visualizer Node 정의
 ############################################################
@@ -300,6 +335,12 @@ class RvizVisualizerNode(Node):
         # ros2 node list에서 보이는 이름:
         #   /tank_rviz_visualizer_node
         super().__init__("tank_rviz_visualizer_node")
+        self.declare_parameter("lidar_pc2_topic", "/tank/sensor/lidar/detected_points_map")
+        self.declare_parameter("lidar_ray_pc2_topic", "/tank/sensor/lidar/all_detected_points_map")
+        self.declare_parameter("lidar_origin_topic", "/tank/sensor/lidar/origin")
+        self.lidar_pc2_topic = str(self.get_parameter("lidar_pc2_topic").value)
+        self.lidar_ray_pc2_topic = str(self.get_parameter("lidar_ray_pc2_topic").value)
+        self.lidar_origin_topic = str(self.get_parameter("lidar_origin_topic").value)
 
 
         ########################################################
@@ -326,9 +367,16 @@ class RvizVisualizerNode(Node):
 
         # LiDAR point 목록.
         #
-        # /tank/sensor/lidar/points에서 JSON 문자열을 받아 list[dict]로 저장한다.
-        # 각 point는 x,y,z 또는 map_x,map_y,map_z 등의 key를 가질 수 있다.
-        self.lidar_points: List[Dict[str, Any]] = []
+        # /tank/sensor/lidar/detected_points_map PointCloud2에서 받은 map-frame XYZ tuple 목록.
+        self.lidar_points: List[Tuple[float, float, float]] = []
+
+        # LiDAR ray 표시용 endpoint 목록.
+        # detected_points_map은 지형 분리 후 obstacle-only일 수 있으므로,
+        # 실시간 스캔 ray는 all_detected_points_map을 별도로 사용한다.
+        self.lidar_ray_points: List[Tuple[float, float, float]] = []
+
+        # LiDAR ray 시작점. lidar_processor_node가 publish하는 map-frame PointStamped.
+        self.lidar_origin: Optional[PointStamped] = None
 
         # 아군/적 전차 상태 dict.
         #
@@ -403,16 +451,29 @@ class RvizVisualizerNode(Node):
         )
 
         # LiDAR point 정보 subscribe.
-        #
-        # 입력 타입:
-        #   std_msgs/msg/String
-        #
-        # 실제 내용:
-        #   JSON 문자열
+        # 입력 타입: sensor_msgs/msg/PointCloud2
+        # lidar_processor_node가 map 좌표계로 변환한 obstacle hit point만 받는다.
         self.create_subscription(
-            String,
-            TOPIC_LIDAR_POINTS,
+            PointCloud2,
+            self.lidar_pc2_topic,
             self.lidar_points_callback,
+            10,
+        )
+
+        # LiDAR ray 표시용 endpoint.
+        # detected_points_map은 obstacle-only일 수 있으므로 ray는 all_detected_points_map을 사용한다.
+        self.create_subscription(
+            PointCloud2,
+            self.lidar_ray_pc2_topic,
+            self.lidar_ray_points_callback,
+            10,
+        )
+
+        # LiDAR ray 시작점.
+        self.create_subscription(
+            PointStamped,
+            self.lidar_origin_topic,
+            self.lidar_origin_callback,
             10,
         )
 
@@ -691,47 +752,41 @@ class RvizVisualizerNode(Node):
             # JSON 파싱 실패 시 node를 죽이지 않고 빈 목록으로 처리
             self.obstacles = []
 
-    def lidar_points_callback(self, msg: String) -> None:
-        """
-        /tank/sensor/lidar/points callback.
-
-        역할:
-            JSON 문자열 형태의 LiDAR point 배열을 list[dict]로 변환해서 저장한다.
-
-        기대 입력 형식 1:
-            [
-                {"x": 10.0, "y": 20.0, "z": 0.3},
-                {"x": 10.5, "y": 20.2, "z": 0.4}
-            ]
-
-        기대 입력 형식 2:
-            {
-                "points": [
-                    {"x": 10.0, "y": 20.0, "z": 0.3}
-                ]
-            }
-
-        좌표 기준:
-            가능하면 ros_bridge에서 이미 tank_map 기준으로 변환해서 publish하는 것이 좋다.
-
-        주의:
-            원본 LiDAR point가 Unity raw 좌표라면,
-            추후 ros_bridge 또는 perception node에서 좌표 변환 기준을 통일해야 한다.
-        """
+    def lidar_points_callback(self, msg: PointCloud2) -> None:
+        """Store obstacle-only LiDAR PointCloud2 as lightweight map-frame XYZ tuples."""
         try:
-            data = json.loads(msg.data)
-
-            if isinstance(data, list):
-                self.lidar_points = data
-
-            elif isinstance(data, dict):
-                self.lidar_points = data.get("points", [])
-
-            else:
-                self.lidar_points = []
-
-        except Exception:
+            points = pointcloud2_to_xyz_array(msg)
+            if LIDAR_VISUALIZATION_SAMPLE_STEP > 1 and points.shape[0] > 0:
+                points = points[:: max(1, int(LIDAR_VISUALIZATION_SAMPLE_STEP))]
+            self.lidar_points = [(float(x), float(y), float(z)) for x, y, z in points]
+        except Exception as exc:
+            self.get_logger().debug(f"failed to parse lidar PointCloud2 for RViz: {exc}")
             self.lidar_points = []
+
+    def lidar_ray_points_callback(self, msg: PointCloud2) -> None:
+        """Store all detected LiDAR endpoints for live ray visualization."""
+        try:
+            points = pointcloud2_to_xyz_array(msg)
+            if LIDAR_VISUALIZATION_SAMPLE_STEP > 1 and points.shape[0] > 0:
+                points = points[:: max(1, int(LIDAR_VISUALIZATION_SAMPLE_STEP))]
+            self.lidar_ray_points = [(float(x), float(y), float(z)) for x, y, z in points]
+        except Exception as exc:
+            self.get_logger().debug(f"failed to parse lidar ray PointCloud2 for RViz: {exc}")
+            self.lidar_ray_points = []
+
+    def lidar_origin_callback(self, msg: PointStamped) -> None:
+        """Store latest map-frame LiDAR origin for ray start point."""
+        self.lidar_origin = msg
+
+    def _current_lidar_origin_xyz(self) -> Optional[Tuple[float, float, float]]:
+        """Return LiDAR origin, falling back to player pose if origin topic is not available yet."""
+        if self.lidar_origin is not None:
+            p = self.lidar_origin.point
+            return (float(p.x), float(p.y), float(p.z))
+        if self.player_pose is not None:
+            p = self.player_pose.pose.position
+            return (float(p.x), float(p.y), float(p.z) + 1.2)
+        return None
 
     def potential_repulsive_callback(self, msg: Vector3Stamped) -> None:
         self.potential_repulsive_vector = msg
@@ -1306,104 +1361,49 @@ class RvizVisualizerNode(Node):
     ############################################################
 
     def publish_lidar_markers(self) -> None:
-        """
-        LiDAR point를 RViz2 POINTS marker로 표시한다.
-
-        실제 /tank/sensor/lidar/points 구조:
-            {
-                "route": "/info",
-                "source": "lidarPoints",
-                "count": 2880,
-                "points": [
-                    {
-                        "angle": 0.0,
-                        "verticalAngle": 22.5,
-                        "distance": 6.847,
-                        "position": {"x": 30.325, "y": 17.015, "z": 143.833},
-                        "isDetected": true,
-                        "channelIndex": 1
-                    }
-                ]
-            }
-
-        핵심 수정:
-            - 기존 x/y/z 직접 접근 대신 point["position"]을 사용한다.
-            - isDetected=False는 Max Distance endpoint이므로 기본적으로 표시하지 않는다.
-            - 시뮬레이터 raw 좌표를 RViz tank_map 좌표로 변환한다.
-              map.x = raw.x, map.y = raw.z, map.z = raw.y
-        """
+        """LiDAR PC2 point와 실시간 ray를 RViz2 MarkerArray로 표시한다."""
 
         markers = MarkerArray()
 
-        detected_points = []
-        free_space_points = []
+        # 0) Live LiDAR rays: origin -> all detected endpoints.
+        # all_detected_points_map을 사용해야 지형 분리로 빠진 point까지 스캔 ray로 볼 수 있다.
+        origin = self._current_lidar_origin_xyz()
+        if origin is not None and self.lidar_ray_points:
+            line_segments = [(origin, end) for end in self.lidar_ray_points]
+            markers.markers.append(
+                make_line_list_marker(
+                    MAP_FRAME,
+                    "lidar_live_rays",
+                    10,
+                    line_segments,
+                    0.035,
+                    make_color(0.1, 0.9, 1.0, 0.22),
+                )
+            )
+            markers.markers.append(
+                make_sphere_marker(
+                    MAP_FRAME,
+                    "lidar_origin",
+                    11,
+                    origin[0],
+                    origin[1],
+                    origin[2],
+                    0.35,
+                    make_color(0.1, 0.9, 1.0, 0.85),
+                )
+            )
 
-        for idx, point in enumerate(self.lidar_points):
-            # RViz 렌더링 부담을 줄이기 위한 샘플링
-            if LIDAR_VISUALIZATION_SAMPLE_STEP > 1:
-                if idx % LIDAR_VISUALIZATION_SAMPLE_STEP != 0:
-                    continue
-
-            if not isinstance(point, dict):
-                continue
-
-            is_detected = bool(point.get("isDetected", False))
-
-            # 장애물/지형 인지 디버깅 목적에서는 실제 hit point만 표시
-            if LIDAR_VISUALIZE_DETECTED_ONLY and not is_detected:
-                continue
-
-            position = point.get("position")
-            if not isinstance(position, dict):
-                continue
-
-            raw_x = self._get_float(position, ["x"], 0.0)
-            raw_y = self._get_float(position, ["y"], 0.0)
-            raw_z = self._get_float(position, ["z"], 0.0)
-
-            if LIDAR_POSITION_IS_UNITY_RAW:
-                map_x = raw_x
-                map_y = raw_z
-                map_z = raw_y
-            else:
-                map_x = raw_x
-                map_y = raw_y
-                map_z = raw_z
-
-            if is_detected:
-                detected_points.append((map_x, map_y, map_z))
-            else:
-                free_space_points.append((map_x, map_y, map_z))
-
-        if detected_points:
+        # 1) Obstacle-only hit points.
+        if self.lidar_points:
             markers.markers.append(
                 make_points_marker(
                     MAP_FRAME,
                     "lidar_detected_points",
                     0,
-                    detected_points,
+                    self.lidar_points,
                     LIDAR_POINT_SIZE,
                     make_color(0.0, 1.0, 1.0, LIDAR_DETECTED_ALPHA),
                 )
-            )
-
-        if (not LIDAR_VISUALIZE_DETECTED_ONLY) and free_space_points:
-            markers.markers.append(
-                make_points_marker(
-                    MAP_FRAME,
-                    "lidar_free_space_points",
-                    1,
-                    free_space_points,
-                    LIDAR_POINT_SIZE,
-                    make_color(0.7, 0.7, 0.7, LIDAR_FREE_SPACE_ALPHA),
-                )
-            )
-
-        expected_full_scan_count = 360 * SIM_LIDAR_CHANNELS
-        if self.lidar_points and len(self.lidar_points) != expected_full_scan_count:
-            self.get_logger().debug(
-                f"LiDAR count mismatch: received={len(self.lidar_points)}, "
-                f"expected={expected_full_scan_count}, max_distance={SIM_LIDAR_MAX_DISTANCE}"
             )
 
         self.lidar_marker_pub.publish(markers)
