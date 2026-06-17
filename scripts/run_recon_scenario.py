@@ -39,8 +39,8 @@ REPORT_DIR = os.path.join(PROJECT_ROOT, "recon_reports")
 
 # 출발지(map 좌표). BLUE_START raw (60, 8, 30) → map (x=60, y=z=30)
 START = (60.0, 30.0)
-# 목적지(map 좌표). 도착 판정은 route_*.json의 reached가 1순위, 포즈 기반이 폴백.
-GOAL = (105.23, 275.0)
+# 목적지(map 좌표) = routes.yaml destination로 통일. 도착 판정은 route_*.json의 reached가 1순위, 포즈 기반이 폴백.
+GOAL = (110.0, 276.5)
 ARRIVE_TOL = 8.0     # 포즈 기반 도착 인정 반경(m)
 STABLE_SEC = 20.0    # 목적지 근처에서 이 시간만큼 정지해 있으면 도착으로 간주(폴백)
 START_TOL = 12.0          # 출발지 복귀 인정 반경(m)

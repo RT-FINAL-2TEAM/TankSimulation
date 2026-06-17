@@ -123,9 +123,10 @@ def generate_launch_description():
                 "publish_path_period_sec": 5.0,
                 "goal_tolerance": 10.0,
                 "default_goal_enabled": True,
-                # 시뮬레이터 실측 목적지 (적전차 위치: 105.23, 275.0)
-                "default_goal_x": 105.23,
-                "default_goal_y": 275.0,
+                # 주행 목적지 = routes.yaml destination 단일 출처로 통일 (110.0, 276.5).
+                # 적전차 리스폰(135.46, 276.87)과는 별개 — 전차는 목적지에서 멈추는 정찰 관측 개념.
+                "default_goal_x": 110.0,
+                "default_goal_y": 276.5,
             }],
         ),
 

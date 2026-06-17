@@ -250,11 +250,12 @@ BLUE_START = (
     float(os.environ.get("TANK_BLUE_START_Z", "30.0")),    # blStartZ: 아군 전차 시작 Z 좌표(Pos 두 번째 값)
 )
 
-# RED_START는 적 전차 시작 좌표다.
+# RED_START는 적 전차 시작(리스폰) 좌표다. 새 맵 실측 적전차 위치 = map(135.46, 276.87).
+# raw.x→map.x, raw.z→map.y 변환이므로 raw (x=135.46, z=276.87), y(고도)=10 유지.
 RED_START = (
-    float(os.environ.get("TANK_RED_START_X", "105.23")),   # rdStartX: 적 전차 시작 X 좌표
-    float(os.environ.get("TANK_RED_START_Y", "10")),       # rdStartY: 적 전차 시작 Y 좌표
-    float(os.environ.get("TANK_RED_START_Z", "295.0")),    # rdStartZ: 적 전차 시작 Z 좌표
+    float(os.environ.get("TANK_RED_START_X", "135.46")),   # rdStartX: 적 전차 시작 X 좌표 (map.x)
+    float(os.environ.get("TANK_RED_START_Y", "10")),       # rdStartY: 적 전차 시작 Y 좌표 (고도)
+    float(os.environ.get("TANK_RED_START_Z", "276.87")),   # rdStartZ: 적 전차 시작 Z 좌표 (map.y)
 )
 
 
