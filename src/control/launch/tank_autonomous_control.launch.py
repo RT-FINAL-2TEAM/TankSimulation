@@ -156,22 +156,26 @@ def generate_launch_description():
                 "target_pose_topic": "/tank/path/lookahead_pose",
                 "fallback_goal_topic": "/tank/goal/pose",
                 "hz": 10.0,
-                "influence_radius": 12.0,
-                "k_att": 1.0,
-                "k_rep": 160.0,
-                "tangent_gain_scale": 1.8,
-                "local_target_distance": 6.0,
+                # APF 게인 재균형(진동 완화): 척력이 인력을 160배 압도해 코리더 밖으로 튕기던 문제.
+                # k_att↑/k_rep↓/tangent↓로 경로 추종 vs 회피 균형, 보는 거리(influence/max_obstacle)도 좁힘.
+                # min_obstacle_distance·위협회피는 유지 → 근접 안전 보장. 실주행 보며 미세조정.
+                "influence_radius": 9.0,
+                "k_att": 3.0,
+                "k_rep": 60.0,
+                "tangent_gain_scale": 1.0,
+                "local_target_distance": 8.0,   # planner lookahead_distance(8m)와 정합
                 "max_repulsive_norm": 20.0,
                 "max_result_norm": 20.0,
                 "min_obstacle_distance": 1.5,
-                "max_obstacle_distance": 12.0,
+                "max_obstacle_distance": 9.0,
                 "front_sector_deg": 140.0,
                 "path_corridor_width": 7.0,
                 "obstacle_voxel_resolution": 1.0,
                 "max_obstacle_points": 300,
                 "use_discovered_objects": True,
                 "passthrough_when_clear": True,
-                "repulsive_eps": 0.05,
+                # clear 판정 임계 상향(0.05→0.5): 노이즈 1~2점으로 직진↔회피 모드가 깜빡이던 채터링 방지.
+                "repulsive_eps": 0.5,
                 "use_threat_avoidance": True,
                 "threat_map_file": recon_map_file,
                 "threat_radius": 25.0,

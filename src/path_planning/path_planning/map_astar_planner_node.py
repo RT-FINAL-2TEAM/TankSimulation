@@ -571,7 +571,10 @@ class TeamDynamicAStarPlannerNode(Node):
 
     def goal_pose_cb(self, msg: PoseStamped) -> None:
         new_goal = (float(msg.pose.position.x), float(msg.pose.position.y))
-        if self.goal_pos is None or get_distance(new_goal, self.goal_pos) > 0.5:
+        # 목적지가 '의미있게' 바뀔 때만 전역경로 재생성. 0.5m는 과민했다 — /tank/goal/pose에
+        # ros_bridge(시뮬 POST)와 planner(2Hz)가 이중 발행해, 좌표변환 부동소수 차로도 매번
+        # route를 비워 lookahead가 프레임마다 흔들렸다. goal_tolerance(10m)와 정합되게 10m로 상향.
+        if self.goal_pos is None or get_distance(new_goal, self.goal_pos) > 10.0:
             self.goal_pos = new_goal
             self.route = []
             self.plan_request_pending = True
