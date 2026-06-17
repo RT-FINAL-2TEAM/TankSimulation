@@ -11,28 +11,18 @@
 > 현재 RViz 상에서는 `static_map_loader_node`가 패키지에 내장된 정적 맵 파일(`recon_map.map`)을 파일에서 직접 로드하여 배포하고 있습니다. 시뮬레이터 측에서 맵을 로드하지 않은 상태에서도 RViz에는 맵이 나타나므로 주행 데이터가 왜곡됩니다. 이에 대해 동적 맵 동기화 구조를 개발해야 합니다.
 
 > [!NOTE]
-> **보고서 폴더(reports/)를 통한 성능 히스토리 누적**
-> 주행 로그를 분석한 결과물(속도 추종 차트, 우회 각도 분석 차트, 텍스트 요약 보고서)을 `reports/` 폴더 하위에 날짜 및 주행 세션 ID별로 자동 분류 및 누적하여 보관함으로써, 패키지를 왜 수정했는지 근거 데이터를 보존합니다.
+> **(폐기) 보고서 폴더(reports/)를 통한 성능 히스토리 누적** — `reports/`/`analyze_logs.py`는 제거되었다. 정찰 분석은 `recon_reports/` + `scripts/generate_recon_report.py`로 대체.
 
 ## Proposed Changes
 
 ---
 
 ### 1. 데이터 분석 및 시각화 보고서 축적 인프라 구축
-모듈 간 간섭과 복합 에러를 데이터 기반으로 격리 진단하고 히스토리를 관리하기 위한 아카이브 인프라를 구축합니다.
 
-#### [NEW] [reports/](file:///c:/dev/rotem/tank_project/reports/)
-* 프로젝트 루트 하위에 시각화 결과물 및 분석 요약 보고서 마크다운을 누적 적재하는 전용 아카이브 디렉터리를 운영합니다.
+> [!WARNING]
+> **폐기됨(2026-06).** 이 절의 `scripts/analyze_logs.py` + `reports/` + `tank_logs/` JSONL 분석 경로는 한 번도 운용되지 않아 제거되었고, `TANK_SAVE_JSONL`은 기본 off로 전환되었다. 주행/정찰 분석은 `recon_reports/`(recon_logger 산출) + `scripts/generate_recon_report.py`(정찰 보고서 생성기)로 일원화한다. 아래 내용은 히스토리 보존용으로만 남긴다.
 
-#### [MODIFY] [config.py](file:///c:/dev/rotem/tank_project/src/ros_bridge/ros_bridge/config.py)
-* `TANK_SAVE_JSONL` 옵션을 활성화하여 `/info` 주행 포즈, LiDAR 점 개수, APF 계산 조향 타겟 및 최종 제어 명령을 JSONL 형태의 파일로 기록하도록 설정합니다.
-
-#### [NEW] [analyze_logs.py](file:///c:/dev/rotem/tank_project/scripts/analyze_logs.py)
-* `tank_logs/` 디렉터리에 적재된 JSONL 로그를 분석하여 결과 차트(`.png`) 및 요약 마크다운 레포트(`.md`)를 생성한 뒤, `reports/report_<Timestamp>/` 폴더로 자동 분류하여 저장하는 스크립트를 작성합니다.
-  * **LiDAR 인지성**: 시간에 따른 수신된 LiDAR 포인트의 누적 추이 및 클러스터 개수 시각화.
-  * **경로 추종성**: A* 글로벌 경로점과 실제 전차 포즈(Position) 간의 오차 거리(Cross Track Error) 분석.
-  * **APF 우회성**: 장애물 접근 시 APF가 생성한 회피 타겟 각도 변화량 분석.
-  * **제어 선형성**: 생성된 W/S/A/D 조향 가중치 명령이 전차 실제 조향각/속도에 적절히 변환되어 추종되는지 선형성 분석.
+모듈 간 간섭과 복합 에러를 데이터 기반으로 격리 진단하고 히스토리를 관리하기 위한 아카이브 인프라를 구축합니다. ~~(`reports/` 아카이브 + `analyze_logs.py`)~~ — 폐기. `recon_reports/`로 대체.
 
 ---
 
@@ -69,7 +59,7 @@ graph TD
 ## Verification Plan
 
 ### Automated Tests
-* `scripts/analyze_logs.py` 스크립트를 주행 완료 후 자동 실행하여 모듈별 오차 및 연동 분석 보고서를 터미널 및 그래픽 이미지로 추출합니다.
+* 정찰 A→B 주행 후 `python3 scripts/generate_recon_report.py`를 실행하여 `recon_reports/`의 route_A/B.json·comparison.json으로부터 A/B 위험도·은밀성 비교 보고서(`recon_report.md`)를 산출합니다. (구 `scripts/analyze_logs.py`는 폐기)
 
 ### Manual Verification
 * 시뮬레이터 PC에서 맵 로딩 상태를 달리하여 `/init`을 수행하고, ROS2 단에서 맵 데이터가 그에 맞춰 동적으로 변경 로드되어 RViz 화면에 정합하게 반영되는지 직접 관측합니다.

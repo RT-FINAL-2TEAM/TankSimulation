@@ -104,6 +104,10 @@ def generate_launch_description():
                 "route_id": LaunchConfiguration("route_id"),
                 "route_side": LaunchConfiguration("route_side"),
                 "route_clearance_weight": 0.4,
+                # 정적 맵(finalmap.map) 나무/바위를 전역 A* 코스트맵에 반영 → 루트가 나무 관통 안 하고
+                # 코리더 중앙으로. use_gt_obstacles와 독립(빈 static_map_file이면 finalmap.map 자동 해석).
+                "use_static_map": True,
+                "static_map_file": recon_map_file,
                 # DBSCAN cluster bboxes are used when dynamic replanning is enabled.
                 "use_lidar_cluster_bboxes": True,
                 "lidar_cluster_bbox_margin": 1.0,

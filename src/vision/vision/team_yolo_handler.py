@@ -21,9 +21,9 @@ _model = None
 def _default_weights_path() -> Path:
     try:
         from ament_index_python.packages import get_package_share_directory
-        return Path(get_package_share_directory("vision")) / "models" / "best_final.pt"
+        return Path(get_package_share_directory("vision")) / "models" / "best_300.pt"
     except Exception:
-        return Path(__file__).resolve().parents[1] / "models" / "best_final.pt"
+        return Path(__file__).resolve().parents[1] / "models" / "best_300.pt"
 
 
 def _get_model(weights_path: str | None = None):

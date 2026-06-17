@@ -26,9 +26,8 @@ Thumbs.db
 
 .agents/
 .claude
+CLAUDE.md
 
-# Ignore logs and reports but keep folders
-tank_logs/*
-!tank_logs/.gitkeep
-reports/*
-!reports/.gitkeep
+# Ignore recon outputs but keep folder
+recon_reports/*
+!recon_reports/.gitkeep

@@ -291,6 +291,7 @@ class LocalPathNode(Node):
 
         self.recon_logger = ReconLogger(self.route_id, self.route_map_name, self.recon_report_dir)
         self.sim_time = 0.0
+        self.player_heading_deg = 0.0
         self._last_sim_time = 0.0
         self._report_saved = False
         self.goal_pos = None
@@ -386,6 +387,13 @@ class LocalPathNode(Node):
                 if dist < 10.0:
                     self.recon_logger.total_distance += dist
             self.player_pose = msg
+            # 노출/발각 사후계산용 궤적(map x=position.x, z=position.y). yaw는 차체 헤딩.
+            self.recon_logger.log_pose(
+                self.sim_time,
+                float(msg.pose.position.x),
+                float(msg.pose.position.y),
+                float(self.player_heading_deg),
+            )
 
     def goal_pose_cb(self, msg: PoseStamped) -> None:
         with self._lock:

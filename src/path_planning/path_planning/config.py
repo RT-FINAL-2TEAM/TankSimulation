@@ -143,5 +143,10 @@ ROUTE_ID = os.environ.get("TANK_PLANNER_ROUTE_ID", "B")
 ROUTE_SIDE = os.environ.get("TANK_PLANNER_ROUTE_SIDE", "east")
 ROUTE_CLEARANCE_WEIGHT = env_float("TANK_PLANNER_ROUTE_CLEARANCE_WEIGHT", 0.4)
 ROUTE_CONFIG_FILE = os.environ.get("TANK_PLANNER_ROUTE_CONFIG_FILE", "")
+# 정적 맵(finalmap.map) 나무/바위를 A* 코스트맵에 넣어 전역 경로가 회피·중앙정렬하게 한다.
+# use_gt_obstacles/동적 replan과 무관한 독립 경로(부작용 회피). 빈 파일이면 rviz_visualization
+# share의 finalmap.map을 자동 해석.
+USE_STATIC_MAP = env_bool("TANK_PLANNER_USE_STATIC_MAP", True)
+STATIC_MAP_FILE = os.environ.get("TANK_PLANNER_STATIC_MAP_FILE", "")
 USE_LIDAR_CLUSTER_BBOXES = env_bool("TANK_PLANNER_USE_LIDAR_CLUSTER_BBOXES", True)
 LIDAR_CLUSTER_BBOX_MARGIN = env_float("TANK_PLANNER_LIDAR_CLUSTER_BBOX_MARGIN", 1.0)

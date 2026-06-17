@@ -19,6 +19,7 @@ import csv
 import heapq
 import json
 import math
+import os
 import time
 import threading
 from copy import deepcopy
@@ -82,11 +83,17 @@ from path_planning.config import (
     ROUTE_ID,
     ROUTE_MAP_NAME,
     ROUTE_SIDE,
+    USE_STATIC_MAP,
+    STATIC_MAP_FILE,
     LIDAR_CLUSTER_BBOX_MARGIN,
 )
 
+from ament_index_python.packages import get_package_share_directory
 from path_planning.route_loader import get_route_waypoints
-from path_planning.team_path_planning import plan_path_through_waypoints as team_plan_path_through_waypoints
+from path_planning.team_path_planning import (
+    plan_path_through_waypoints as team_plan_path_through_waypoints,
+    load_static_obstacles_from_map,
+)
 
 
 def clamp(v: float, lo: float, hi: float) -> float:
@@ -281,8 +288,12 @@ def plan_global_path(
     inflate: float = 5.0,
     use_smoothing: bool = True,
     max_expansions: int = 250000,
+    static_obstacles: Optional[List[Dict[str, float]]] = None,
 ) -> List[Tuple[float, float]]:
     grid = create_grid(width, height, resolution)
+    if static_obstacles:
+        # 정적 장애물(나무 등)은 작은 inflate=1.0로(team_path_planning와 동일 정책)
+        add_obstacles(grid, static_obstacles, resolution, 1.0)
     add_obstacles(grid, obstacles, resolution, inflate)
 
     start_grid = (int(start_pos[0] / resolution), int(start_pos[1] / resolution))
@@ -437,6 +448,8 @@ class TeamDynamicAStarPlannerNode(Node):
         self.declare_parameter("route_side", ROUTE_SIDE)
         self.declare_parameter("route_clearance_weight", ROUTE_CLEARANCE_WEIGHT)
         self.declare_parameter("route_config_file", ROUTE_CONFIG_FILE)
+        self.declare_parameter("use_static_map", USE_STATIC_MAP)
+        self.declare_parameter("static_map_file", STATIC_MAP_FILE)
         self.declare_parameter("use_lidar_cluster_bboxes", USE_LIDAR_CLUSTER_BBOXES)
         self.declare_parameter("lidar_cluster_bbox_margin", LIDAR_CLUSTER_BBOX_MARGIN)
 
@@ -467,10 +480,31 @@ class TeamDynamicAStarPlannerNode(Node):
         self.route_map_name = str(self.get_parameter("route_map_name").value)
         self.route_id = str(self.get_parameter("route_id").value)
         self.route_side = str(self.get_parameter("route_side").value)
+        # route_side는 route_id로 결정된다(A=서/B=동). launch에서 route_side를 빠뜨려 기본값(west)이
+        # 들어와도 B가 동쪽으로 가도록 route_id에 맞춰 자동 보정한다(side-bias가 웨이포인트와 싸우는 버그 방지).
+        _side_by_id = {"A": "west", "B": "east"}
+        _expected_side = _side_by_id.get(self.route_id.strip().upper())
+        if _expected_side and self.route_side != _expected_side:
+            self.get_logger().warn(
+                f"route_side='{self.route_side}'가 route_id='{self.route_id}' 기대값('{_expected_side}')과 "
+                f"불일치 → '{_expected_side}'로 보정")
+            self.route_side = _expected_side
         self.route_clearance_weight = float(self.get_parameter("route_clearance_weight").value)
         self.route_config_file = str(self.get_parameter("route_config_file").value)
+        self.use_static_map = bool(self.get_parameter("use_static_map").value)
+        self.static_map_file = str(self.get_parameter("static_map_file").value)
         self.use_lidar_cluster_bboxes = bool(self.get_parameter("use_lidar_cluster_bboxes").value)
         self.lidar_cluster_bbox_margin = float(self.get_parameter("lidar_cluster_bbox_margin").value)
+
+        # 정적 맵(나무 등)을 1회 로드해 보관. use_gt_obstacles/obstacles_cb/replan과 독립.
+        # 전역 A* 코스트맵에 넣어 나무 회피 + clearance 중앙정렬을 가능하게 한다.
+        self.static_obstacles: List[Dict[str, float]] = []
+        if self.use_static_map:
+            sm_path = self.static_map_file or os.path.join(
+                get_package_share_directory("rviz_visualization"), "map", "finalmap.map")
+            self.static_obstacles = load_static_obstacles_from_map(sm_path)
+            self.get_logger().info(
+                f"static map obstacles loaded: {len(self.static_obstacles)} from {sm_path}")
 
         self.current_pos: Optional[Tuple[float, float]] = None
         self.goal_pos: Optional[Tuple[float, float]] = None
@@ -682,7 +716,7 @@ class TeamDynamicAStarPlannerNode(Node):
                         start_pos,
                         through,
                         obstacles,
-                        static_obstacles=None,
+                        static_obstacles=self.static_obstacles,
                         inflate=self.inflate,
                         clearance_weight=self.route_clearance_weight,
                         side=self.route_side,
@@ -702,6 +736,7 @@ class TeamDynamicAStarPlannerNode(Node):
                     inflate=self.inflate,
                     use_smoothing=self.use_path_smoothing,
                     max_expansions=self.max_expansions,
+                    static_obstacles=self.static_obstacles,
                 )
                 route_mode = "direct_astar"
 
