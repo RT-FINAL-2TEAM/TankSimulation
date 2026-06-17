@@ -1,6 +1,8 @@
 # YOLO detection configuration for Tank Challenge /detect endpoint.
 # These values are intentionally kept outside code so RL/perception teams can tune them later.
 model:
+  # car/house가 추가된 best_final 모델을 사용한다.
+  # engine을 사용할 경우 반드시 현재 best_final.pt에서 다시 export한 416 engine이어야 한다.
   default_filename: best_final.engine
   imgsz: 416
   iou: 0.70
@@ -22,16 +24,21 @@ tracking:
 
 classes:
   # 최종 detection public class는 아래 canonical class만 사용한다.
+  # 새 모델 names 기준: {0: car, 1: person, 2: tank, 3: rock, 4: house}
   canonical:
-    - rock
+    - car
     - person
     - tank
+    - rock
+    - house
     - tent
   fixed_ids:
     tank: 1
     rock: 2
     person: 3
     tent: 4
+    car: 5
+    house: 6
   aliases:
     blue: person
     red: person
@@ -41,22 +48,29 @@ classes:
     rock: rock
     tent: tent
     wall: wall
-  # 1차 병합에서는 wall/car를 YOLO-discovered object에서 제외한다.
-  # wall/terrain은 static map 또는 LiDAR terrain-obstacle layer에서 처리한다.
-  ignored:
-    - car
-    - wall
+    car: car
+    vehicle: car
+    house: house
+    building: house
+  # car를 YOLO detection에서 제외하지 않는다.
+  # 기존 기본값/코드에 car, wall ignore가 남아 있어도 이 빈 리스트가 config에서 override한다.
+  ignored: []
   default_box_color: '#00FF00'
   colors:
+    car: '#FF66CC'
     person: '#00FFFF'
     rock: '#FFA500'
     tank: '#FF0000'
     wall: '#00FF00'
     tent: '#FFFF00'
+    house: '#AA66FF'
   default_confidence: 0.20
   confidence_thresholds:
+    car: 0.20
     tank: 0.25
     person: 0.25
+    rock: 0.20
+    house: 0.20
   close_wall:
     confidence: 0.12
     area_ratio: 0.08
