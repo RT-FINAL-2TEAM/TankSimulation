@@ -1,0 +1,26 @@
+{
+  "route_A": {
+    "reached": true,
+    "collision_count": 0,
+    "enemy_count": 3,
+    "closest_enemy_distance_m": 45.1,
+    "enemy_visible_time_s": 20.0,
+    "max_continuous_visible_time_s": 3.2,
+    "obstacle_count": 25,
+    "blocked_segment_count": 2,
+    "pitch_std_deg": 3.4,
+    "roll_std_deg": 4.8
+  },
+  "route_B": {
+    "reached": true,
+    "collision_count": 0,
+    "enemy_count": 4,
+    "closest_enemy_distance_m": 32.5,
+    "enemy_visible_time_s": 3.0,
+    "max_continuous_visible_time_s": 5.4,
+    "obstacle_count": 8,
+    "blocked_segment_count": 1,
+    "pitch_std_deg": 1.8,
+    "roll_std_deg": 2.1
+  }
+}
