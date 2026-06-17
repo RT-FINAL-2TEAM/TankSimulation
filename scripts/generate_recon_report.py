@@ -604,7 +604,7 @@ def _pick_better(a: Any, b: Any, lower_better: bool = True) -> Tuple[str, str]:
 
 
 def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict[str, Optional[dict]],
-                    scored: Dict[str, dict], perception: Dict[str, dict],
+                    scored: Dict[str, dict],
                     rec: dict, weights: Dict[str, float], norm_mode: str,
                     figures: Optional[Dict[str, Optional[str]]] = None,
                     overview_fig: Optional[str] = None) -> str:
@@ -717,25 +717,8 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
             L.append(f"![route_{r} 실주행·위협 노출 지도]({os.path.basename(fig)})")
             L.append("")
 
-    # 6. 센서 인지 정확도
-    L.append("## 6. 센서 인지 정확도 (GT vs 탐지)")
-    L.append("")
-    L.append("> GT = `finalmap.map` 정적 객체. 런타임 스폰 객체는 정적 GT에 없을 수 있어 **정적 GT 한정** 지표다.")
-    L.append("")
-    for r in routes:
-        p = perception[r]["lidar"]
-        L.append(f"### route_{r} — LiDAR")
-        L.append(f"- 탐지 {p['detections']}건 / GT 정적객체 {p['gt_static_objects']}개 · "
-                 f"매칭 {p['matched']} · GT 커버 {p['covered_gt']}")
-        L.append(f"- precision {_fmt(p['precision'])} · recall {_fmt(p['recall'])} · "
-                 f"위치 RMSE {_fmt(p['position_rmse_m'])} m (허용오차 {PERCEPTION_MATCH_TOL}m)")
-        yv = perception[r]["yolo_vs_gt"]
-        L.append("- YOLO 탐지수 vs GT(정적): " +
-                 ", ".join(f"{x['class']} {x['yolo_detections']}/{x['gt_static']}" for x in yv))
-        L.append("")
-
-    # 7. 최종 추천
-    L.append("## 7. 최종 추천")
+    # 6. 최종 추천
+    L.append("## 6. 최종 추천")
     L.append("")
     if rec["winner"]:
         L.append(f"### 🏆 권장 루트: **route_{rec['winner']}**  (신뢰도: {rec['confidence']})")
@@ -745,8 +728,8 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
     L.append(f"- 근거: {rec['reason']}")
     L.append("")
 
-    # 8. 데이터 품질·미구현 경고
-    L.append("## 8. 데이터 품질 · 미구현 경고")
+    # 7. 데이터 품질·미구현 경고
+    L.append("## 7. 데이터 품질 · 미구현 경고")
     L.append("")
     any_warn = False
     for r in routes:
@@ -761,6 +744,7 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
     L.append("")
     L.append("- W3 우회는 재계획 카운트 미로깅으로 `distance/직선거리` **근사**다.")
     L.append("- 노출/발각은 GT 위협 + 전차 궤적 기반 사후계산이며, House002는 FOV±30°+LoS, Tank001은 반경+LoS 모델을 따른다.")
+    L.append("- 센서 인지 정확도(GT vs 탐지)는 지형 오탐·정적GT 한계로 신뢰도가 낮아 본 리포트에서 제외 — 개발 진단은 `scripts/analyze_run.py` 참고.")
     L.append("")
     return "\n".join(L)
 
@@ -811,14 +795,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     routes = sorted(routes_data.keys())
     metrics: Dict[str, dict] = {}
     exposures: Dict[str, Optional[dict]] = {}
-    perception: Dict[str, dict] = {}
     scored: Dict[str, dict] = {}
 
     for rid in routes:
         m = extract_metrics(routes_data[rid])
         metrics[rid] = m
         exposures[rid] = compute_exposure(m["trajectory"], threats, gt_bboxes)
-        perception[rid] = compute_perception_accuracy(m, gt_objects)
 
     norm = normalize(metrics, exposures, args.norm)
     for rid in routes:
@@ -845,7 +827,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     rid, metrics[rid]["trajectory"], threats, gt_objects, gt_bboxes,
                     exposures[rid], out_dir)
 
-    md = render_markdown(routes, metrics, exposures, scored, perception, rec, weights,
+    md = render_markdown(routes, metrics, exposures, scored, rec, weights,
                          args.norm, figures, overview_fig)
 
     if args.stdout:

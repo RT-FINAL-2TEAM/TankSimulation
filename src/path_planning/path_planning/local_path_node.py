@@ -29,6 +29,7 @@ from ament_index_python.packages import get_package_share_directory
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped, Vector3Stamped, Point
+from nav_msgs.msg import Path as NavPath
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import ColorRGBA, String
@@ -299,6 +300,14 @@ class LocalPathNode(Node):
         self.create_subscription(PoseStamped, self.goal_pose_topic, self.goal_pose_cb, 10)
         self.create_subscription(String, "/tank/event/collision", self.collision_cb, 10)
 
+        # 주행 품질 진단용 구독 (읽기만 — 제어/계획 거동은 안 건드림). recon_logger에 per-step 기록해
+        # 진동/끼임 원인이 경로 churn / APF 불일치 / 제어 채터 중 무엇인지 사후에 수치로 가린다.
+        self.create_subscription(String, "/tank/planner/status", self._diag_planner_status_cb, 10)
+        self.create_subscription(NavPath, "/tank/global_path", self._diag_global_path_cb, 10)
+        self.create_subscription(PoseStamped, "/tank/path/lookahead_pose", self._diag_lookahead_cb, 10)
+        self.create_subscription(PoseStamped, "/tank/local_target/pose", self._diag_local_target_cb, 10)
+        self.create_subscription(String, "/tank/control/command", self._diag_command_cb, 10)
+
         self.create_service(Trigger, SERVICE_DISCOVERED_SAVE, self.save_service_cb)
         self.create_service(Trigger, SERVICE_DISCOVERED_CLEAR, self.clear_service_cb)
         self.terrain_finalize_client = self.create_client(Trigger, SERVICE_TERRAIN_FINALIZE)
@@ -394,6 +403,10 @@ class LocalPathNode(Node):
                 float(msg.pose.position.y),
                 float(self.player_heading_deg),
             )
+            # 진단 스냅샷(0.2s 간격, recon_logger 내부에서 시간 게이트). 끼임/제자리 진동도 포착.
+            self.recon_logger.log_diag_sample(
+                self.sim_time, float(msg.pose.position.x), float(msg.pose.position.y)
+            )
 
     def goal_pose_cb(self, msg: PoseStamped) -> None:
         with self._lock:
@@ -402,6 +415,35 @@ class LocalPathNode(Node):
     def collision_cb(self, msg: String) -> None:
         with self._lock:
             self.recon_logger.collisions += 1
+
+    # -- 주행 품질 진단 구독 콜백 (읽기만) ----------------------------------
+    def _diag_planner_status_cb(self, msg: String) -> None:
+        try:
+            v = int(json.loads(msg.data).get("route_version", 0))
+        except Exception:
+            return
+        with self._lock:
+            self.recon_logger.set_route_version(v)
+
+    def _diag_global_path_cb(self, msg: NavPath) -> None:
+        try:
+            path_xz = [(float(p.pose.position.x), float(p.pose.position.y)) for p in msg.poses]
+        except Exception:
+            return
+        with self._lock:
+            self.recon_logger.log_planned_path(self.sim_time, path_xz)
+
+    def _diag_lookahead_cb(self, msg: PoseStamped) -> None:
+        with self._lock:
+            self.recon_logger.set_lookahead(float(msg.pose.position.x), float(msg.pose.position.y))
+
+    def _diag_local_target_cb(self, msg: PoseStamped) -> None:
+        with self._lock:
+            self.recon_logger.set_local_target(float(msg.pose.position.x), float(msg.pose.position.y))
+
+    def _diag_command_cb(self, msg: String) -> None:
+        with self._lock:
+            self.recon_logger.set_command(str(msg.data))
 
     def player_state_cb(self, msg: String) -> None:
         try:
