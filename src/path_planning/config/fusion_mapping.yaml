@@ -16,28 +16,78 @@ camera:
   heading_source: body
 
 fusion:
-  # 실제 객체 위치 추정은 projection fusion을 먼저 사용하고, 실패 시 기존 angle fusion으로 fallback한다.
+  # 실제 객체 위치 추정은 projection fusion을 먼저 사용한다.
+  # semantic object는 YOLO + DBSCAN LiDAR cluster가 같이 매칭될 때만 만든다.
   method: projection_then_cluster_then_angle
-  allow_angle_fallback: true
+  allow_angle_fallback: false
+
   # bbox 중심각과 LiDAR point bearing을 매칭할 때 추가로 허용할 각도 여유.
+  # strict projection cluster 모드에서는 fallback용 값이다.
   angle_gate_extra_deg: 4.0
+
   max_fusion_range_m: 45.0
   min_fusion_range_m: 0.5
   min_lidar_points_per_object: 3
   # 가까운 point 일부의 median으로 객체 위치를 안정화한다.
   use_nearest_points: 20
+
   # bbox confidence가 이 값보다 작으면 fusion/map update 대상에서 제외한다.
+  # 현재 로그 기준 person conf는 높고 rock conf가 낮을 수 있으므로 0.20 유지.
   min_detection_confidence: 0.20
+
+  # ------------------------------------------------------------
+  # Strict YOLO + LiDAR DBSCAN cluster matching
+  # ------------------------------------------------------------
+  # YOLO만 있거나 LiDAR cluster만 있는 경우는 semantic object로 만들지 않는다.
+  semantic_requires_cluster: true
+
+  # person은 bbox가 좁고 화면 하단에 걸리는 경우가 많아서 rock보다 완화한다.
+  # 사람이 계속 안 붙으면 cluster_match_max_score를 2.30까지 올리고,
+  # 오검출/엉뚱한 cluster 매칭이 늘면 1.80~1.95로 낮춘다.
+  cluster_match_max_center_norm: 1.75
+  cluster_match_max_score: 2.10
+
+  # 여러 detection이 같은 cluster를 노릴 때 점수 차이가 너무 작으면 reject한다.
+  # 값이 작을수록 덜 버리고, 값이 클수록 애매한 매칭을 더 많이 버린다.
+  cluster_match_ambiguity_delta: 0.10
+
+  # 거리가 가까운 cluster에 과도하게 끌리지 않도록 낮게 둔다.
+  cluster_match_distance_weight: 0.0015
+
+  # 큰 bbox가 작은 객체 cluster를 가져가는 것을 막기 위한 penalty.
+  # rock bbox가 person cluster를 뺏으면 0.60~0.85로 올린다.
+  cluster_match_bbox_area_weight: 0.45
+
+  # class별 bbox anchor 위치.
+  # person은 LiDAR가 다리/하단에 찍히는 경우가 많아서 bbox 하단 쪽으로 둔다.
+  # 0.50 = bbox 중앙, 0.90 = bbox 하단 근처.
+  cluster_match_person_anchor_y: 0.90
+  cluster_match_default_anchor_y: 0.50
+
+  # person 전용 허용 범위. x축은 비교적 엄격, y축은 하단 projection 오차를 더 허용한다.
+  cluster_match_person_x_limit: 1.80
+  cluster_match_person_y_limit: 2.80
+
+  # Camera/LiDAR timestamp 차이가 이 값보다 크면 fusion을 포기한다.
+  max_sync_diff_sec: 0.15
 
 projection:
   # 팀원이 수동 보정한 LiDAR-camera extrinsic을 실제 YOLO-LiDAR matching에 사용한다.
   enabled: true
   prefer_dbscan_clusters: true
-  bbox_margin_px: 8.0
-  cluster_bbox_margin_px: 18.0
-  min_projected_lidar_points: 3
+
+  # 일반 point projection margin.
+  bbox_margin_px: 16.0
+
+  # DBSCAN cluster projection margin.
+  # person bbox가 화면 하단에 붙어 있고 projection 오차가 있으면 기존 18px로는 쉽게 reject된다.
+  cluster_bbox_margin_px: 45.0
+
+  # strict cluster matching에서는 cluster 후보를 우선 사용한다.
+  min_projected_lidar_points: 2
   min_cluster_points: 2
   use_only_detected_points: true
+
   params:
     tx: 0.28
     ty: 0.02
@@ -81,6 +131,7 @@ mapping:
   # trackId가 없거나 class가 흔들리는 경우에도 가까운 객체는 같은 candidate로 먼저 병합한다.
   merge_across_classes: true
   class_vote_by_confidence: true
+  memory_decay_sec: 10.0
 
 rviz:
   current_object_lifetime_sec: 1.2
