@@ -186,6 +186,19 @@ class LocalPathNode(Node):
         self.min_detection_conf = float(self._cfg(["fusion", "min_detection_confidence"], 0.20))
         self.allow_angle_fallback = bool(self._cfg(["fusion", "allow_angle_fallback"], True))
 
+        # Strict semantic fusion policy.  A semantic object should be created only
+        # when a YOLO detection and a LiDAR DBSCAN cluster can be matched.
+        self.semantic_requires_cluster = bool(self._cfg(["fusion", "semantic_requires_cluster"], True))
+        self.cluster_match_max_center_norm = float(self._cfg(["fusion", "cluster_match_max_center_norm"], 1.75))
+        self.cluster_match_max_score = float(self._cfg(["fusion", "cluster_match_max_score"], 2.10))
+        self.cluster_match_ambiguity_delta = float(self._cfg(["fusion", "cluster_match_ambiguity_delta"], 0.10))
+        self.cluster_match_distance_weight = float(self._cfg(["fusion", "cluster_match_distance_weight"], 0.0015))
+        self.cluster_match_bbox_area_weight = float(self._cfg(["fusion", "cluster_match_bbox_area_weight"], 0.45))
+        self.cluster_match_person_anchor_y = float(self._cfg(["fusion", "cluster_match_person_anchor_y"], 0.90))
+        self.cluster_match_default_anchor_y = float(self._cfg(["fusion", "cluster_match_default_anchor_y"], 0.50))
+        self.cluster_match_person_x_limit = float(self._cfg(["fusion", "cluster_match_person_x_limit"], 1.80))
+        self.cluster_match_person_y_limit = float(self._cfg(["fusion", "cluster_match_person_y_limit"], 2.80))
+
         self.use_projection_fusion = bool(self._cfg(["projection", "enabled"], True))
         self.projection_params = dict(CAMERA_LIDAR_PROJECTION_PARAMS)
         self.projection_params.update(dict(self._cfg(["projection", "params"], {}) or {}))
@@ -528,21 +541,27 @@ class LocalPathNode(Node):
     def compute_fused_objects_locked(self) -> List[Dict[str, Any]]:
         if self.player_pose is None or self.latest_detections_payload is None or self.latest_lidar_points.shape[0] == 0:
             return []
-        
-        detections = self.latest_detections_payload.get("detections", [])
-        if not isinstance(detections, list):
+
+        raw_detections = self.latest_detections_payload.get("detections", [])
+        if not isinstance(raw_detections, list):
             return []
-        
+
         if self._is_stale_async_detection_payload(self.latest_detections_payload):
             return []
 
-        # [핵심 변경 3] 수동 Time Synchronization (고스트 억제)
+        # Camera/LiDAR time synchronization.  Too old detections create ghost boxes.
         det_ts = self._as_float(self.latest_detections_payload.get("timestamp_wall", 0.0))
         lidar_ts = self._as_float(self.latest_lidar_ts, 0.0)
-        if det_ts > 0 and lidar_ts > 0:
-            if abs(det_ts - lidar_ts) > self.max_sync_diff_sec:
-                # 라이다와 카메라의 시차가 너무 크면 매칭을 포기합니다.
-                return []
+        if det_ts > 0 and lidar_ts > 0 and abs(det_ts - lidar_ts) > self.max_sync_diff_sec:
+            return []
+
+        parsed_detections: List[ParsedDetection] = []
+        for det in raw_detections:
+            parsed = self._parse_detection(det)
+            if parsed is not None:
+                parsed_detections.append(parsed)
+        if not parsed_detections:
+            return []
 
         image_w, image_h = self._extract_image_size(self.latest_detections_payload)
         px = float(self.player_pose.pose.position.x)
@@ -550,23 +569,43 @@ class LocalPathNode(Node):
         pz = float(self.player_pose.pose.position.z)
         camera_heading = self._camera_heading_deg()
 
-        angle_points = self._build_angle_lidar_points(px, py) if self.allow_angle_fallback else []
         projection_context = self._build_projection_context(int(image_w), int(image_h)) if self.use_projection_fusion else None
-        projected_points = self._project_raw_lidar_points(projection_context, px, py, int(image_w), int(image_h)) if projection_context else []
         projected_clusters = self._project_clusters(projection_context, px, py, int(image_w), int(image_h)) if projection_context else []
 
-        assigned_cluster_ids: set[int] = set()
-        fused: List[Dict[str, Any]] = []
-        for det in detections:
-            parsed = self._parse_detection(det)
-            if parsed is None:
-                continue
-            class_name, confidence, bbox = parsed.class_name, parsed.confidence, parsed.bbox
+        # Preferred path: global one-to-one YOLO bbox <-> DBSCAN cluster assignment.
+        # This prevents a large rock bbox from taking a nearby person cluster simply
+        # because the rock detection appeared earlier in the YOLO list.
+        if self.prefer_clusters and projected_clusters:
+            fused = self._fuse_with_global_cluster_assignment(
+                parsed_detections,
+                projected_clusters,
+                px,
+                py,
+                pz,
+                camera_heading,
+                float(image_w),
+                float(image_h),
+            )
+            if fused:
+                return fused
 
+        # Strict mode: no semantic object is emitted unless YOLO and DBSCAN cluster agree.
+        if self.semantic_requires_cluster:
+            return []
+
+        # Legacy fallback path kept only for emergency debugging when semantic_requires_cluster=false.
+        angle_points = self._build_angle_lidar_points(px, py) if self.allow_angle_fallback else []
+        projected_points = self._project_raw_lidar_points(projection_context, px, py, int(image_w), int(image_h)) if projection_context else []
+
+        fused: List[Dict[str, Any]] = []
+        assigned_cluster_ids: set[int] = set()
+        for parsed in parsed_detections:
+            class_name, confidence, bbox = parsed.class_name, parsed.confidence, parsed.bbox
             obj = None
             if self.prefer_clusters and projected_clusters:
                 obj = self._fuse_from_projected_clusters(
-                    class_name, confidence, bbox, projected_clusters, assigned_cluster_ids, px, py, pz, camera_heading, image_w, image_h
+                    class_name, confidence, bbox, projected_clusters, assigned_cluster_ids,
+                    px, py, pz, camera_heading, image_w, image_h
                 )
             if obj is None and projected_points:
                 obj = self._fuse_from_projected_points(class_name, confidence, bbox, projected_points, px, py, pz, camera_heading, image_w, image_h)
@@ -584,6 +623,10 @@ class LocalPathNode(Node):
         for obj in fused:
             class_name = str(obj.get("className", "unknown")).lower()
             if class_name not in self.add_classes:
+                continue
+            if self.semantic_requires_cluster and not bool(obj.get("discovered_eligible", False)):
+                continue
+            if self.semantic_requires_cluster and str(obj.get("lidar_match_type", "")) != "dbscan_cluster":
                 continue
             if self.add_only_unmatched and bool(obj.get("known_static")):
                 continue
@@ -760,6 +803,159 @@ class LocalPathNode(Node):
             out.append({"id": int(self._as_float(c.get("id"), -1)), "count": count, "centroid": map_pos, "bbox": c.get("bbox"), "u": u, "v": v, "depth": depth, "distance_m": distance, "raw": c})
         return out
 
+    def _bbox_anchor_uv(self, bbox: List[float], class_name: str) -> Tuple[float, float, float, float]:
+        x1, y1, x2, y2 = [float(v) for v in bbox[:4]]
+        bw = max(1.0, x2 - x1)
+        bh = max(1.0, y2 - y1)
+        anchor_y_ratio = self.cluster_match_person_anchor_y if class_name == "person" else self.cluster_match_default_anchor_y
+        anchor_y_ratio = max(0.0, min(1.15, float(anchor_y_ratio)))
+        return x1 + 0.5 * bw, y1 + anchor_y_ratio * bh, bw, bh
+
+    def _cluster_detection_candidate(
+        self,
+        det_index: int,
+        parsed: ParsedDetection,
+        cluster: Dict[str, Any],
+        image_w: float,
+        image_h: float,
+    ) -> Optional[Dict[str, Any]]:
+        bbox = parsed.bbox
+        class_name = parsed.class_name
+        margin = self.cluster_bbox_margin_px
+        if class_name == "person":
+            # Person bbox is narrow and usually touches the bottom of the camera image.
+            # Allow extra vertical slack while keeping x alignment meaningful.
+            margin = max(margin, self.cluster_bbox_margin_px)
+        if not point_inside_bbox(cluster["u"], cluster["v"], bbox, margin, image_w, image_h):
+            return None
+
+        ax, ay, bw, bh = self._bbox_anchor_uv(bbox, class_name)
+        half_w = max(1.0, 0.5 * bw)
+        half_h = max(1.0, 0.5 * bh)
+        dx_norm = abs(float(cluster["u"]) - ax) / half_w
+        dy_norm = abs(float(cluster["v"]) - ay) / half_h
+
+        if class_name == "person":
+            # For a person, LiDAR often hits legs/feet, so y can drift more than x.
+            if dx_norm > self.cluster_match_person_x_limit or dy_norm > self.cluster_match_person_y_limit:
+                return None
+            center_norm = math.sqrt(dx_norm * dx_norm + 0.35 * dy_norm * dy_norm)
+        else:
+            center_norm = math.sqrt(dx_norm * dx_norm + dy_norm * dy_norm)
+            if center_norm > self.cluster_match_max_center_norm:
+                return None
+
+        bbox_area_norm = max(0.0, min(1.0, (bw * bh) / max(1.0, image_w * image_h)))
+        distance_term = self.cluster_match_distance_weight * float(cluster.get("distance_m", 0.0))
+        size_penalty = self.cluster_match_bbox_area_weight * bbox_area_norm
+        score = center_norm + distance_term + size_penalty
+        if score > self.cluster_match_max_score:
+            return None
+
+        return {
+            "det_index": det_index,
+            "cluster_id": int(cluster.get("id", -1)),
+            "score": float(score),
+            "center_norm": float(center_norm),
+            "dx_norm": float(dx_norm),
+            "dy_norm": float(dy_norm),
+            "bbox_area_norm": float(bbox_area_norm),
+            "anchor": {"u": float(ax), "v": float(ay)},
+            "cluster": cluster,
+            "parsed": parsed,
+        }
+
+    def _fuse_with_global_cluster_assignment(
+        self,
+        parsed_detections: List[ParsedDetection],
+        projected_clusters: List[Dict[str, Any]],
+        px: float,
+        py: float,
+        pz: float,
+        camera_heading: float,
+        image_w: float,
+        image_h: float,
+    ) -> List[Dict[str, Any]]:
+        candidates: List[Dict[str, Any]] = []
+        for det_index, parsed in enumerate(parsed_detections):
+            for cluster in projected_clusters:
+                cand = self._cluster_detection_candidate(det_index, parsed, cluster, image_w, image_h)
+                if cand is not None:
+                    candidates.append(cand)
+        if not candidates:
+            return []
+
+        # A cluster that is plausible for multiple detections should go to the best
+        # aligned bbox, not to whichever detection is processed first.
+        candidates.sort(key=lambda c: (c["score"], c["bbox_area_norm"], -int(c["cluster"].get("count", 0))))
+        used_detections: set[int] = set()
+        used_clusters: set[int] = set()
+        selected: List[Dict[str, Any]] = []
+
+        for cand in candidates:
+            det_index = int(cand["det_index"])
+            cluster_id = int(cand["cluster_id"])
+            if det_index in used_detections or cluster_id in used_clusters:
+                continue
+
+            # If the same detection has a nearly identical alternative cluster, reject
+            # this detection for safety.  This prevents ambiguous front/back matches.
+            same_det = [
+                c for c in candidates
+                if int(c["det_index"]) == det_index
+                and int(c["cluster_id"]) != cluster_id
+                and int(c["cluster_id"]) not in used_clusters
+            ]
+            if same_det:
+                delta = float(same_det[0]["score"]) - float(cand["score"])
+                if delta < self.cluster_match_ambiguity_delta:
+                    used_detections.add(det_index)
+                    continue
+
+            selected.append(cand)
+            used_detections.add(det_index)
+            if cluster_id >= 0:
+                used_clusters.add(cluster_id)
+
+        fused: List[Dict[str, Any]] = []
+        for cand in selected:
+            parsed: ParsedDetection = cand["parsed"]
+            cluster = cand["cluster"]
+            pos = cluster["centroid"]
+            obj = self._make_fused_object(
+                parsed.class_name,
+                parsed.confidence,
+                parsed.bbox,
+                pos["x"],
+                pos["y"],
+                pos["z"],
+                px,
+                py,
+                pz,
+                camera_heading,
+                source="yolo_lidar_projection_cluster_fusion",
+                matched_lidar_points=int(cluster.get("count", 0)),
+                used_lidar_points=int(cluster.get("count", 0)),
+                extra={
+                    "cluster_id": int(cluster.get("id", -1)),
+                    "projection_uv": {"u": float(cluster.get("u", 0.0)), "v": float(cluster.get("v", 0.0))},
+                    "cluster_bbox": cluster.get("bbox"),
+                    "lidar_match_type": "dbscan_cluster",
+                    "semantic_confirmed": True,
+                    "discovered_eligible": True,
+                    "cluster_match_policy": "global_one_to_one_bbox_alignment_small_bbox_priority_person_relaxed",
+                    "cluster_assignment_score": float(cand["score"]),
+                    "cluster_center_norm": float(cand["center_norm"]),
+                    "cluster_dx_norm": float(cand["dx_norm"]),
+                    "cluster_dy_norm": float(cand["dy_norm"]),
+                    "bbox_area_norm": float(cand["bbox_area_norm"]),
+                    "bbox_anchor": cand["anchor"],
+                },
+            )
+            obj.update(parsed.metadata())
+            fused.append(obj)
+        return fused
+
     def _fuse_from_projected_clusters(
         self, class_name: str, confidence: float, bbox: List[float], clusters: List[Dict[str, Any]], assigned_ids: set[int],
         px: float, py: float, pz: float, camera_heading: float, image_w: float, image_h: float,
@@ -779,7 +975,15 @@ class LocalPathNode(Node):
         return self._make_fused_object(
             class_name, confidence, bbox, pos["x"], pos["y"], pos["z"], px, py, pz, camera_heading,
             source="yolo_lidar_projection_cluster_fusion", matched_lidar_points=int(best["count"]),
-            used_lidar_points=int(best["count"]), extra={"cluster_id": best["id"], "projection_uv": {"u": best["u"], "v": best["v"]}, "cluster_bbox": best.get("bbox")},
+            used_lidar_points=int(best["count"]), extra={
+                "cluster_id": best["id"],
+                "projection_uv": {"u": best["u"], "v": best["v"]},
+                "cluster_bbox": best.get("bbox"),
+                "lidar_match_type": "dbscan_cluster",
+                "semantic_confirmed": True,
+                "discovered_eligible": True,
+                "cluster_match_policy": "sequential_cluster_fallback",
+            },
         )
 
     def _fuse_from_projected_points(
@@ -993,7 +1197,7 @@ class LocalPathNode(Node):
             source = str(obj.get("source", ""))
             markers.markers.append(self._sphere_marker("fused_object", mid, x, y, z, self.sphere_scale, color, self.current_lifetime_sec)); mid += 1
             markers.markers.append(self._line_marker("fused_object_distance", mid, [(px, py, pz + 2.0), (x, y, z)], self._color_for_class(cls, 0.75), self.current_lifetime_sec)); mid += 1
-            label = f"{cls} {dist:.1f}m conf={conf:.2f}\n{source.replace('yolo_lidar_', '')}"
+            label = f"LIVE {cls} {dist:.1f}m conf={conf:.2f}\n{source.replace('yolo_lidar_', '')}"
             if known:
                 label += " static"
             markers.markers.append(self._text_marker("fused_object_label", mid, x, y, z + 1.8, label, self._color_for_class(cls, 1.0), self.current_lifetime_sec)); mid += 1
@@ -1001,14 +1205,45 @@ class LocalPathNode(Node):
 
     def make_discovered_markers(self, discovered_list: List[DiscoveredObject]) -> MarkerArray:
         markers = MarkerArray()
+
+        # Clear stale candidate/SAVED markers first.  This keeps RViz from showing
+        # an old candidate as if it were still active after memory decay removed it.
+        clear_marker = Marker()
+        clear_marker.header.frame_id = self.map_frame
+        clear_marker.header.stamp = self.get_clock().now().to_msg()
+        clear_marker.action = Marker.DELETEALL
+        markers.markers.append(clear_marker)
+
         for idx, obj in enumerate(discovered_list):
-            color = self._color_for_class(obj.class_name, 0.85)
+            alpha = 0.95 if obj.is_confirmed else 0.55
+            color = self._color_for_class(obj.class_name, alpha)
             x = obj.map_x
             y = obj.map_y
             z = obj.map_z + self.discovered_z_offset
-            markers.markers.append(self._cube_marker("discovered_object", idx * 2, x, y, z, self.discovered_cube_scale, color))
-            label = f"NEW {obj.class_name}\nobs={obj.observation_count} conf={obj.confidence:.2f}"
-            markers.markers.append(self._text_marker("discovered_object_label", idx * 2 + 1, x, y, z + 2.0, label, self._color_for_class(obj.class_name, 1.0), 0.0))
+            base_id = idx * 3
+            markers.markers.append(self._cube_marker("discovered_object", base_id, x, y, z, self.discovered_cube_scale, color))
+            status = "SAVED" if obj.is_confirmed else "CANDIDATE"
+            label = f"{status} {obj.class_name}\nobs={obj.observation_count} conf={obj.confidence:.2f}"
+            markers.markers.append(self._text_marker("discovered_object_label", base_id + 1, x, y, z + 2.0, label, self._color_for_class(obj.class_name, 1.0), 0.0))
+
+            if obj.is_confirmed:
+                saved_color = ColorRGBA()
+                saved_color.r = 1.0
+                saved_color.g = 1.0
+                saved_color.b = 1.0
+                saved_color.a = 1.0
+                markers.markers.append(
+                    self._sphere_marker(
+                        "discovered_saved_badge",
+                        base_id + 2,
+                        x,
+                        y,
+                        z + 3.2,
+                        max(0.45, self.sphere_scale * 0.45),
+                        saved_color,
+                        0.0,
+                    )
+                )
         return markers
 
     def _base_marker(self, ns: str, marker_id: int, lifetime_sec: float = 0.0) -> Marker:

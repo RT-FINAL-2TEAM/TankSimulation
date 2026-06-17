@@ -124,7 +124,7 @@ from std_msgs.msg import String
 # MarkerArray:
 #   RViz2에 여러 marker를 한 번에 표시할 때 사용하는 메시지.
 #   예: 전차 marker + 목표 marker + 장애물 marker 목록
-from visualization_msgs.msg import MarkerArray
+from visualization_msgs.msg import Marker, MarkerArray
 
 
 ############################################################
@@ -1361,48 +1361,50 @@ class RvizVisualizerNode(Node):
     ############################################################
 
     def publish_lidar_markers(self) -> None:
-        """LiDAR PC2 point와 실시간 ray를 RViz2 MarkerArray로 표시한다."""
+        """LiDAR PC2 point를 RViz2 MarkerArray로 표시한다.
+
+        이 표시 노드는 판단을 하지 않는다.  all_detected_points_map은 전체 스캔점,
+        detected_points_map은 지형 분리 후 obstacle-only 점으로만 시각화한다.
+        이전 ray 선분 marker는 명시적으로 DELETE해서 RViz에 남지 않게 한다.
+        """
 
         markers = MarkerArray()
 
-        # 0) Live LiDAR rays: origin -> all detected endpoints.
-        # all_detected_points_map을 사용해야 지형 분리로 빠진 point까지 스캔 ray로 볼 수 있다.
-        origin = self._current_lidar_origin_xyz()
-        if origin is not None and self.lidar_ray_points:
-            line_segments = [(origin, end) for end in self.lidar_ray_points]
+        # Delete old ray/origin markers from earlier versions.
+        for ns, mid in (("lidar_live_rays", 10), ("lidar_origin", 11)):
+            delete_marker = Marker()
+            delete_marker.header.frame_id = MAP_FRAME
+            delete_marker.header.stamp = self.get_clock().now().to_msg()
+            delete_marker.ns = ns
+            delete_marker.id = mid
+            delete_marker.action = Marker.DELETE
+            markers.markers.append(delete_marker)
+
+        # 0) All LiDAR hit points.  This includes ground/floor/terrain points.
+        if self.lidar_ray_points:
+            scan_point_size = max(0.45, float(LIDAR_POINT_SIZE) * 1.8)
             markers.markers.append(
-                make_line_list_marker(
+                make_points_marker(
                     MAP_FRAME,
-                    "lidar_live_rays",
-                    10,
-                    line_segments,
-                    0.035,
-                    make_color(0.1, 0.9, 1.0, 0.22),
-                )
-            )
-            markers.markers.append(
-                make_sphere_marker(
-                    MAP_FRAME,
-                    "lidar_origin",
-                    11,
-                    origin[0],
-                    origin[1],
-                    origin[2],
-                    0.35,
-                    make_color(0.1, 0.9, 1.0, 0.85),
+                    "lidar_scan_points",
+                    1,
+                    self.lidar_ray_points,
+                    scan_point_size,
+                    make_color(0.1, 0.9, 1.0, 0.45),
                 )
             )
 
-        # 1) Obstacle-only hit points.
+        # 1) Obstacle-only hit points after terrain separation.
         if self.lidar_points:
+            detected_point_size = max(0.60, float(LIDAR_POINT_SIZE) * 2.4)
             markers.markers.append(
                 make_points_marker(
                     MAP_FRAME,
                     "lidar_detected_points",
                     0,
                     self.lidar_points,
-                    LIDAR_POINT_SIZE,
-                    make_color(0.0, 1.0, 1.0, LIDAR_DETECTED_ALPHA),
+                    detected_point_size,
+                    make_color(1.0, 0.55, 0.0, max(0.85, LIDAR_DETECTED_ALPHA)),
                 )
             )
 
