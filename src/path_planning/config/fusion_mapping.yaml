@@ -115,8 +115,9 @@ mapping:
   merge_radius_m: 5.0
   position_ema_alpha: 0.35
   # 저장할 class. YOLO public className 기준.
-  # 1차 병합에서는 YOLO class를 rock/person/tank/tent로 간소화한다.
-  add_classes: [person, rock, tank, tent]
+  # 저장할 class. YOLO public className 기준.
+  # 새 모델 class: car, person, tank, rock, house. tent는 기존 호환성을 위해 유지한다.
+  add_classes: [person, rock, tank, tent, car, house]
   save_directory: ~/tank_discovered_maps
   save_latest_filename: discovered_objects_latest.map
   # true면 save service 호출 시 timestamp가 붙은 archive 파일도 같이 만든다.
@@ -147,4 +148,6 @@ rviz:
     tank: '#FF0000'
     wall: '#00FF00'
     tent: '#FFFF00'
+    car: '#FF66CC'
+    house: '#AA66FF'
     unknown: '#FFFFFF'
