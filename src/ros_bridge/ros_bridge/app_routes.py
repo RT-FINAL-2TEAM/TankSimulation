@@ -128,7 +128,7 @@ _ASYNC_YOLO_SERVICE = None
 
 
 def _get_async_yolo_service():
-    """Create the optional async YOLO worker lazily."""
+    """선택적 async YOLO worker를 lazy 방식으로 생성한다."""
     global _ASYNC_YOLO_SERVICE
     if _ASYNC_YOLO_SERVICE is None:
         if get_detector is None:
@@ -271,7 +271,7 @@ def _resolve_static_map_path() -> Path:
     except Exception:
         pass
 
-    # Source-tree fallback: .../src/ros_bridge/ros_bridge/app_routes.py -> .../src
+    # source tree fallback: .../src/ros_bridge/ros_bridge/app_routes.py -> .../src
     return Path(__file__).resolve().parents[2] / "rviz_visualization" / "map" / "finalmap.map"
 
 
@@ -310,7 +310,7 @@ def _map_object_category(name: Any) -> str:
 
 
 def _overview_terrain_zones() -> Dict[str, Any]:
-    """Manual terrain zones traced from the supplied top-down map overview."""
+    """제공된 top-down map overview에서 수작업으로 따낸 terrain zone들."""
 
     return {
         "source": "user_overview_image",
@@ -876,7 +876,7 @@ def route_get_action():
 
 @app.route("/detect", methods=["POST"])
 def route_detect():
-    """Tank Challenge official POST /detect endpoint with optional async YOLO and live view."""
+    """Tank Challenge 공식 POST /detect endpoint. 선택적 async YOLO와 live view를 지원한다."""
 
     image = request.files.get("image")
     if image is None:
@@ -891,7 +891,7 @@ def route_detect():
         path = IMAGE_DIR / f"detect_{int(now_wall() * 1000)}.jpg"
         path.write_bytes(image_bytes)
 
-    # Store the frame for optional web live view. This does not run YOLO.
+    # 선택적 web live view를 위해 frame을 저장한다. 여기서는 YOLO를 실행하지 않는다.
     frame_shape = None
     if LIVE_VIEW_ENABLED:
         try:
@@ -924,7 +924,7 @@ def route_detect():
             detections = []
             metadata["yolo_error"] = str(exc)
 
-    # Add detector debug metadata when available. In async mode, the frame shape above is preferred.
+    # detector debug metadata가 있으면 추가한다. async 모드에서는 위에서 구한 frame shape를 우선한다.
     if get_detector is not None:
         try:
             debug = get_detector().debug_state()
@@ -953,7 +953,7 @@ def route_detect():
 
 @app.route("/debug/yolo", methods=["GET"])
 def route_debug_yolo():
-    """Return current embedded YOLO runtime/debug state."""
+    """현재 내장 YOLO runtime/debug 상태를 반환한다."""
     if get_detector is None:
         return jsonify({"loaded": False, "importError": str(_YOLO_IMPORT_ERROR)})
     try:
@@ -964,7 +964,7 @@ def route_debug_yolo():
 
 @app.route("/api/static-map", methods=["GET"])
 def route_static_map():
-    """Return the static terrain/object map used by the browser MFD."""
+    """browser MFD가 사용하는 static terrain/object map을 반환한다."""
     try:
         return jsonify(_load_static_map_payload())
     except Exception as exc:  # noqa: BLE001
@@ -973,7 +973,7 @@ def route_static_map():
 
 @app.route("/api/static-map/overview", methods=["GET"])
 def route_static_map_overview():
-    """Return the top-down map overview texture when one is available."""
+    """사용 가능한 경우 top-down map overview texture를 반환한다."""
     try:
         overview_path = _resolve_static_map_overview_path()
         if not overview_path.exists():
@@ -985,7 +985,7 @@ def route_static_map_overview():
 
 @app.route("/api/dashboard/state", methods=["GET"])
 def route_dashboard_state():
-    """Combined state payload for the browser MFD dashboard."""
+    """browser MFD dashboard용으로 합쳐진 state payload."""
     payload: Dict[str, Any] = {
         "serverTime": now_wall(),
         "mode": TANK_MODE,
@@ -1102,7 +1102,7 @@ def route_dashboard_state():
 
 @app.route("/view", methods=["GET"])
 def route_live_view():
-    """Browser live view for latest /detect image and detection overlay."""
+    """최신 /detect image와 detection overlay를 보여주는 browser live view."""
     if not LIVE_VIEW_ENABLED:
         return jsonify({"enabled": False, "error": "TANK_LIVE_VIEW is false"}), 404
     return live_view.render_view_page()
@@ -1110,7 +1110,7 @@ def route_live_view():
 
 @app.route("/video_feed", methods=["GET"])
 def route_video_feed():
-    """MJPEG stream used by /view."""
+    """/view가 사용하는 MJPEG stream."""
     if not LIVE_VIEW_ENABLED:
         return jsonify({"enabled": False, "error": "TANK_LIVE_VIEW is false"}), 404
     return live_view.video_response(web_fps=LIVE_VIEW_FPS, jpeg_quality=LIVE_VIEW_JPEG_QUALITY)
@@ -1118,7 +1118,7 @@ def route_video_feed():
 
 @app.route("/debug/live_view", methods=["GET"])
 def route_debug_live_view():
-    """Return current live-view and async YOLO state."""
+    """현재 live-view와 async YOLO 상태를 반환한다."""
     state = live_view.debug_state() if LIVE_VIEW_ENABLED else {"enabled": False}
     state["asyncYoloEnabled"] = YOLO_ASYNC_ENABLED
     if YOLO_ASYNC_ENABLED and _ASYNC_YOLO_SERVICE is not None:
@@ -1131,7 +1131,7 @@ def route_debug_live_view():
 
 @app.route("/debug_state", methods=["GET"])
 def route_debug_state_alias():
-    """Compatibility alias for team live-view debug endpoint."""
+    """팀 live-view debug endpoint에 대한 호환용 alias."""
     return route_debug_live_view()
 
 

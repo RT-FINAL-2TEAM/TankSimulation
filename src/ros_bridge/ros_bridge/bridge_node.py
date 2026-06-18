@@ -66,7 +66,7 @@ from .utils import (
 
 
 ############################################################
-# 2. RosBridge Node Class
+# 2. RosBridge 노드 클래스
 ############################################################
 # RosBridge는 Flask 서버와 ROS2 topic 사이를 연결하는 중심 노드다.
 class RosBridge(Node):
@@ -77,13 +77,13 @@ class RosBridge(Node):
         # ROS2 graph에 표시될 node 이름을 지정하고 Node 부모 클래스를 초기화한다.
         super().__init__("tank_ros_bridge_node")
 
-        # Control command subscriber and diagnostic timer must not be blocked by
-        # heavy state publishing callbacks. Use separate callback groups.
+        # 제어 명령 subscriber와 진단 timer가 무거운 상태 publish callback에 막히면
+        # 안 되므로, 서로 다른 callback group을 쓴다.
         self.control_callback_group = ReentrantCallbackGroup()
         self.timer_callback_group = ReentrantCallbackGroup()
 
         # ----------------------------------------------------
-        # Official endpoint based topics
+        # 공식 endpoint 기반 topic들
         # ----------------------------------------------------
         # Publisher 생성: '/tank/api/init/config' topic으로 String 메시지를 publish한다.
         self.pub_init_config = self.create_publisher(String, "/tank/api/init/config", 10)
@@ -157,7 +157,7 @@ class RosBridge(Node):
         self.pub_collision_point_map = self.create_publisher(PointStamped, "/tank/api/collision/point_map", 10)
 
         # ----------------------------------------------------
-        # Stable high-level topics for algorithm/RViz
+        # 알고리즘/RViz용 안정 high-level topic들
         # ----------------------------------------------------
         # Publisher 생성: '/tank/state/latest' topic으로 String 메시지를 publish한다.
         self.pub_state_latest = self.create_publisher(String, "/tank/state/latest", 10)
@@ -174,7 +174,7 @@ class RosBridge(Node):
         # Publisher 생성: '/tank/goal/pose' topic으로 PoseStamped 메시지를 publish한다.
         self.pub_destination = self.create_publisher(PoseStamped, "/tank/goal/pose", 10)
         # ----------------------------------------------------
-        # Stable derived topics for RViz / APF / planner nodes
+        # RViz / APF / planner 노드용 안정 파생 topic들
         # ----------------------------------------------------
         # LiDAR 전용 high-level topic(/tank/sensor/lidar/*)은 lidar 패키지가 담당한다.
         # ros_bridge는 /tank/api/info/raw와 pose/state처럼 HTTP 원본과 기본 상태만 publish한다.
@@ -187,7 +187,7 @@ class RosBridge(Node):
         self.pub_event_collision = self.create_publisher(String, "/tank/event/collision", 10)
 
         # ----------------------------------------------------
-        # Backward-compatible aliases from previous scripts
+        # 이전 스크립트와의 하위호환 alias들
         # ----------------------------------------------------
         # Publisher 생성: '/tank/latest_state' topic으로 String 메시지를 publish한다.
         self.pub_latest_state_alias = self.create_publisher(String, "/tank/latest_state", 10)
@@ -205,7 +205,7 @@ class RosBridge(Node):
         self.pub_bullet_alias = self.create_publisher(PointStamped, "/tank/bullet_impact", 10)
 
         # ----------------------------------------------------
-        # ROS2 -> simulator command subscriptions
+        # ROS2 -> 시뮬레이터 명령 subscription들
         # ----------------------------------------------------
         # Subscriber 생성: '/tank/control/command' topic의 String 메시지를 받아 self.on_control_command callback으로 처리한다.
         self.sub_control_command = self.create_subscription(
@@ -233,7 +233,7 @@ class RosBridge(Node):
         )
 
         # ----------------------------------------------------
-        # Sensor fusion data logging subscription
+        # 센서 융합 데이터 로깅 subscription
         # ----------------------------------------------------
         self.sub_fused_objects = self.create_subscription(
             String,
@@ -257,7 +257,7 @@ class RosBridge(Node):
         )
 
         # ----------------------------------------------------
-        # Internal shared state
+        # 내부 공유 상태
         # ----------------------------------------------------
         # 공유 상태 보호용 Lock이다. Flask thread와 ROS2 callback thread가 동시에 접근하는 것을 막는다.
         self._lock = threading.Lock()
@@ -267,7 +267,7 @@ class RosBridge(Node):
         self._latest_command_stamp: Optional[float] = None
         # 다음 /get_action 응답 1회에만 사용할 override 명령을 저장한다.
         self._one_shot_override: Optional[Dict[str, Any]] = None
-        # Throttled diagnostics for command receive path.
+        # 명령 수신 경로의 진단 로그를 throttle(빈도 제한)하기 위한 값이다.
         self._last_command_log_wall: float = 0.0
 
         # /init, /info, /get_action 등 endpoint별 수신 횟수를 기록한다.
@@ -330,11 +330,11 @@ class RosBridge(Node):
         self.get_logger().info("ROS2 command input: /tank/control/command")
 
     # --------------------------------------------------------
-    # ROS message helpers
+    # ROS 메시지 helper들
     # --------------------------------------------------------
 
     ########################################################
-    # 4. ROS Message Publish Helper Functions
+    # 4. ROS 메시지 publish helper 함수들
     ########################################################
     # dict/list 데이터를 JSON 문자열로 바꾸어 std_msgs/String topic에 publish하는 helper다.
     def publish_json(self, publisher, data: Any) -> None:
@@ -426,7 +426,7 @@ class RosBridge(Node):
             self._latest[key] = value
 
     def get_latest_snapshot(self) -> Dict[str, Any]:
-        """Return a JSON-friendly copy of the bridge state for dashboard views."""
+        """대시보드 view용으로 bridge 상태를 JSON 친화적인 복사본으로 반환한다."""
         now = now_wall()
         with self._lock:
             latest_command_age = None
@@ -449,11 +449,11 @@ class RosBridge(Node):
             }
 
     # --------------------------------------------------------
-    # Command callbacks
+    # 명령 callback들
     # --------------------------------------------------------
 
     ########################################################
-    # 5. ROS2 -> Simulator Command Callbacks
+    # 5. ROS2 -> 시뮬레이터 명령 callback들
     ########################################################
     # 지속 제어 명령 topic(/tank/control/command)을 수신했을 때 실행되는 callback이다.
     def on_control_command(self, msg: String) -> None:
@@ -573,11 +573,11 @@ class RosBridge(Node):
         return fallback_command(), "auto_fallback_no_fresh_command"
 
     # --------------------------------------------------------
-    # Parsing and publishing handlers
+    # 파싱 및 publish handler들
     # --------------------------------------------------------
 
     ########################################################
-    # 6. Flask Endpoint Data -> ROS2 Topic Handlers
+    # 6. Flask endpoint 데이터 -> ROS2 topic handler들
     ########################################################
     # Flask route가 handle_init를 호출하면, 여기서 데이터를 ROS2 topic으로 변환/publish한다.
     def handle_init(self, config: Dict[str, Any]) -> None:
@@ -965,7 +965,7 @@ class RosBridge(Node):
 
 
     ########################################################
-    # 7. Periodic Latest State Publisher
+    # 7. 주기적 최신 상태 publisher
     ########################################################
     # timer callback: 최신 상태 전체를 10Hz로 주기 publish한다.
     def publish_latest_state(self) -> None:

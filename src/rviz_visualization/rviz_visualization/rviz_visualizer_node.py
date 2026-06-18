@@ -135,7 +135,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 # 판단/계산 로직은 config.py에 넣지 않는다.
 from .config import (
     ############################################################
-    # Terrain / simulator map settings
+    # Terrain / 시뮬레이터 map 설정
     ############################################################
     TERRAIN_MIN_X,
     TERRAIN_MAX_X,
@@ -158,7 +158,7 @@ from .config import (
     SPAWN_MARKER_SIZE,
 
     ############################################################
-    # Tank / object marker scale
+    # 전차 / object marker scale
     ############################################################
     ENEMY_TANK_SCALE_X,
     ENEMY_TANK_SCALE_Y,
@@ -190,7 +190,7 @@ from .config import (
     HEADING_DEGREE_KEY_ENEMY,
 
     ############################################################
-    # Input topics
+    # 입력 topic
     ############################################################
     TOPIC_ENEMY_POSE,
     TOPIC_GOAL_POSE,
@@ -199,7 +199,7 @@ from .config import (
     TOPIC_PLAYER_POSE,
 
     ############################################################
-    # RViz output topics
+    # RViz 출력 topic
     ############################################################
     TOPIC_RVIZ_LIDAR_MARKERS,
     TOPIC_RVIZ_OBJECT_MARKERS,
@@ -220,7 +220,7 @@ from .config import (
     LOCAL_TARGET_MARKER_RADIUS,
 
     ############################################################
-    # Timer
+    # 타이머
     ############################################################
     VISUALIZATION_HZ,
 )
@@ -259,11 +259,11 @@ from .marker_utils import (
 
 
 def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
-    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+    """PointCloud2의 XYZ 필드를 연속된 float32 (N, 3) 배열로 반환한다.
 
-    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
-    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
-    node usable on older sensor_msgs_py versions.
+    ROS2 Humble 이상의 sensor_msgs_py는 read_points_numpy()를 제공하는데, 이는
+    LiDAR hit마다 Python dict/list 객체를 만드는 것을 피한다. fallback은 더 오래된
+    sensor_msgs_py 버전에서도 node가 동작하도록 유지한다.
     """
     try:
         arr = point_cloud2.read_points_numpy(
@@ -505,7 +505,7 @@ class RvizVisualizerNode(Node):
             10,
         )
 
-        # Potential Field/APF vector subscribe.
+        # Potential Field/APF vector를 subscribe한다.
         self.create_subscription(
             Vector3Stamped,
             TOPIC_POTENTIAL_REPULSIVE_VECTOR,
@@ -565,7 +565,7 @@ class RvizVisualizerNode(Node):
             10,
         )
 
-        # LiDAR POINTS marker publish.
+        # LiDAR POINTS marker를 publish한다.
         self.lidar_marker_pub = self.create_publisher(
             MarkerArray,
             TOPIC_RVIZ_LIDAR_MARKERS,
@@ -579,7 +579,7 @@ class RvizVisualizerNode(Node):
             10,
         )
 
-        # Potential Field/APF vector marker publish.
+        # Potential Field/APF vector marker를 publish한다.
         self.potential_marker_pub = self.create_publisher(
             MarkerArray,
             TOPIC_RVIZ_POTENTIAL_MARKERS,
@@ -753,7 +753,7 @@ class RvizVisualizerNode(Node):
             self.obstacles = []
 
     def lidar_points_callback(self, msg: PointCloud2) -> None:
-        """Store obstacle-only LiDAR PointCloud2 as lightweight map-frame XYZ tuples."""
+        """obstacle-only LiDAR PointCloud2를 가벼운 map-frame XYZ tuple로 저장한다."""
         try:
             points = pointcloud2_to_xyz_array(msg)
             if LIDAR_VISUALIZATION_SAMPLE_STEP > 1 and points.shape[0] > 0:
@@ -764,7 +764,7 @@ class RvizVisualizerNode(Node):
             self.lidar_points = []
 
     def lidar_ray_points_callback(self, msg: PointCloud2) -> None:
-        """Store all detected LiDAR endpoints for live ray visualization."""
+        """실시간 ray 시각화를 위해 detected된 모든 LiDAR endpoint를 저장한다."""
         try:
             points = pointcloud2_to_xyz_array(msg)
             if LIDAR_VISUALIZATION_SAMPLE_STEP > 1 and points.shape[0] > 0:
@@ -775,11 +775,11 @@ class RvizVisualizerNode(Node):
             self.lidar_ray_points = []
 
     def lidar_origin_callback(self, msg: PointStamped) -> None:
-        """Store latest map-frame LiDAR origin for ray start point."""
+        """ray 시작점으로 쓸 최신 map-frame LiDAR origin을 저장한다."""
         self.lidar_origin = msg
 
     def _current_lidar_origin_xyz(self) -> Optional[Tuple[float, float, float]]:
-        """Return LiDAR origin, falling back to player pose if origin topic is not available yet."""
+        """LiDAR origin을 반환한다. origin topic이 아직 없으면 player pose로 fallback한다."""
         if self.lidar_origin is not None:
             p = self.lidar_origin.point
             return (float(p.x), float(p.y), float(p.z))
@@ -1270,7 +1270,7 @@ class RvizVisualizerNode(Node):
                 )
             )
 
-        # MarkerArray publish.
+        # MarkerArray를 publish한다.
         self.object_marker_pub.publish(markers)
 
 
@@ -1370,7 +1370,7 @@ class RvizVisualizerNode(Node):
 
         markers = MarkerArray()
 
-        # Delete old ray/origin markers from earlier versions.
+        # 이전 버전에서 쓰던 옛 ray/origin marker를 삭제한다.
         for ns, mid in (("lidar_live_rays", 10), ("lidar_origin", 11)):
             delete_marker = Marker()
             delete_marker.header.frame_id = MAP_FRAME
@@ -1380,7 +1380,7 @@ class RvizVisualizerNode(Node):
             delete_marker.action = Marker.DELETE
             markers.markers.append(delete_marker)
 
-        # 0) All LiDAR hit points.  This includes ground/floor/terrain points.
+        # 0) 모든 LiDAR hit point. 여기에는 지면/바닥/지형 point가 포함된다.
         if self.lidar_ray_points:
             scan_point_size = max(0.45, float(LIDAR_POINT_SIZE) * 1.8)
             markers.markers.append(
@@ -1394,7 +1394,7 @@ class RvizVisualizerNode(Node):
                 )
             )
 
-        # 1) Obstacle-only hit points after terrain separation.
+        # 1) 지형 분리 후 obstacle-only hit point.
         if self.lidar_points:
             detected_point_size = max(0.60, float(LIDAR_POINT_SIZE) * 2.4)
             markers.markers.append(

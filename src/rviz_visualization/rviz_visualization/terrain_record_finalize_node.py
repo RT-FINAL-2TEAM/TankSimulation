@@ -45,16 +45,16 @@ from std_msgs.msg import ColorRGBA
 
 try:
     import CSF  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
+except Exception:  # pragma: no cover - 선택 의존성
     CSF = None
 
 
 def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
-    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+    """PointCloud2의 XYZ 필드를 연속 메모리 float32 (N, 3) 배열로 반환한다.
 
-    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
-    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
-    node usable on older sensor_msgs_py versions.
+    ROS2 Humble 이상의 sensor_msgs_py는 read_points_numpy()를 제공하는데, 이는
+    모든 LiDAR hit마다 파이썬 dict/list 객체를 만드는 것을 피한다. fallback은
+    구버전 sensor_msgs_py에서도 노드를 사용할 수 있게 유지한다.
     """
     try:
         arr = point_cloud2.read_points_numpy(
@@ -86,7 +86,7 @@ class TerrainRecordFinalizeNode(Node):
         super().__init__("terrain_record_finalize_node")
 
         # -----------------------------
-        # Parameters
+        # 파라미터
         # -----------------------------
         self.declare_parameter("input_topic", "/tank/sensor/lidar/all_detected_points_map")
         self.declare_parameter("map_frame", "tank_map")
@@ -109,7 +109,7 @@ class TerrainRecordFinalizeNode(Node):
         self.declare_parameter("wireframe_max_height_gap", 1.5)
         self.declare_parameter("wireframe_connect_diagonal", False)
 
-        # 장애물 제거용 local low-surface prefilter.
+        # 장애물 제거용 국소 저표면(low-surface) prefilter.
         self.declare_parameter("terrain_prefilter_enabled", True)
         self.declare_parameter("terrain_cell_size", 0.5)
         self.declare_parameter("terrain_low_percentile", 45.0)
@@ -143,7 +143,7 @@ class TerrainRecordFinalizeNode(Node):
         self.save_dir.mkdir(parents=True, exist_ok=True)
 
         # -----------------------------
-        # Internal state
+        # 내부 상태
         # -----------------------------
         self._recording_points: List[List[float]] = []
         self._received_frames = 0
@@ -159,7 +159,7 @@ class TerrainRecordFinalizeNode(Node):
         self._last_summary = "아직 finalize되지 않았습니다."
 
         # -----------------------------
-        # ROS interfaces
+        # ROS 인터페이스
         # -----------------------------
         # JSON(String) 대신 PointCloud2로 직접 구독
         self.create_subscription(PointCloud2, self.input_topic, self.on_lidar_pc2, 30)
@@ -193,7 +193,7 @@ class TerrainRecordFinalizeNode(Node):
         )
 
     # ------------------------------------------------------------------
-    # Input parsing (Optimized for PointCloud2)
+    # 입력 파싱 (PointCloud2에 최적화됨)
     # ------------------------------------------------------------------
     def on_lidar_pc2(self, msg: PointCloud2) -> None:
         """바이너리 PointCloud2 데이터를 직접 넘파이 배열로 변환하여 누적 기록합니다."""
@@ -219,7 +219,7 @@ class TerrainRecordFinalizeNode(Node):
             )
 
     # ------------------------------------------------------------------
-    # Services
+    # 서비스
     # ------------------------------------------------------------------
     def on_finalize_service(self, request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
         ok, summary = self.finalize_map()
@@ -261,7 +261,7 @@ class TerrainRecordFinalizeNode(Node):
             self.finalize_map()
 
     # ------------------------------------------------------------------
-    # Final map generation
+    # 최종 지도 생성
     # ------------------------------------------------------------------
     def finalize_map(self) -> Tuple[bool, str]:
         if len(self._recording_points) < self.min_points_to_finalize:
@@ -371,7 +371,7 @@ class TerrainRecordFinalizeNode(Node):
                 csf.params.cloth_resolution = 0.5
                 csf.params.rigidness = 3
                 csf.params.class_threshold = 0.25
-                # Python wrapper에 따라 interations 오타 이름을 사용한다.
+                # 파이썬 wrapper에 따라 interations 오타 이름을 사용한다.
                 if hasattr(csf.params, "interations"):
                     csf.params.interations = 500
                 elif hasattr(csf.params, "iterations"):
@@ -396,7 +396,7 @@ class TerrainRecordFinalizeNode(Node):
         return points[mask], points[~mask], "fallback_z_filter"
 
     # ------------------------------------------------------------------
-    # Publishing / visualization
+    # 발행 / 시각화
     # ------------------------------------------------------------------
     def on_publish_timer(self) -> None:
         if self._finalized:
@@ -578,7 +578,7 @@ class TerrainRecordFinalizeNode(Node):
         return marker
 
     # ------------------------------------------------------------------
-    # Saving
+    # 저장
     # ------------------------------------------------------------------
     def save_outputs(
         self,
@@ -588,8 +588,8 @@ class TerrainRecordFinalizeNode(Node):
         non_ground: np.ndarray,
         method: str,
     ) -> None:
-        import json # Local import for saving meta
-        
+        import json  # meta 저장용 지역 import
+
         np.save(str(out_prefix) + "_accumulated.npy", accumulated)
         np.save(str(out_prefix) + "_ground.npy", ground)
         np.save(str(out_prefix) + "_non_ground.npy", non_ground)
@@ -599,7 +599,7 @@ class TerrainRecordFinalizeNode(Node):
             np.savetxt(str(out_prefix) + "_ground.csv", ground, delimiter=",", header="x,y,z", comments="")
             np.savetxt(str(out_prefix) + "_non_ground.csv", non_ground, delimiter=",", header="x,y,z", comments="")
 
-        import time # Local
+        import time  # 지역 import
         meta = {
             "created_wall_time": time.time(),
             "map_frame": self.map_frame,

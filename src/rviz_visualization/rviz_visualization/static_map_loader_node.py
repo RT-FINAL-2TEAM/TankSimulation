@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-Static map loader for Tank Challenge RViz / planning preparation.
+Tank Challenge RViz / 경로계획 준비용 정적 맵 로더.
 
-This node treats map/*.map files as pre-known drone reconnaissance data and
-publishes them as ROS2 static layers.
+이 노드는 map/*.map 파일을 사전에 알고 있는 드론 정찰 데이터로 취급해
+ROS2 정적 레이어로 발행한다.
 
-Design boundary:
-- This node does NOT use live LiDAR, camera, YOLO, or tracking-mode data.
-- Live sensor topics remain handled by ros_bridge / potential.
-- Risk and cost weights are intentionally stored in YAML so they can later be
-  replaced by reinforcement-learning derived values without changing code.
+설계 경계:
+- 이 노드는 실시간 LiDAR, 카메라, YOLO, 추적 모드 데이터를 사용하지 않는다.
+- 실시간 센서 토픽은 계속 ros_bridge / potential이 다룬다.
+- 위험도/코스트 가중치는 의도적으로 YAML에 저장한다 — 나중에 코드 변경 없이
+  강화학습으로 도출한 값으로 교체할 수 있도록 하기 위함이다.
 
-Coordinate convention:
-- Unity raw: x = left/right, y = height, z = forward/backward
+좌표 변환 규약:
+- Unity raw: x = 좌/우, y = 높이, z = 전/후
 - RViz tank_map: x = raw.x, y = raw.z, z = raw.y
 """
 
@@ -36,7 +36,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 try:
     import yaml
-except Exception:  # pragma: no cover - ROS2 normally ships PyYAML.
+except Exception:  # pragma: no cover - ROS2는 보통 PyYAML을 함께 배포한다.
     yaml = None
 
 
@@ -54,7 +54,7 @@ class MapObject:
 
 
 class StaticMapLoaderNode(Node):
-    """Publish recon/mission .map files as RViz markers and planning grids."""
+    """recon/mission .map 파일을 RViz 마커와 경로계획용 그리드로 발행한다."""
 
     def __init__(self) -> None:
         super().__init__("tank_static_map_loader_node")
@@ -164,7 +164,7 @@ class StaticMapLoaderNode(Node):
         self.timer = self.create_timer(self.publish_period_sec, self.publish_all)
 
     # ------------------------------------------------------------------
-    # Loading / parsing
+    # 로딩 / 파싱
     # ------------------------------------------------------------------
     def _load_config(self, path: Path) -> Dict[str, Any]:
         if not path.exists():
@@ -228,7 +228,7 @@ class StaticMapLoaderNode(Node):
         return categories.get(category, categories.get("unknown", {}))
 
     # ------------------------------------------------------------------
-    # Marker generation
+    # 마커 생성
     # ------------------------------------------------------------------
     def _make_object_markers(
         self,
@@ -261,7 +261,7 @@ class StaticMapLoaderNode(Node):
             marker.color.b = b
             marker.color.a = a
 
-            # Keep metadata visible in RViz selection panel.
+            # RViz 선택 패널에서 메타데이터가 보이도록 유지한다.
             marker.text = obj.prefab_name
             msg.markers.append(marker)
         return msg
@@ -370,7 +370,7 @@ class StaticMapLoaderNode(Node):
         )
 
     # ------------------------------------------------------------------
-    # Grid / risk generation
+    # 그리드 / 위험도 생성
     # ------------------------------------------------------------------
     def _build_grids(self, objects: List[MapObject]) -> Tuple[List[int], List[float]]:
         free_value = int(self.config.get("occupancy", {}).get("free_value", 0))
@@ -526,7 +526,7 @@ class StaticMapLoaderNode(Node):
                     risk[idx] = max(risk[idx], value)
 
     def _quat_to_yaw(self, quat: Dict[str, float]) -> float:
-        # Same convention as the team map_parser.py: Unity yaw is approximated from x/y/z/w.
+        # 팀 map_parser.py와 동일한 규약: Unity yaw를 x/y/z/w로부터 근사한다.
         x = float(quat.get("x", 0.0))
         y = float(quat.get("y", 0.0))
         z = float(quat.get("z", 0.0))
@@ -567,7 +567,7 @@ class StaticMapLoaderNode(Node):
         return msg
 
     # ------------------------------------------------------------------
-    # Raw / summary messages
+    # Raw / summary 메시지
     # ------------------------------------------------------------------
     def _make_raw_msg(self, map_role: str, map_data: Dict[str, Any], objects: List[MapObject]) -> String:
         payload = {
@@ -636,7 +636,7 @@ class StaticMapLoaderNode(Node):
         return dict(sorted(counts.items()))
 
     # ------------------------------------------------------------------
-    # Publishing
+    # 발행
     # ------------------------------------------------------------------
     def publish_all(self) -> None:
         now = self.get_clock().now().to_msg()

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Optional asynchronous YOLO worker for production /detect.
+"""운영용 /detect를 위한 선택적 비동기 YOLO 워커.
 
-The worker processes only the newest frame. /detect can return immediately with
-the most recent completed detections, while metadata tells downstream nodes how
-old that result is.
+워커는 가장 최신 프레임만 처리한다. /detect는 가장 최근에 완료된 검출 결과를
+즉시 반환할 수 있고, metadata가 하위 노드들에게 그 결과가 얼마나 오래된 것인지
+알려준다.
 """
 
 from __future__ import annotations

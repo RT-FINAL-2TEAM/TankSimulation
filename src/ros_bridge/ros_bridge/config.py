@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ############################################################
-# Tank Challenge Flask + ROS2 Bridge Runtime Configuration
+# Tank Challenge Flask + ROS2 Bridge 런타임 설정
 ############################################################
 
 이 파일의 역할
@@ -24,7 +24,7 @@
 """
 
 ############################################################
-# 0. Python standard library imports
+# 0. Python 표준 라이브러리 import
 ############################################################
 
 # os: 환경변수 읽기/설정에 사용한다.
@@ -76,7 +76,7 @@ def load_env_file() -> None:
 load_env_file()
 
 ############################################################
-# 1. OpenMP duplicate runtime workaround
+# 1. OpenMP runtime 중복 로드 우회
 ############################################################
 
 # YOLO, torch, numpy, OpenCV 등을 같은 프로세스에서 사용할 때
@@ -91,7 +91,7 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 
 ############################################################
-# 2. Server mode configuration
+# 2. 서버 운용 모드 설정
 ############################################################
 
 # TANK_MODE는 bridge의 전체 운용 모드를 결정한다.
@@ -116,7 +116,7 @@ if TANK_MODE not in ("monitor", "auto"):
 
 
 ############################################################
-# 3. Flask server network configuration
+# 3. Flask 서버 네트워크 설정
 ############################################################
 
 # HOST는 Flask 서버가 어느 네트워크 인터페이스에서 요청을 받을지 결정한다.
@@ -136,7 +136,7 @@ PORT = int(os.environ.get("TANK_BRIDGE_PORT", "5000"))
 
 
 ############################################################
-# 4. ROS2 control command safety configuration
+# 4. ROS2 제어 명령 안전 설정
 ############################################################
 
 # COMMAND_TTL_SEC는 ROS2 제어 명령의 유효 시간이다.
@@ -170,7 +170,7 @@ if AUTO_FALLBACK not in ("neutral", "stop"):
 
 
 ############################################################
-# 5. Optional local JSON/Image logging
+# 5. 선택적 로컬 JSON/이미지 로깅
 ############################################################
 
 # SAVE_JSONL은 bridge가 수신한 주요 이벤트를 로컬 JSONL 파일로 저장할지 결정한다.
@@ -216,7 +216,7 @@ IMAGE_DIR = Path(os.environ.get("TANK_IMAGE_DIR", "./tank_images"))
 
 
 ############################################################
-# 5-1. YOLO/live-view runtime options
+# 5-1. YOLO/live-view 런타임 옵션
 ############################################################
 
 # TANK_LIVE_VIEW=true이면 ros_bridge 안에서 /view, /video_feed를 제공한다.
@@ -235,7 +235,7 @@ YOLO_ASYNC_LOG_INTERVAL_SEC = float(os.environ.get("TANK_YOLO_ASYNC_LOG_INTERVAL
 
 
 ############################################################
-# 6. /init default simulator start positions
+# 6. /init 기본 시뮬레이터 시작 위치
 ############################################################
 
 # BLUE_START는 아군 전차 시작 좌표다.
@@ -261,7 +261,7 @@ RED_START = (
 
 
 ############################################################
-# 7. /init mode flags from official API
+# 7. 공식 API 기반 /init 모드 플래그
 ############################################################
 
 # ENABLE_DETECT는 /init의 detectMode/detactMode에 대응한다.
@@ -301,7 +301,7 @@ LUX = int(os.environ.get("TANK_LUX", "30000"))
 
 
 ############################################################
-# 8. Coordinate frame names
+# 8. 좌표계 frame 이름
 ############################################################
 
 # UNITY_FRAME은 시뮬레이터 원본 좌표계를 표시하기 위한 ROS frame_id다.

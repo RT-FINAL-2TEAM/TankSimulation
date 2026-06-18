@@ -67,7 +67,7 @@ RViz Marker 기본 개념:
 
 
 ############################################################
-# 1. Type hint import
+# 1. 타입 힌트 import
 ############################################################
 
 # Iterable:
@@ -81,7 +81,7 @@ from typing import Iterable, Tuple
 
 
 ############################################################
-# 2. ROS2 message import
+# 2. ROS2 메시지 import
 ############################################################
 
 # Point:
@@ -109,7 +109,7 @@ from visualization_msgs.msg import Marker
 
 
 ############################################################
-# 3. Color utility
+# 3. 색상 유틸리티
 ############################################################
 
 def make_color(r: float, g: float, b: float, a: float) -> ColorRGBA:
@@ -158,7 +158,7 @@ def make_color(r: float, g: float, b: float, a: float) -> ColorRGBA:
 
 
 ############################################################
-# 4. Cube marker
+# 4. 큐브 marker
 ############################################################
 
 def make_cube_marker(
@@ -218,7 +218,7 @@ def make_cube_marker(
     # 4.1 좌표계 / 식별 정보
     ########################################################
 
-    # RViz가 이 marker를 어떤 frame 기준으로 그릴지 결정
+    # RViz가 이 marker를 어떤 frame 기준으로 그릴지 결정한다
     marker.header.frame_id = frame_id
 
     # marker namespace
@@ -228,7 +228,7 @@ def make_cube_marker(
     marker.id = int(marker_id)
 
     ########################################################
-    # 4.2 Marker 형태 / 동작
+    # 4.2 marker 형태 / 동작
     ########################################################
 
     # CUBE 형태로 표시
@@ -270,7 +270,7 @@ def make_cube_marker(
 
 
 ############################################################
-# 5. Sphere marker
+# 5. 구(sphere) marker
 ############################################################
 
 def make_sphere_marker(
@@ -333,7 +333,7 @@ def make_sphere_marker(
     marker.id = int(marker_id)
 
     ########################################################
-    # 5.2 Marker 형태 / 동작
+    # 5.2 marker 형태 / 동작
     ########################################################
 
     marker.type = Marker.SPHERE
@@ -366,7 +366,7 @@ def make_sphere_marker(
 
 
 ############################################################
-# 6. Points marker
+# 6. 점(points) marker
 ############################################################
 
 def make_points_marker(
@@ -432,7 +432,7 @@ def make_points_marker(
     marker.id = int(marker_id)
 
     ########################################################
-    # 6.2 Marker 형태 / 동작
+    # 6.2 marker 형태 / 동작
     ########################################################
 
     marker.type = Marker.POINTS
@@ -473,7 +473,7 @@ def make_points_marker(
 
 
 ############################################################
-# 7. Risk color mapping
+# 7. 위험도 → 색상 매핑
 ############################################################
 
 def risk_to_color(risk: float) -> ColorRGBA:
@@ -533,7 +533,7 @@ def risk_to_color(risk: float) -> ColorRGBA:
     return make_color(r, 0.15, 1.0 - r, 0.45)
 
 ############################################################
-# 8. Line list marker
+# 8. 선분 목록(line list) marker
 ############################################################
 
 def make_line_list_marker(
@@ -585,7 +585,7 @@ def make_line_list_marker(
     return marker
 
 ############################################################
-# 9. Arrow marker by start/end points
+# 9. 시작점/끝점 기준 화살표(arrow) marker
 ############################################################
 
 def make_arrow_marker(
@@ -639,9 +639,9 @@ def make_arrow_marker(
     marker.points.append(p1)
 
     # ARROW marker scale 의미:
-    #   scale.x = shaft diameter
-    #   scale.y = head diameter
-    #   scale.z = head length
+    #   scale.x = 화살대 지름(shaft diameter)
+    #   scale.y = 화살촉 지름(head diameter)
+    #   scale.z = 화살촉 길이(head length)
     marker.scale.x = float(shaft_diameter)
     marker.scale.y = float(head_diameter)
     marker.scale.z = float(head_length)
