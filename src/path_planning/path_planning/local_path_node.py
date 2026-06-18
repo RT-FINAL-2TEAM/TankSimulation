@@ -561,8 +561,12 @@ class LocalPathNode(Node):
 
             self.recon_logger.total_sim_time = self.sim_time
 
-            # 1) Restart 감지
-            if self.sim_time < self._last_sim_time - 2.0:
+            # 1) Restart 감지 — 진짜 시뮬 재시작(클럭이 0 근처로 리셋)일 때만 로거를 폐기한다.
+            #    주행 중 클럭 지터(sim_time이 여전히 높은데 ±수초 되감김; /tank/info 혼선/네트워크
+            #    재정렬에서 발생)에 통째 폐기하면 루트 첫 레그가 통째로 날아간다. 그래서 'backward>2s'에
+            #    더해 'sim_time이 리셋 임계 미만(=0 근처)'을 AND 조건으로 둔다.
+            _RESTART_RESET_ABS_S = 5.0
+            if self.sim_time < self._last_sim_time - 2.0 and self.sim_time < _RESTART_RESET_ABS_S:
                 if not self._report_saved:
                     self.recon_logger.save_report()
                 self.recon_logger = ReconLogger(self.route_id, self.route_map_name, self.recon_report_dir)
