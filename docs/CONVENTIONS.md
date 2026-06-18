@@ -31,6 +31,8 @@
 
 ## 리팩토링 단계
 
-- **A(안전)**: 죽은코드 제거 + 주석 한글 통일. AST 불변.
-- **B(중간)**: 중복 함수 통합, `terrain_record_finalize_node` 중복 해소. 시뮬 검증 필요.
+- **A(안전) ✅완료**: 죽은코드 제거 + 주석 한글 통일. AST 불변.
+- **B(중간) ✅완료**: 중복 함수 통합 + `terrain_record_finalize_node` 중복 해소.
+  - 함수 통합: `pointcloud2_to_xyz_array`(8곳→신규 `tank_common` 패키지), `prefab_half_size`(2곳→`path_planning.config`), `distance`(2곳→`lidar.path_blocking`). AST·호출값 검증.
+  - terrain 노드: **`ground_division`를 canonical**로 단일화(상위집합·dual-input). rviz copy 삭제, rviz launch 2개를 gd 노드로 repoint(`use_preclassified_lidar:False`로 단일입력 동작 보존). 두 노드의 finalize/save 로직이 갈라진 fork라 **지형 시뮬 1회로 동치 확인 필요**.
 - **C(위험)**: 비대 파일 모듈 분할. 한 번에 한 파일 + 스모크.
