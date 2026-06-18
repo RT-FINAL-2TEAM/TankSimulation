@@ -60,13 +60,16 @@ def generate_launch_description():
                 output="screen",
             ),
             # C. 누적 지형(Final Terrain) 마커 발행 노드
+            #    지형 노드 단일출처화: rviz copy 삭제 → ground_division 노드로 통합(2026-06-18).
             Node(
-                package="rviz_visualization",
+                package="ground_division",
                 executable="terrain_record_finalize_node",
                 name="terrain_record_finalize_node",
                 output="screen",
                 parameters=[
                     {
+                        # gd 노드를 legacy 단일입력 모드로(기존 rviz copy와 동일 동작 보존).
+                        "use_preclassified_lidar": False,
                         "input_topic": "/tank/sensor/lidar/all_detected_points_map",
                         "map_frame": "tank_map",
                         "auto_finalize_after_idle_sec": 0.0,

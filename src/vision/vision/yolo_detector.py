@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-YOLO detector wrapper for Tank Challenge.
+Tank Challenge용 YOLO detector 래퍼.
 
-This module is intentionally independent from Flask and ROS2 so it can be used by:
-- ros_bridge.app_routes /detect endpoint
-- a standalone debug server
-- future ROS2 perception nodes
+이 모듈은 Flask·ROS2와 일부러 분리해 두어 다음 어디에서나 쓸 수 있다:
+- ros_bridge.app_routes의 /detect 엔드포인트
+- 독립 실행 디버그 서버
+- 향후 ROS2 인지 노드
 
-The detector returns the official Tank Challenge /detect response format:
+detector는 공식 Tank Challenge /detect 응답 포맷을 반환한다:
 [
   {
     "className": "person",
@@ -36,7 +36,7 @@ import yaml
 
 try:
     from ament_index_python.packages import get_package_share_directory
-except Exception:  # pragma: no cover - only unavailable outside ROS2 runtime
+except Exception:  # pragma: no cover - ROS2 런타임 밖에서만 사용 불가
     get_package_share_directory = None
 
 from vision.config import DEFAULT_CLASS_COLORS, DEFAULT_CONFIG_FILENAME, DEFAULT_MODEL_FILENAME
@@ -77,7 +77,7 @@ def _resolve_package_share_file(package_name: str, *parts: str) -> Optional[Path
 
 def _resolve_source_file(*parts: str) -> Path:
     # .../vision/vision/yolo_detector.py
-    # source root package dir is parent.parent
+    # 소스 루트 패키지 디렉터리는 parent.parent
     return Path(__file__).resolve().parents[1].joinpath(*parts)
 
 
@@ -134,9 +134,9 @@ class YoloRuntimeConfig:
     min_interval_sec: float = 0.12
     warmup_runs: int = 2
     aliases: Dict[str, str] = field(default_factory=lambda: {"blue": "person", "red": "person", "tank": "tank", "Tank": "tank"})
-    canonical_classes: set = field(default_factory=lambda: {"rock", "person", "tank", "tent"})
-    ignored_classes: set = field(default_factory=lambda: {"car", "wall"})
-    class_fixed_ids: Dict[str, int] = field(default_factory=lambda: {"tank": 1, "rock": 2, "person": 3, "tent": 4})
+    canonical_classes: set = field(default_factory=lambda: {"car", "person", "tank", "rock", "house", "tent"})
+    ignored_classes: set = field(default_factory=lambda: {"wall"})
+    class_fixed_ids: Dict[str, int] = field(default_factory=lambda: {"car": 0, "person": 1, "tank": 2, "rock": 3, "house": 4, "tent": 5})
     class_colors: Dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CLASS_COLORS))
     default_box_color: str = "#00FF00"
     default_confidence: float = 0.20
@@ -171,9 +171,9 @@ class YoloRuntimeConfig:
         colors = dict(DEFAULT_CLASS_COLORS)
         colors.update(dict(_deep_get(raw, ["classes", "colors"], {}) or {}))
         aliases = dict(_deep_get(raw, ["classes", "aliases"], {}) or {"blue": "person", "red": "person", "tank": "tank", "Tank": "tank"})
-        canonical = set(str(x).strip().lower() for x in (_deep_get(raw, ["classes", "canonical"], ["rock", "person", "tank", "tent"]) or []))
-        ignored = set(str(x).strip().lower() for x in (_deep_get(raw, ["classes", "ignored"], ["car", "wall"]) or []))
-        fixed_ids_raw = dict(_deep_get(raw, ["classes", "fixed_ids"], {}) or {"tank": 1, "rock": 2, "person": 3, "tent": 4})
+        canonical = set(str(x).strip().lower() for x in (_deep_get(raw, ["classes", "canonical"], ["car", "person", "tank", "rock", "house", "tent"]) or []))
+        ignored = set(str(x).strip().lower() for x in (_deep_get(raw, ["classes", "ignored"], ["wall"]) or []))
+        fixed_ids_raw = dict(_deep_get(raw, ["classes", "fixed_ids"], {}) or {"car": 0, "person": 1, "tank": 2, "rock": 3, "house": 4, "tent": 5})
         fixed_ids = {str(k).strip().lower(): int(v) for k, v in fixed_ids_raw.items()}
 
         thresholds = dict(_deep_get(raw, ["classes", "confidence_thresholds"], {}) or {})
@@ -227,7 +227,7 @@ class YoloRuntimeConfig:
 
 
 class TankYoloDetector:
-    """Thread-safe YOLO detector for /detect images."""
+    """/detect 이미지용 스레드 안전 YOLO detector."""
 
     def __init__(self, config: Optional[YoloRuntimeConfig] = None) -> None:
         self.config = config or YoloRuntimeConfig.from_environment()
@@ -319,7 +319,7 @@ class TankYoloDetector:
     def normalize_public_class_name(self, class_name: Any) -> str:
         normalized = str(class_name).strip()
         lowered = normalized.lower()
-        # YAML may contain aliases with original case or lower case. Always return canonical lower-case class names.
+        # YAML에는 alias가 원래 대소문자 또는 소문자로 들어 있을 수 있다. 항상 정규화된 소문자 클래스명을 반환한다.
         alias_value = self.config.aliases.get(normalized, self.config.aliases.get(lowered, lowered))
         return str(alias_value).strip().lower()
 

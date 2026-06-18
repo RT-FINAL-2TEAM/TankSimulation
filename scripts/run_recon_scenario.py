@@ -265,6 +265,25 @@ def main() -> int:
                     f"collisions={r.get('collisions')}, "
                     f"obstacles={o.get('count')}"
                 )
+
+            # LLM 전술 분석 자동 실행(graceful) → /tank/risk/route_report 발행 → 브릿지 MFD 표시.
+            # comparison.json → make_llm_input(route_comparison.json) → route_risk_node(ollama).
+            # ollama 미가동/타임아웃이어도 정찰 완료엔 영향 없음(예외 흡수).
+            scripts_dir = os.path.dirname(os.path.abspath(__file__))
+            print("\n--- LLM 전술 분석 자동 실행 ---")
+            try:
+                subprocess.run(
+                    ["python3", os.path.join(scripts_dir, "make_llm_input.py")],
+                    cwd=PROJECT_ROOT, check=True, timeout=60,
+                )
+                print("  🧠 ollama 추론 중... (qwen3:0.6b ~15-30초 · 끊지 말고 기다리세요)", flush=True)
+                subprocess.run(
+                    ["ros2", "run", "risk_analysis", "route_risk_node"],
+                    cwd=PROJECT_ROOT, timeout=180,
+                )
+                print(f"  ✅ LLM 결과: {os.path.join(REPORT_DIR, 'route_risk_result.json')} (+ MFD AI LOG 표시)")
+            except Exception as e:
+                print(f"  [LLM] 자동 분석 생략: {e} (ollama 미가동/타임아웃 — 수동 실행 가능)")
         else:
             print("\n[경고] route_A.json / route_B.json 일부 누락 — comparison 생략")
         return 0

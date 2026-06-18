@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Global APF / potential-field configuration values."""
+"""전역 APF / 포텐셜 필드 설정값."""
 
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ MAX_DESIRED_ANGULAR_SPEED = env_float("TANK_APF_MAX_DESIRED_OMEGA", 1.5)
 MOTION_STRATEGY = os.environ.get("TANK_APF_MOTION_STRATEGY", "second")
 MARKER_SCALE = env_float("TANK_APF_MARKER_SCALE", 2.5)
 
-# Visual perception clustering and heuristic/RL-ready weight profile configuration.
+# 시각 인지 클러스터링 + 휴리스틱/RL 대응 가중치 프로파일 설정.
 LIDAR_CLUSTERS_TOPIC = os.environ.get("TANK_TOPIC_LIDAR_CLUSTERS", "/tank/visual_perception/lidar_clusters")
 USE_LIDAR_CLUSTERS = env_bool("TANK_APF_USE_LIDAR_CLUSTERS", True)
 CLUSTER_OBSTACLE_MIN_COUNT = env_int("TANK_APF_CLUSTER_OBSTACLE_MIN_COUNT", 2)

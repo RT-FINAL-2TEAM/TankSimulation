@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""LiDAR-based path-blocking utilities used by global planning.
+"""전역 경로계획에서 쓰는 LiDAR 기반 경로 차단 판정 유틸리티.
 
 A* planner는 전역 경로를 만든다. LiDAR point가 경로를 막는지 판단하는
 저수준 계산은 LiDAR 전용 모듈에 둔다.

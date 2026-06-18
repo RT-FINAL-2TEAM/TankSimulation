@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Optional asynchronous YOLO worker for production /detect.
+"""운영용 /detect를 위한 선택적 비동기 YOLO 워커.
 
-The worker processes only the newest frame. /detect can return immediately with
-the most recent completed detections, while metadata tells downstream nodes how
-old that result is.
+워커는 가장 최신 프레임만 처리한다. /detect는 가장 최근에 완료된 검출 결과를
+즉시 반환할 수 있고, metadata가 하위 노드들에게 그 결과가 얼마나 오래된 것인지
+알려준다.
 """
 
 from __future__ import annotations
@@ -21,10 +21,12 @@ class AsyncYoloService:
         *,
         min_interval_sec: float = 0.0,
         max_result_age_ms: float = 300.0,
+        log_interval_sec: float = 2.0,
     ) -> None:
         self.detector_factory = detector_factory
         self.min_interval_sec = max(0.0, float(min_interval_sec))
         self.max_result_age_ms = max(1.0, float(max_result_age_ms))
+        self.log_interval_sec = max(0.0, float(log_interval_sec))
         self._lock = Lock()
         self._condition = Condition(self._lock)
         self._thread: Optional[Thread] = None
@@ -37,6 +39,8 @@ class AsyncYoloService:
         self._latest_error: Optional[str] = None
         self._worker_count = 0
         self._last_run_time = 0.0
+        self._last_log_time = 0.0
+        self._dropped_frame_count = 0
 
     def start(self) -> None:
         with self._lock:
@@ -48,9 +52,11 @@ class AsyncYoloService:
     def enqueue(self, image_bytes: bytes) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         self.start()
         with self._condition:
+            if self._latest_frame_seq > self._processed_frame_seq:
+                self._dropped_frame_count += 1
             self._latest_frame_seq += 1
             frame_seq = self._latest_frame_seq
-            self._latest_image_bytes = bytes(image_bytes)
+            self._latest_image_bytes = image_bytes
             detections = deepcopy(self._latest_detections)
             metadata = self._metadata_locked(frame_seq=frame_seq)
             self._condition.notify()
@@ -76,6 +82,8 @@ class AsyncYoloService:
             "asyncWorkerCount": int(self._worker_count),
             "asyncLatestYoloMs": float(self._latest_yolo_ms),
             "asyncMaxResultAgeMs": float(self.max_result_age_ms),
+            "asyncDroppedFrameCount": int(self._dropped_frame_count),
+            "asyncMinIntervalSec": float(self.min_interval_sec),
             "asyncLatestError": self._latest_error,
         }
 
@@ -105,7 +113,10 @@ class AsyncYoloService:
                     self._latest_yolo_ms = elapsed_ms
                     self._latest_error = None
                     self._worker_count += 1
-                print(f"[ros_bridge] async yolo seq={seq_to_process} det={len(detections) if isinstance(detections, list) else 0} yolo={elapsed_ms:.1f}ms")
+                now = time.time()
+                if self.log_interval_sec > 0 and now - self._last_log_time >= self.log_interval_sec:
+                    self._last_log_time = now
+                    print(f"[ros_bridge] async yolo seq={seq_to_process} det={len(detections) if isinstance(detections, list) else 0} yolo={elapsed_ms:.1f}ms dropped={self._dropped_frame_count}")
             except Exception as exc:  # noqa: BLE001
                 with self._lock:
                     self._latest_error = str(exc)

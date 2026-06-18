@@ -1,0 +1,225 @@
+# -*- coding: utf-8 -*-
+"""LiDAR hit point의 지형/장애물 분리 유틸리티.
+
+팀원이 예전 src에서 개발한 지형/장애물 분리 로직을 현재 통합 src의 ground_division 패키지로
+분리한 모듈이다. 다른 패키지는 raw lidarPoints 스키마를 직접 만지지 않고 이 함수의
+출력 topic을 사용한다.
+
+분리 기준:
+- x-z 평면을 grid cell로 나눈다.
+- 각 cell의 local ground height를 해당 cell 최저 z(raw y)로 추정한다.
+- cell 내부 높이차 또는 인접 cell ground height 차이가 climb_limit보다 크면 steep cell로 본다.
+- steep cell 안에서 local ground + obstacle_min_height보다 높은 hit point만 장애물로 분류한다.
+- 나머지 hit point는 terrain point로 분류한다.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, asdict
+from typing import Any, Dict, Iterable, List, Sequence, Set, Tuple
+
+
+GridKey = Tuple[int, int]
+
+
+def to_float(value: Any, default: float = 0.0) -> float:
+    """raw 시뮬레이터 point 파싱에서 쓰는 best-effort float 변환."""
+    try:
+        if value is None:
+            return float(default)
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+@dataclass
+class TerrainSeparationStats:
+    input_points: int = 0
+    obstacle_points: int = 0
+    terrain_points: int = 0
+    grid_resolution: float = 0.5
+    climb_limit: float = 0.4
+    obstacle_min_height: float = 0.2
+    grid_cell_count: int = 0
+    steep_cell_count: int = 0
+    max_cell_height_span: float = 0.0
+    mean_cell_height_span: float = 0.0
+    max_neighbor_ground_gap: float = 0.0
+    roughness_score: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def _position(point: Dict[str, Any]) -> Dict[str, Any]:
+    pos = point.get("position")
+    return pos if isinstance(pos, dict) else {}
+
+
+def _raw_xzy(point: Dict[str, Any]) -> Tuple[float, float, float]:
+    """시뮬레이터 raw x, y(높이), z 값을 반환한다."""
+    pos = _position(point)
+    return (
+        to_float(pos.get("x")),
+        to_float(pos.get("y")),
+        to_float(pos.get("z")),
+    )
+
+
+def grid_key_for_point(point: Dict[str, Any], grid_resolution: float) -> GridKey:
+    x, _, z = _raw_xzy(point)
+    q = max(float(grid_resolution), 1e-6)
+    return (int(math.floor(x / q)), int(math.floor(z / q)))
+
+
+def create_grid_map(points: Sequence[Dict[str, Any]], grid_resolution: float) -> Dict[GridKey, List[int]]:
+    """각 x-z grid cell을 point 인덱스에 매핑한다."""
+    grid: Dict[GridKey, List[int]] = {}
+    for idx, point in enumerate(points):
+        key = grid_key_for_point(point, grid_resolution)
+        grid.setdefault(key, []).append(idx)
+    return grid
+
+
+def get_cell_ground_levels(points: Sequence[Dict[str, Any]], grid_map: Dict[GridKey, List[int]]) -> Dict[GridKey, float]:
+    """각 cell의 최저 point를 local ground height로 사용한다."""
+    levels: Dict[GridKey, float] = {}
+    for key, indices in grid_map.items():
+        levels[key] = min(_raw_xzy(points[i])[1] for i in indices)
+    return levels
+
+
+def find_steep_cells(
+    points: Sequence[Dict[str, Any]],
+    grid_map: Dict[GridKey, List[int]],
+    cell_ground: Dict[GridKey, float],
+    climb_limit: float,
+) -> Tuple[Set[GridKey], float, float, float]:
+    """수직 장애물이나 급격한 지형 불연속을 포함할 가능성이 큰 cell을 탐지한다."""
+    steep_cells: Set[GridKey] = set()
+    spans: List[float] = []
+    max_neighbor_gap = 0.0
+
+    for key, indices in grid_map.items():
+        ys = [_raw_xzy(points[i])[1] for i in indices]
+        min_y = min(ys)
+        max_y = max(ys)
+        span = max_y - min_y
+        spans.append(span)
+
+        # 1) cell 내부 높이차: rock/wall은 한 cell에서 길쭉한 수직 리턴을 자주 만든다.
+        if span > climb_limit:
+            steep_cells.add(key)
+            continue
+
+        # 2) 인접 cell ground height 기울기: 인접 cell 사이의 급격한 단차.
+        gx, gz = key
+        for neighbor in ((gx + 1, gz), (gx - 1, gz), (gx, gz + 1), (gx, gz - 1)):
+            if neighbor not in cell_ground:
+                continue
+            gap = abs(cell_ground[key] - cell_ground[neighbor])
+            max_neighbor_gap = max(max_neighbor_gap, gap)
+            if gap > climb_limit:
+                steep_cells.add(key)
+                steep_cells.add(neighbor)
+
+    max_span = max(spans) if spans else 0.0
+    mean_span = sum(spans) / len(spans) if spans else 0.0
+    return steep_cells, max_span, mean_span, max_neighbor_gap
+
+
+def split_terrain_obstacle_points(
+    points: Sequence[Dict[str, Any]],
+    grid_resolution: float = 0.5,
+    climb_limit: float = 0.4,
+    obstacle_min_height: float = 0.2,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], TerrainSeparationStats]:
+    """탐지된 LiDAR hit point를 obstacle과 terrain 리스트로 분리한다.
+
+    Returns:
+        obstacle_points, terrain_points, stats
+    """
+    source = [p for p in points if isinstance(p, dict)]
+    stats = TerrainSeparationStats(
+        input_points=len(source),
+        grid_resolution=float(grid_resolution),
+        climb_limit=float(climb_limit),
+        obstacle_min_height=float(obstacle_min_height),
+    )
+    if not source:
+        return [], [], stats
+
+    q = max(float(grid_resolution), 1e-6)
+    grid_map = create_grid_map(source, q)
+    cell_ground = get_cell_ground_levels(source, grid_map)
+    steep_cells, max_span, mean_span, max_neighbor_gap = find_steep_cells(
+        source, grid_map, cell_ground, float(climb_limit)
+    )
+
+    obstacle_indices: Set[int] = set()
+    terrain_indices: Set[int] = set()
+    min_above_ground = max(float(obstacle_min_height), 0.0)
+
+    for key, indices in grid_map.items():
+        if key not in steep_cells:
+            terrain_indices.update(indices)
+            continue
+
+        gx, gz = key
+        neighbors = ((gx, gz), (gx + 1, gz), (gx - 1, gz), (gx, gz + 1), (gx, gz - 1))
+        local_ground = min(cell_ground[n] for n in neighbors if n in cell_ground)
+        threshold = local_ground + min_above_ground
+        for idx in indices:
+            _, raw_y, _ = _raw_xzy(source[idx])
+            if raw_y > threshold:
+                obstacle_indices.add(idx)
+            else:
+                terrain_indices.add(idx)
+
+    # 모든 point는 할당돼야 한다. 보수적 fallback: 미할당 point는 terrain으로 본다.
+    all_indices = set(range(len(source)))
+    terrain_indices.update(all_indices - obstacle_indices - terrain_indices)
+
+    obstacle_points = [source[i] for i in sorted(obstacle_indices)]
+    terrain_points = [source[i] for i in sorted(terrain_indices - obstacle_indices)]
+
+    stats.obstacle_points = len(obstacle_points)
+    stats.terrain_points = len(terrain_points)
+    stats.grid_cell_count = len(grid_map)
+    stats.steep_cell_count = len(steep_cells)
+    stats.max_cell_height_span = float(max_span)
+    stats.mean_cell_height_span = float(mean_span)
+    stats.max_neighbor_ground_gap = float(max_neighbor_gap)
+    # 모니터링/디버그용 단순 정규화 roughness score; 1.0이면 대략 climb_limit 크기의 거칠기를 뜻한다.
+    denom = max(float(climb_limit), 1e-6)
+    stats.roughness_score = float(max(mean_span, max_neighbor_gap) / denom)
+    return obstacle_points, terrain_points, stats
+
+
+def filter_ground_points(
+    points: Sequence[Dict[str, Any]],
+    origin_y: float = 8.0,
+    grid_resolution: float = 0.5,
+    climb_limit: float = 0.4,
+    obstacle_min_height: float = 0.2,
+) -> List[Dict[str, Any]]:
+    """하위 호환 헬퍼: obstacle point만 반환한다.
+
+    origin_y는 이전 함수 시그니처와의 호환을 위해 유지한다.
+    """
+    obstacles, _, _ = split_terrain_obstacle_points(
+        points,
+        grid_resolution=grid_resolution,
+        climb_limit=climb_limit,
+        obstacle_min_height=obstacle_min_height,
+    )
+    return obstacles
+
+
+def convert_to_2d_coords(points: Iterable[Dict[str, Any]]) -> List[Tuple[float, float]]:
+    coords: List[Tuple[float, float]] = []
+    for point in points:
+        pos = _position(point)
+        coords.append((to_float(pos.get("x")), to_float(pos.get("z"))))
+    return coords

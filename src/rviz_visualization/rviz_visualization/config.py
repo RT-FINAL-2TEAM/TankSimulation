@@ -64,7 +64,7 @@ import os
 MAP_FRAME = "tank_map"
 
 ############################################################
-# 2-1. Simulator Terrain / Coordinate Settings
+# 2-1. 시뮬레이터 지형 / 좌표 설정
 ############################################################
 
 # 사용자가 Simple Flat map에서 직접 확인한 시뮬레이터 좌표 기준:
@@ -124,7 +124,7 @@ TOPIC_RVIZ_TERRAIN_MARKERS = "/tank/rviz/terrain_markers"
 
 
 ############################################################
-# 2-2. Simulator Spawn / Reference Points
+# 2-2. 시뮬레이터 스폰 / 기준점
 ############################################################
 
 # 시뮬레이터 UI 기준 시작 좌표 mirror.
@@ -306,7 +306,7 @@ TOPIC_LIDAR_POINTS_COUNT = "/tank/sensor/lidar/points_count"
 TOPIC_RVIZ_OBJECT_MARKERS = "/tank/rviz/object_markers"
 
 ############################################################
-# Heading / direction visualization
+# 전차 heading / 방향 시각화
 ############################################################
 
 # ros_bridge가 publish하는 player state topic.
@@ -533,7 +533,7 @@ SIM_LIDAR_MAX_DISTANCE = float(os.environ.get("TANK_LIDAR_MAX_DISTANCE", "30.0")
 # 0.05~0.1 정도로 띄운다.
 RISK_MARKER_Z = 0.08
 ############################################################
-# 12. Potential Field / APF vector visualization
+# 12. Potential Field / APF 벡터 시각화
 ############################################################
 # 이 topic들은 potential 또는 경로계획 노드가 publish한다.
 # rviz_visualization은 계산하지 않고 RViz 화살표로 표시만 한다.
@@ -558,5 +558,5 @@ POTENTIAL_ARROW_HEAD_DIAMETER = float(os.environ.get("TANK_POTENTIAL_ARROW_HEAD_
 POTENTIAL_ARROW_HEAD_LENGTH = float(os.environ.get("TANK_POTENTIAL_ARROW_HEAD_LENGTH", "1.2"))
 LOCAL_TARGET_MARKER_RADIUS = float(os.environ.get("TANK_LOCAL_TARGET_MARKER_RADIUS", "1.2"))
 
-# A* global path from path_planning.
+# path_planning에서 발행하는 A* 전역 경로.
 TOPIC_GLOBAL_PATH = "/tank/global_path"

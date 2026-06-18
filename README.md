@@ -7,10 +7,14 @@
 
 *   `ros_bridge`: Tank Simulator HTTP endpoint (`/info`, `/detect`, `/get_action` 등)를 수신하여 ROS2 topic으로 변환 및 퍼블리시
 *   `vision`: YOLO 모델 추론을 수행하여 객체 탐지
-*   `lidar`: 원본 LiDAR 데이터를 추출 및 좌표 변환 수행
-*   `path_planning`: A* 알고리즘 기반 Global Path 생성, 카메라/LiDAR 융합(local_path)
+*   `lidar`: 원본 LiDAR 데이터 파싱·좌표 변환, 지면/장애물 분리
+*   `tank_visual_perception`: LiDAR DBSCAN 클러스터링 + LiDAR↔카메라 융합
+*   `path_planning`: A* 알고리즘 기반 Global Path 생성, 카메라/LiDAR 융합(local_path), 정찰 로깅·루트 A/B
 *   `potential`: A* 경로 및 LiDAR 기반 Artificial Potential Field(APF) 회피 타겟 생성
 *   `control`: 조향 명령(`command`) 생성
+*   `ground_division`: 주행 중 지면/장애물 점 누적 → 지형(고도·거칠기) 맵 생성·저장
+*   `risk_analysis`: 로컬 LLM(ollama) 기반 정찰 루트 위험도 분석
+*   `tank_common`: 패키지 공용 헬퍼(PointCloud2→numpy 변환 등) 단일 출처
 *   `rviz_visualization`: 시스템 통합 모니터링 환경 구성
 
 ## 실행 가이드

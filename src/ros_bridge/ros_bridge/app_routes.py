@@ -24,7 +24,11 @@
 # - Flask 요청 body, ROS2로 넘길 payload, status 응답처럼 dict 구조를 명시할 때 사용한다.
 from typing import Any, Dict
 
+import json
 import os
+from copy import deepcopy
+from pathlib import Path
+from threading import Lock
 
 
 ############################################################
@@ -41,7 +45,7 @@ import os
 #
 # request:
 # - 시뮬레이터가 보낸 JSON body 또는 image multipart file을 읽는 객체이다.
-from flask import Flask, jsonify, request, abort
+from flask import Flask, jsonify, request, abort, send_file
 
 
 ############################################################
@@ -80,6 +84,7 @@ from .config import (
     SAVE_IMAGES,
     TANK_MODE,
     YOLO_ASYNC_ENABLED,
+    YOLO_ASYNC_LOG_INTERVAL_SEC,
     YOLO_ASYNC_MAX_RESULT_AGE_MS,
     YOLO_ASYNC_MIN_INTERVAL_SEC,
 )
@@ -88,7 +93,7 @@ from .config import (
 # - 현재 실행 중인 ROS2 RosBridge node 인스턴스를 가져온다.
 # - Flask route는 직접 ROS2 topic을 publish하지 않고,
 #   bridge handler에 데이터를 넘기는 구조이다.
-from .ros_runtime import get_bridge
+from .ros_runtime import get_bridge, ros_status
 from . import live_view
 from .async_yolo import AsyncYoloService
 
@@ -101,7 +106,7 @@ from .async_yolo import AsyncYoloService
 #
 # pretty:
 # - dict/list를 사람이 보기 좋은 JSON 문자열로 변환하여 터미널에 출력한다.
-from .utils import compact_info, now_wall, pretty
+from .utils import compact_info, now_wall, pretty, raw_and_map_pose
 
 
 ############################################################
@@ -123,7 +128,7 @@ _ASYNC_YOLO_SERVICE = None
 
 
 def _get_async_yolo_service():
-    """Create the optional async YOLO worker lazily."""
+    """선택적 async YOLO worker를 lazy 방식으로 생성한다."""
     global _ASYNC_YOLO_SERVICE
     if _ASYNC_YOLO_SERVICE is None:
         if get_detector is None:
@@ -132,6 +137,7 @@ def _get_async_yolo_service():
             get_detector,
             min_interval_sec=YOLO_ASYNC_MIN_INTERVAL_SEC,
             max_result_age_ms=YOLO_ASYNC_MAX_RESULT_AGE_MS,
+            log_interval_sec=YOLO_ASYNC_LOG_INTERVAL_SEC,
         )
     return _ASYNC_YOLO_SERVICE
 
@@ -147,6 +153,400 @@ def _get_async_yolo_service():
 # Ubuntu 작업 PC에서 이 서버를 실행하면 Windows 시뮬레이터 PC가
 # http://<Ubuntu_IP>:5000/init 같은 주소로 접근하게 된다.
 app = Flask(__name__)
+
+_FALLBACK_STATE_LOCK = Lock()
+_FALLBACK_STATE: Dict[str, Any] = {
+    "latest": {},
+    "routeCounts": {},
+}
+
+
+def _fallback_count(route: str) -> None:
+    with _FALLBACK_STATE_LOCK:
+        counts = _FALLBACK_STATE.setdefault("routeCounts", {})
+        counts[route] = int(counts.get(route, 0)) + 1
+
+
+def _fallback_snapshot() -> Dict[str, Any]:
+    with _FALLBACK_STATE_LOCK:
+        return deepcopy(_FALLBACK_STATE)
+
+
+def _store_fallback_info(data: Dict[str, Any]) -> Dict[str, Any]:
+    ts = now_wall()
+    compact = compact_info(data)
+    player_raw = player_map = None
+    enemy_raw = enemy_map = None
+    if isinstance(data.get("playerPos"), dict):
+        player_raw, player_map = raw_and_map_pose(data.get("playerPos"), "/info/playerPos")
+    if isinstance(data.get("enemyPos"), dict):
+        enemy_raw, enemy_map = raw_and_map_pose(data.get("enemyPos"), "/info/enemyPos")
+
+    compact_payload = {"route": "/info", "timestamp_wall": ts, "data": compact}
+    player_state = {
+        "timestamp_wall": ts,
+        "source": "/info",
+        "pose_raw": player_raw,
+        "pose_map": player_map,
+        "speed": data.get("playerSpeed"),
+        "health": data.get("playerHealth"),
+        "turret": {"x": data.get("playerTurretX"), "y": data.get("playerTurretY")},
+        "body": {"x": data.get("playerBodyX"), "y": data.get("playerBodyY"), "z": data.get("playerBodyZ")},
+        "sim_time": data.get("time"),
+        "distance": data.get("distance"),
+    }
+    enemy_state = {
+        "timestamp_wall": ts,
+        "source": "/info",
+        "pose_raw": enemy_raw,
+        "pose_map": enemy_map,
+        "speed": data.get("enemySpeed"),
+        "health": data.get("enemyHealth"),
+    }
+
+    with _FALLBACK_STATE_LOCK:
+        latest = _FALLBACK_STATE.setdefault("latest", {})
+        latest["info_compact"] = deepcopy(compact_payload)
+        latest["player_state"] = deepcopy(player_state)
+        latest["enemy_state"] = deepcopy(enemy_state)
+        if player_map:
+            latest["player_pose_map"] = deepcopy(player_map)
+        if enemy_map:
+            latest["enemy_pose_map"] = deepcopy(enemy_map)
+        latest["sim_status"] = {
+            "route": "/info",
+            "timestamp_wall": ts,
+            "sim_time": data.get("time"),
+            "distance": data.get("distance"),
+            "player_speed": data.get("playerSpeed"),
+            "player_health": data.get("playerHealth"),
+            "enemy_speed": data.get("enemySpeed"),
+            "enemy_health": data.get("enemyHealth"),
+            "terrain_size_unity": {"x": 300.0, "z": 300.0},
+        }
+    return compact_payload
+
+
+def _store_fallback_get_action(data: Dict[str, Any], command: Dict[str, Any]) -> None:
+    position = data.get("position") if isinstance(data, dict) else None
+    if not isinstance(position, dict):
+        return
+    ts = now_wall()
+    pose_raw, pose_map = raw_and_map_pose(position, "/get_action/position")
+    turret = data.get("turret") if isinstance(data.get("turret"), dict) else {}
+    raw_payload = {
+        "route": "/get_action",
+        "timestamp_wall": ts,
+        "request": deepcopy(data),
+        "pose_raw": pose_raw,
+        "pose_map": pose_map,
+        "turret": deepcopy(turret),
+    }
+    response_payload = {
+        "route": "/get_action",
+        "timestamp_wall": ts,
+        "mode": TANK_MODE,
+        "source": "fallback_without_ros",
+        "command": deepcopy(command),
+    }
+    with _FALLBACK_STATE_LOCK:
+        latest = _FALLBACK_STATE.setdefault("latest", {})
+        latest["get_action_raw"] = deepcopy(raw_payload)
+        latest["get_action_pose_map"] = deepcopy(pose_map)
+        latest["get_action_response"] = deepcopy(response_payload)
+        latest["player_pose_map"] = deepcopy(pose_map)
+
+
+def _resolve_static_map_path() -> Path:
+    env_path = os.environ.get("TANK_STATIC_MAP_PATH", "").strip()
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        share_path = Path(get_package_share_directory("rviz_visualization")) / "map" / "finalmap.map"
+        if share_path.exists():
+            return share_path
+    except Exception:
+        pass
+
+    # source tree fallback: .../src/ros_bridge/ros_bridge/app_routes.py -> .../src
+    return Path(__file__).resolve().parents[2] / "rviz_visualization" / "map" / "finalmap.map"
+
+
+def _resolve_static_map_overview_path() -> Path:
+    env_path = os.environ.get("TANK_STATIC_MAP_OVERVIEW_PATH", "").strip()
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+
+    candidates = [
+        Path(__file__).resolve().parents[2] / "rviz_visualization" / "map" / "finalmap_overview.png",
+        Path(__file__).resolve().parents[2] / "rviz_visualization" / "map" / "finalmap_overview.jpg",
+        Path(r"C:\Users\green\OneDrive\Desktop\teamproject\map\finalmap_overview.png"),
+        Path(r"C:\Users\green\OneDrive\Desktop\teamproject\map\finalmap_overview.jpg"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _map_object_category(name: Any) -> str:
+    text = str(name or "").lower()
+    if text.startswith("tree"):
+        return "tree"
+    if text.startswith("rock"):
+        return "rock"
+    if text.startswith("house"):
+        return "house"
+    if text.startswith("human"):
+        return "human"
+    if text.startswith("car"):
+        return "car"
+    if text.startswith("tank"):
+        return "tank"
+    return "unknown"
+
+
+def _overview_terrain_zones() -> Dict[str, Any]:
+    """제공된 top-down map overview에서 수작업으로 따낸 terrain zone들."""
+
+    return {
+        "source": "user_overview_image",
+        "coordinate": "map_x_rawx_y_rawz",
+        "waterDataAvailable": True,
+        "zones": [
+            {
+                "name": "main_waterway",
+                "type": "water",
+                "points": [
+                    {"x": 163.8, "y": 300.0},
+                    {"x": 197.3, "y": 300.0},
+                    {"x": 204.6, "y": 288.0},
+                    {"x": 207.3, "y": 269.4},
+                    {"x": 220.3, "y": 252.8},
+                    {"x": 234.6, "y": 250.8},
+                    {"x": 245.8, "y": 255.8},
+                    {"x": 257.1, "y": 254.5},
+                    {"x": 262.1, "y": 241.5},
+                    {"x": 252.5, "y": 231.6},
+                    {"x": 235.9, "y": 226.6},
+                    {"x": 232.9, "y": 211.0},
+                    {"x": 234.2, "y": 195.7},
+                    {"x": 238.8, "y": 181.1},
+                    {"x": 235.2, "y": 161.2},
+                    {"x": 228.9, "y": 144.5},
+                    {"x": 226.6, "y": 123.9},
+                    {"x": 232.9, "y": 105.9},
+                    {"x": 242.5, "y": 87.1},
+                    {"x": 248.2, "y": 66.2},
+                    {"x": 249.2, "y": 45.6},
+                    {"x": 256.1, "y": 22.6},
+                    {"x": 256.5, "y": 0.0},
+                    {"x": 223.6, "y": 0.0},
+                    {"x": 219.3, "y": 20.3},
+                    {"x": 214.9, "y": 42.5},
+                    {"x": 206.9, "y": 61.8},
+                    {"x": 197.3, "y": 81.4},
+                    {"x": 205.0, "y": 100.0},
+                    {"x": 199.5, "y": 116.5},
+                    {"x": 198.0, "y": 130.5},
+                    {"x": 202.5, "y": 144.0},
+                    {"x": 203.5, "y": 156.5},
+                    {"x": 198.2, "y": 169.0},
+                    {"x": 187.0, "y": 181.0},
+                    {"x": 181.1, "y": 195.0},
+                    {"x": 180.1, "y": 210.3},
+                    {"x": 171.4, "y": 226.9},
+                    {"x": 171.1, "y": 240.9},
+                    {"x": 179.1, "y": 253.5},
+                    {"x": 188.0, "y": 262.5},
+                    {"x": 184.7, "y": 275.4},
+                    {"x": 177.1, "y": 289.0},
+                ],
+            },
+            {
+                "name": "north_east_stream",
+                "type": "water",
+                "points": [
+                    {"x": 276.4, "y": 300.0},
+                    {"x": 295.3, "y": 300.0},
+                    {"x": 293.7, "y": 287.4},
+                    {"x": 285.7, "y": 276.1},
+                    {"x": 283.1, "y": 262.8},
+                    {"x": 272.1, "y": 255.2},
+                    {"x": 257.1, "y": 254.5},
+                    {"x": 245.8, "y": 255.8},
+                    {"x": 260.1, "y": 266.4},
+                    {"x": 271.4, "y": 277.4},
+                ],
+            },
+            {
+                "name": "center_pond",
+                "type": "water",
+                "points": [
+                    {"x": 159.8, "y": 145.2},
+                    {"x": 174.4, "y": 145.2},
+                    {"x": 184.1, "y": 136.5},
+                    {"x": 187.0, "y": 122.3},
+                    {"x": 181.1, "y": 113.3},
+                    {"x": 168.1, "y": 114.3},
+                    {"x": 158.5, "y": 122.9},
+                    {"x": 156.1, "y": 136.2},
+                ],
+            },
+            {
+                "name": "water_passage",
+                "type": "passage",
+                "role": "tank_route_corridor",
+                "points": [
+                    {"x": 184.5, "y": 162.5},
+                    {"x": 197.5, "y": 158.5},
+                    {"x": 205.5, "y": 145.5},
+                    {"x": 203.0, "y": 130.0},
+                    {"x": 194.5, "y": 116.0},
+                    {"x": 183.0, "y": 112.0},
+                    {"x": 177.5, "y": 119.5},
+                    {"x": 186.8, "y": 130.2},
+                    {"x": 188.5, "y": 144.8},
+                    {"x": 181.0, "y": 155.5},
+                ],
+            },
+            {
+                "name": "east_rocky_ridge",
+                "type": "rocky",
+                "points": [
+                    {"x": 211.6, "y": 239.2},
+                    {"x": 262.1, "y": 238.5},
+                    {"x": 274.8, "y": 213.6},
+                    {"x": 267.8, "y": 176.4},
+                    {"x": 260.1, "y": 136.9},
+                    {"x": 253.8, "y": 100.0},
+                    {"x": 243.2, "y": 71.8},
+                    {"x": 230.2, "y": 87.0},
+                    {"x": 226.2, "y": 118.9},
+                    {"x": 232.2, "y": 153.5},
+                    {"x": 237.5, "y": 185.7},
+                    {"x": 234.9, "y": 213.6},
+                ],
+            },
+        ],
+    }
+
+
+def _load_static_map_payload() -> Dict[str, Any]:
+    map_path = _resolve_static_map_path()
+    with map_path.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+    obstacles = payload.get("obstacles")
+    if not isinstance(obstacles, list):
+        obstacles = []
+        payload["obstacles"] = obstacles
+    payload["mapFile"] = str(map_path)
+    payload["objectCount"] = len(obstacles)
+    overview_path = _resolve_static_map_overview_path()
+    payload["overviewImage"] = {
+        "available": overview_path.exists(),
+        "path": str(overview_path),
+        "url": "/api/static-map/overview",
+    }
+    overview_zones = _overview_terrain_zones()
+    zone_counts: Dict[str, int] = {}
+    for zone in overview_zones.get("zones", []):
+        if isinstance(zone, dict):
+            zone_type = str(zone.get("type") or "unknown")
+            zone_counts[zone_type] = zone_counts.get(zone_type, 0) + 1
+    overview_zones["zoneCounts"] = zone_counts
+    payload["terrainZones"] = overview_zones
+    payload.setdefault(
+        "bounds",
+        {
+            "min_x": 0.0,
+            "max_x": 300.0,
+            "min_y": 0.0,
+            "max_y": 300.0,
+            "min_z": 0.0,
+            "max_z": 300.0,
+        },
+    )
+
+    category_counts: Dict[str, int] = {}
+    xs = []
+    zs = []
+    heights = []
+    for obj in obstacles:
+        if not isinstance(obj, dict):
+            continue
+        category = _map_object_category(obj.get("prefabName"))
+        category_counts[category] = category_counts.get(category, 0) + 1
+        pos = obj.get("position")
+        if not isinstance(pos, dict):
+            continue
+        try:
+            x = float(pos.get("x"))
+            z = float(pos.get("z"))
+            height = float(pos.get("y"))
+        except (TypeError, ValueError):
+            continue
+        xs.append(x)
+        zs.append(z)
+        heights.append(height)
+
+    payload["categoryCounts"] = category_counts
+    if xs and zs:
+        payload["objectBounds"] = {
+            "min_x": min(xs),
+            "max_x": max(xs),
+            "min_y": min(zs),
+            "max_y": max(zs),
+            "min_z": min(zs),
+            "max_z": max(zs),
+        }
+
+    if heights:
+        min_h = min(heights)
+        max_h = max(heights)
+        avg_h = sum(heights) / len(heights)
+        span = max(max_h - min_h, 0.0)
+        low_threshold = min_h + span * 0.18
+        high_threshold = min_h + span * 0.78
+        payload["heightSummary"] = {
+            "source": "obstacle.position.y",
+            "mode": "inferred_from_static_objects",
+            "sampleCount": len(heights),
+            "min": min_h,
+            "max": max_h,
+            "avg": avg_h,
+        }
+        payload["surfaceSummary"] = {
+            "source": "user overview image + height heuristic",
+            "mode": "overview_water_polygons",
+            "lowThreshold": low_threshold,
+            "highThreshold": high_threshold,
+            "lowlandCount": sum(1 for h in heights if h <= low_threshold),
+            "highlandCount": sum(1 for h in heights if h >= high_threshold),
+            "waterDataAvailable": True,
+            "waterZoneCount": zone_counts.get("water", 0),
+            "rockyZoneCount": zone_counts.get("rocky", 0),
+            "passageZoneCount": zone_counts.get("passage", 0),
+        }
+        payload["terrainLayers"] = {
+            "elevation": "inferred_from_static_object_heights",
+            "surface": "manual_water_passage_and_rocky_zones_from_overview",
+        }
+    else:
+        payload["heightSummary"] = {
+            "source": "obstacle.position.y",
+            "mode": "unavailable",
+            "sampleCount": 0,
+        }
+        payload["surfaceSummary"] = {
+            "source": "height heuristic",
+            "mode": "unavailable",
+            "waterDataAvailable": False,
+        }
+    return payload
 
 ############################################################
 # 4-1. Client IP allowlist
@@ -191,6 +591,7 @@ def block_other_clients():
         client_ip = client_ip.split(",", 1)[0].strip()
 
     print(f"[REQ] {client_ip} {request.method} {request.path}")
+    _fallback_count(request.path)
 
     if client_ip not in ALLOWED_CLIENTS:
         print(f"[BLOCKED OTHER CLIENT] {client_ip}; allowed={sorted(ALLOWED_CLIENTS)}")
@@ -240,7 +641,7 @@ def route_init():
     # 터미널 로그:
     # 시뮬레이터가 실제로 /init을 호출했는지,
     # 어떤 초기 설정값을 받아가는지 확인하기 위한 출력이다.
-    print("🛠️ /init config")
+    print("[init] config")
     print(pretty(config))
 
     # 현재 실행 중인 ROS2 bridge node를 가져온다.
@@ -281,7 +682,7 @@ def route_start():
     """Tank Challenge 공식 GET /start endpoint."""
 
     # 터미널에서 episode start 요청이 들어왔음을 확인한다.
-    print("🚀 /start requested")
+    print("[start] requested")
 
     # ROS2 bridge node를 가져온다.
     bridge = get_bridge()
@@ -350,11 +751,11 @@ def route_info():
     #
     # bridge가 없으면:
     # - 최소한 compact_info(data)만 만들어 터미널 출력이 가능하게 한다.
-    compact_payload = bridge.handle_info(data) if bridge else {"data": compact_info(data)}
+    compact_payload = bridge.handle_info(data) if bridge else _store_fallback_info(data)
 
     # 터미널에는 /info 전체 원본이 아니라 compact 형태만 출력한다.
     # LiDAR points가 많으면 터미널이 과도하게 길어지기 때문이다.
-    print("📡 /info compact")
+    print("[info] compact")
     print(pretty(compact_payload.get("data", {})))
 
     # 시뮬레이터에 성공 응답을 반환한다.
@@ -423,7 +824,11 @@ def route_get_action():
     #
     # bridge가 없으면:
     # - 안전 fallback 명령을 반환한다.
-    command = bridge.handle_get_action(data) if bridge else fallback_command()
+    if bridge:
+        command = bridge.handle_get_action(data)
+    else:
+        command = fallback_command()
+        _store_fallback_get_action(data, command)
 
     # 실제로 시뮬레이터에 반환하는 명령을 터미널에 출력한다.
     print("🎮 /get_action response")
@@ -471,7 +876,7 @@ def route_get_action():
 
 @app.route("/detect", methods=["POST"])
 def route_detect():
-    """Tank Challenge official POST /detect endpoint with optional async YOLO and live view."""
+    """Tank Challenge 공식 POST /detect endpoint. 선택적 async YOLO와 live view를 지원한다."""
 
     image = request.files.get("image")
     if image is None:
@@ -486,13 +891,13 @@ def route_detect():
         path = IMAGE_DIR / f"detect_{int(now_wall() * 1000)}.jpg"
         path.write_bytes(image_bytes)
 
-    # Store the frame for optional web live view. This does not run YOLO.
+    # 선택적 web live view를 위해 frame을 저장한다. 여기서는 YOLO를 실행하지 않는다.
     frame_shape = None
     if LIVE_VIEW_ENABLED:
         try:
             frame_shape = live_view.update_frame(image_bytes)
         except Exception as exc:  # noqa: BLE001
-            print(f"⚠️ live view frame update failed: {exc}")
+            print(f"[warn] live view frame update failed: {exc}")
             frame_shape = None
 
     bridge = get_bridge()
@@ -506,7 +911,7 @@ def route_detect():
         metadata["image"] = {"height": frame_shape[0], "width": frame_shape[1]}
 
     if get_detector is None:
-        print(f"⚠️ /detect YOLO unavailable: {_YOLO_IMPORT_ERROR}")
+        print(f"[warn] /detect YOLO unavailable: {_YOLO_IMPORT_ERROR}")
     else:
         try:
             if YOLO_ASYNC_ENABLED:
@@ -515,11 +920,11 @@ def route_detect():
             else:
                 detections = get_detector().detect_bytes(image_bytes)
         except Exception as exc:
-            print(f"⚠️ /detect YOLO inference failed: {exc}")
+            print(f"[warn] /detect YOLO inference failed: {exc}")
             detections = []
             metadata["yolo_error"] = str(exc)
 
-    # Add detector debug metadata when available. In async mode, the frame shape above is preferred.
+    # detector debug metadata가 있으면 추가한다. async 모드에서는 위에서 구한 frame shape를 우선한다.
     if get_detector is not None:
         try:
             debug = get_detector().debug_state()
@@ -537,7 +942,7 @@ def route_detect():
         try:
             live_view.update_detections(detections, metadata)
         except Exception as exc:  # noqa: BLE001
-            print(f"⚠️ live view detection update failed: {exc}")
+            print(f"[warn] live view detection update failed: {exc}")
 
     bridge = get_bridge()
     if bridge:
@@ -548,7 +953,7 @@ def route_detect():
 
 @app.route("/debug/yolo", methods=["GET"])
 def route_debug_yolo():
-    """Return current embedded YOLO runtime/debug state."""
+    """현재 내장 YOLO runtime/debug 상태를 반환한다."""
     if get_detector is None:
         return jsonify({"loaded": False, "importError": str(_YOLO_IMPORT_ERROR)})
     try:
@@ -557,9 +962,147 @@ def route_debug_yolo():
         return jsonify({"loaded": False, "error": str(exc)}), 500
 
 
+@app.route("/api/static-map", methods=["GET"])
+def route_static_map():
+    """browser MFD가 사용하는 static terrain/object map을 반환한다."""
+    try:
+        return jsonify(_load_static_map_payload())
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/static-map/overview", methods=["GET"])
+def route_static_map_overview():
+    """사용 가능한 경우 top-down map overview texture를 반환한다."""
+    try:
+        overview_path = _resolve_static_map_overview_path()
+        if not overview_path.exists():
+            return jsonify({"available": False, "error": f"overview image not found: {overview_path}"}), 404
+        return send_file(overview_path)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"available": False, "error": str(exc)}), 500
+
+
+@app.route("/api/dashboard/state", methods=["GET"])
+def route_dashboard_state():
+    """browser MFD dashboard용으로 합쳐진 state payload."""
+    payload: Dict[str, Any] = {
+        "serverTime": now_wall(),
+        "mode": TANK_MODE,
+        "liveView": {},
+        "yolo": {},
+        "bridge": {},
+        "aiLog": [],
+        "reconLog": [],
+        "sensor": {},
+        "staticMap": {},
+    }
+
+    try:
+        payload["liveView"] = live_view.debug_state() if LIVE_VIEW_ENABLED else {"enabled": False}
+        payload["liveView"]["asyncYoloEnabled"] = YOLO_ASYNC_ENABLED
+        if YOLO_ASYNC_ENABLED and _ASYNC_YOLO_SERVICE is not None:
+            payload["liveView"]["asyncYolo"] = _ASYNC_YOLO_SERVICE.debug_state()
+    except Exception as exc:  # noqa: BLE001
+        payload["liveView"] = {"error": str(exc)}
+
+    try:
+        if get_detector is None:
+            payload["yolo"] = {"loaded": False, "importError": str(_YOLO_IMPORT_ERROR)}
+        else:
+            payload["yolo"] = get_detector().debug_state()
+    except Exception as exc:  # noqa: BLE001
+        payload["yolo"] = {"loaded": False, "error": str(exc)}
+
+    bridge = None
+    try:
+        bridge = get_bridge()
+        if bridge is None:
+            status = ros_status()
+            fallback = _fallback_snapshot()
+            payload["bridge"] = {
+                "available": False,
+                "error": status.get("importError") or "ROS bridge is not running",
+                "runtime": status,
+                "latest": fallback.get("latest", {}),
+                "routeCounts": fallback.get("routeCounts", {}),
+            }
+        elif hasattr(bridge, "get_latest_snapshot"):
+            payload["bridge"] = bridge.get_latest_snapshot()
+        else:
+            payload["bridge"] = {"available": True, "error": "get_latest_snapshot unavailable"}
+    except Exception as exc:  # noqa: BLE001
+        payload["bridge"] = {"available": bridge is not None, "error": str(exc)}
+
+    latest = payload.get("bridge", {}).get("latest", {})
+    if not isinstance(latest, dict):
+        latest = {}
+
+    detect_result = latest.get("detect_result") if isinstance(latest.get("detect_result"), dict) else {}
+    detections = detect_result.get("detections") if isinstance(detect_result, dict) else []
+    if not isinstance(detections, list):
+        detections = []
+    if not detections and isinstance(payload.get("liveView"), dict):
+        live_detections = payload["liveView"].get("latestDetections")
+        if isinstance(live_detections, list):
+            detections = live_detections
+
+    if isinstance(payload.get("yolo"), dict) and (
+        "latestReturnedDetections" not in payload["yolo"] or not payload["yolo"].get("latestReturnedDetections")
+    ):
+        payload["yolo"]["latestReturnedDetections"] = detections
+
+    for key in ("ai_log", "llm_log", "decision"):
+        value = latest.get(key)
+        if isinstance(value, list):
+            payload["aiLog"] = value
+            break
+        if value:
+            payload["aiLog"] = [value]
+            break
+
+    timestamp = detect_result.get("timestamp_wall") if isinstance(detect_result, dict) else None
+    payload["reconLog"] = [
+        {
+            "className": det.get("className") or det.get("class_name") or det.get("modelClassName") or "object",
+            "confidence": det.get("confidence"),
+            "timestamp": timestamp,
+        }
+        for det in detections
+        if isinstance(det, dict)
+    ]
+
+    payload["sensor"] = {
+        "rosConnected": bridge is not None and not payload.get("bridge", {}).get("error"),
+        "liveViewEnabled": LIVE_VIEW_ENABLED,
+        "latestYoloMs": payload.get("yolo", {}).get("latestYoloMs"),
+        "latestReturnedDetectionCount": payload.get("yolo", {}).get("latestReturnedDetectionCount"),
+        "playerPose": latest.get("player_pose_map") or latest.get("get_action_pose_map"),
+        "enemyPose": latest.get("enemy_pose_map"),
+        "routeCounts": payload.get("bridge", {}).get("routeCounts") or payload.get("bridge", {}).get("route_counts") or {},
+    }
+
+    try:
+        static_map = _load_static_map_payload()
+        payload["staticMap"] = {
+            "loaded": True,
+            "terrainIndex": static_map.get("terrainIndex"),
+            "objectCount": static_map.get("objectCount"),
+            "mapFile": static_map.get("mapFile"),
+            "heightSummary": static_map.get("heightSummary"),
+            "surfaceSummary": static_map.get("surfaceSummary"),
+            "categoryCounts": static_map.get("categoryCounts"),
+            "terrainZones": static_map.get("terrainZones"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        payload["staticMap"] = {"loaded": False, "error": str(exc)}
+
+    return jsonify(payload)
+
+
 @app.route("/view", methods=["GET"])
 def route_live_view():
-    """Browser live view for latest /detect image and detection overlay."""
+    """최신 /detect image와 detection overlay를 보여주는 browser live view."""
     if not LIVE_VIEW_ENABLED:
         return jsonify({"enabled": False, "error": "TANK_LIVE_VIEW is false"}), 404
     return live_view.render_view_page()
@@ -567,7 +1110,7 @@ def route_live_view():
 
 @app.route("/video_feed", methods=["GET"])
 def route_video_feed():
-    """MJPEG stream used by /view."""
+    """/view가 사용하는 MJPEG stream."""
     if not LIVE_VIEW_ENABLED:
         return jsonify({"enabled": False, "error": "TANK_LIVE_VIEW is false"}), 404
     return live_view.video_response(web_fps=LIVE_VIEW_FPS, jpeg_quality=LIVE_VIEW_JPEG_QUALITY)
@@ -575,7 +1118,7 @@ def route_video_feed():
 
 @app.route("/debug/live_view", methods=["GET"])
 def route_debug_live_view():
-    """Return current live-view and async YOLO state."""
+    """현재 live-view와 async YOLO 상태를 반환한다."""
     state = live_view.debug_state() if LIVE_VIEW_ENABLED else {"enabled": False}
     state["asyncYoloEnabled"] = YOLO_ASYNC_ENABLED
     if YOLO_ASYNC_ENABLED and _ASYNC_YOLO_SERVICE is not None:
@@ -588,7 +1131,7 @@ def route_debug_live_view():
 
 @app.route("/debug_state", methods=["GET"])
 def route_debug_state_alias():
-    """Compatibility alias for team live-view debug endpoint."""
+    """팀 live-view debug endpoint에 대한 호환용 alias."""
     return route_debug_live_view()
 
 
@@ -862,12 +1405,12 @@ def route_update_obstacle():
 # 공식 문서 기준
 # ----------------------------------------------------------
 # Method : POST
-# 역할   : 전차가 wall, obstacle 등과 충돌했을 때 충돌 정보를 End Point로 전달한다.
+# 역할   : 전차가 obstacle 등과 충돌했을 때 충돌 정보를 End Point로 전달한다.
 #
 # 공식 예시 구조
 # ----------------------------------------------------------
 # {
-#   "objectName": "Wall001(Clone)",
+#   "objectName": "Obstacle001(Clone)",
 #   "position": {
 #     "x": 123.45,
 #     "y": 7.89,

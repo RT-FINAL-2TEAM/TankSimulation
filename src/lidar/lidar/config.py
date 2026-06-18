@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Global LiDAR configuration values.
+"""LiDAR 전역 설정값.
 
 이 파일에는 시뮬레이션 환경이나 launch parameter로 바꿀 수 있는
 LiDAR 관련 기본값만 모아둔다. 다른 패키지는 LiDAR raw schema를 직접
@@ -49,14 +49,14 @@ TOPIC_TERRAIN_INFO = os.environ.get("TANK_TOPIC_TERRAIN_INFO", "/tank/perception
 GROUND_FILTER_ENABLED = env_bool("TANK_LIDAR_GROUND_FILTER_ENABLED", True)
 DEFAULT_LIDAR_ORIGIN_Y = env_float("TANK_LIDAR_DEFAULT_ORIGIN_Y", 8.0)
 
-# Terrain/obstacle separation defaults. These came from the terrain development branch
-# and are enabled by default so the existing run command can use the feature immediately.
+# 지형/장애물 분리 기본값. terrain 개발 브랜치에서 가져온 것으로,
+# 기존 실행 명령에서 이 기능을 바로 쓸 수 있도록 기본 활성화한다.
 TERRAIN_GRID_RESOLUTION = env_float("TANK_TERRAIN_GRID_RESOLUTION", 0.5)
 TERRAIN_CLIMB_LIMIT = env_float("TANK_TERRAIN_CLIMB_LIMIT", 0.4)
 TERRAIN_OBSTACLE_MIN_HEIGHT = env_float("TANK_TERRAIN_OBSTACLE_MIN_HEIGHT", 0.2)
 
-# Dynamic-replanning / path-block check defaults. The planner imports these
-# defaults, but the actual ROS2 parameters are still declared inside the planner.
+# 동적 재계획 / 경로 차단(path-block) 판정 기본값. planner가 이 기본값들을
+# import 하지만, 실제 ROS2 파라미터는 여전히 planner 내부에서 선언한다.
 PATH_BLOCK_MIN_DISTANCE = env_float("TANK_LIDAR_BLOCK_MIN_DISTANCE", 4.0)
 PATH_BLOCK_MAX_DISTANCE = env_float("TANK_LIDAR_BLOCK_MAX_DISTANCE", 80.0)
 CLUSTER_EPS = env_float("TANK_LIDAR_CLUSTER_EPS", 2.0)
