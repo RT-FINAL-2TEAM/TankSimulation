@@ -1,4 +1,3 @@
-\
 # -*- coding: utf-8 -*-
 """Standalone debug server for the Tank Challenge YOLO detector.
 

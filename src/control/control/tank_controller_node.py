@@ -14,6 +14,7 @@ It publishes the official Tank Challenge /get_action JSON to /tank/control/comma
 import json
 import math
 import os
+import time
 from typing import Any, Dict, Optional, Tuple
 
 import rclpy
@@ -204,7 +205,6 @@ class TeamPathControllerNode(Node):
         return max(vals) if vals else default
 
     def player_pose_cb(self, msg: PoseStamped) -> None:
-        import time
         new_pos = (float(msg.pose.position.x), float(msg.pose.position.y))
         if getattr(self, 'current_pos', None) is not None:
             if get_distance(self.current_pos, new_pos) > 10.0:
@@ -330,7 +330,6 @@ class TeamPathControllerNode(Node):
         return "W", w_ws, "cruise"
 
     def escape_command_if_needed(self, target: Optional[Tuple[float, float]] = None) -> Optional[Tuple[Dict[str, Any], str]]:
-        import time
         if not self.enable_stuck_escape or self.current_pos is None:
             return None
         t = self.current_sim_time if self.current_sim_time > 0.0 else time.time()
@@ -396,7 +395,6 @@ class TeamPathControllerNode(Node):
         self.pub_status.publish(msg)
 
     def timer_cb(self) -> None:
-        import time
         if self._last_pose_wall_time > 0.0 and time.time() - self._last_pose_wall_time > 2.0:
             self.publish_command(empty_action())
             self.publish_status({"ok": False, "reason": "player_pose_stale_fallback"})
