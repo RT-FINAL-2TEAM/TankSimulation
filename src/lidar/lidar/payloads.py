@@ -22,6 +22,7 @@ from .config import (
 )
 from .coordinate_utils import lidar_point_with_map_position, to_float
 from .terrain_utils import split_terrain_obstacle_points
+from .path_blocking import distance
 
 Point2D = Tuple[float, float]
 BBox2D = Dict[str, float]
@@ -222,9 +223,6 @@ def parse_lidar_points_payload(payload: Any) -> List[Point2D]:
             continue
     return points
 
-
-def distance(a: Point2D, b: Point2D) -> float:
-    return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
 def filter_lidar_points_by_distance(

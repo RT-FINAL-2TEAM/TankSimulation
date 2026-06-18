@@ -54,7 +54,7 @@ except Exception:  # pragma: no cover
 # 전역 기본값은 potential.config에 모아 둔다. 아래 ROS2 파라미터는 launch 시점
 # 덮어쓰기 호환성을 유지한다.
 from lidar.payloads import parse_lidar_points_payload
-from path_planning.config import PREFAB_HALF_SIZES
+from path_planning.config import PREFAB_HALF_SIZES, prefab_half_size
 from potential.config import (
     ANGLE_EPSILON_DEG,
     ANGULAR_GAIN_K_THETA,
@@ -121,34 +121,7 @@ def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
-def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
-    """PointCloud2의 XYZ 필드를 연속 메모리 float32 (N, 3) 배열로 반환한다.
-
-    ROS2 Humble 이상의 sensor_msgs_py는 read_points_numpy()를 제공하며, 이는
-    모든 LiDAR 점마다 파이썬 dict/list 객체를 만드는 것을 피한다. fallback은
-    구버전 sensor_msgs_py에서도 노드가 동작하도록 유지한다.
-    """
-    try:
-        arr = point_cloud2.read_points_numpy(
-            msg, field_names=("x", "y", "z"), skip_nans=True
-        )
-    except Exception:
-        pts = point_cloud2.read_points(
-            msg, field_names=("x", "y", "z"), skip_nans=True
-        )
-        if isinstance(pts, np.ndarray):
-            arr = pts
-        else:
-            arr = np.asarray(list(pts), dtype=np.float32)
-    if arr is None:
-        return np.empty((0, 3), dtype=np.float32)
-    arr = np.asarray(arr)
-    if arr.dtype.fields:
-        arr = np.column_stack((arr["x"], arr["y"], arr["z"]))
-    arr = np.asarray(arr, dtype=np.float32)
-    if arr.size == 0:
-        return np.empty((0, 3), dtype=np.float32)
-    return np.ascontiguousarray(arr.reshape(-1, 3), dtype=np.float32)
+from tank_common.pointcloud import pointcloud2_to_xyz_array
 
 
 def get_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
@@ -606,13 +579,6 @@ def parse_threats_from_map(map_path: str) -> List[Dict[str, Any]]:
             }
         )
     return threats
-
-def prefab_half_size(name: str) -> Tuple[float, float]:
-    lname = str(name).lower()
-    for key, value in PREFAB_HALF_SIZES.items():
-        if key.lower() in lname:
-            return value
-    return 1.0, 1.0
 
 def obstacle_to_bbox(obs: Dict[str, Any]) -> Optional[Dict[str, float]]:
     if all(k in obs for k in ("x_min", "x_max", "z_min", "z_max")):

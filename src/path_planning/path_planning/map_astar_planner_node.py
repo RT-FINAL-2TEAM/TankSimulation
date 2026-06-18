@@ -62,6 +62,7 @@ from path_planning.config import (
     PLAN_RETRY_PERIOD_SEC,
     PLANNER_HZ,
     PREFAB_HALF_SIZES,
+    prefab_half_size,
     PUBLISH_PATH_PERIOD_SEC,
     REPLAN_PERIOD_SEC,
     TOPIC_GLOBAL_PATH,
@@ -100,34 +101,7 @@ def clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
-def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
-    """PointCloud2의 XYZ 필드를 연속(contiguous) float32 (N, 3) 배열로 반환한다.
-
-    ROS2 Humble 이상의 sensor_msgs_py는 read_points_numpy()를 제공해, LiDAR 점마다
-    Python dict/list 객체를 만드는 비용을 피한다. fallback은 구버전 sensor_msgs_py에서도
-    노드가 동작하도록 유지하기 위한 것이다.
-    """
-    try:
-        arr = point_cloud2.read_points_numpy(
-            msg, field_names=("x", "y", "z"), skip_nans=True
-        )
-    except Exception:
-        pts = point_cloud2.read_points(
-            msg, field_names=("x", "y", "z"), skip_nans=True
-        )
-        if isinstance(pts, np.ndarray):
-            arr = pts
-        else:
-            arr = np.asarray(list(pts), dtype=np.float32)
-    if arr is None:
-        return np.empty((0, 3), dtype=np.float32)
-    arr = np.asarray(arr)
-    if arr.dtype.fields:
-        arr = np.column_stack((arr["x"], arr["y"], arr["z"]))
-    arr = np.asarray(arr, dtype=np.float32)
-    if arr.size == 0:
-        return np.empty((0, 3), dtype=np.float32)
-    return np.ascontiguousarray(arr.reshape(-1, 3), dtype=np.float32)
+from tank_common.pointcloud import pointcloud2_to_xyz_array
 
 
 def get_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
@@ -324,13 +298,6 @@ def extract_payload_list(data: Any, key: str = "obstacles") -> List[Any]:
         return inner[key]
     return []
 
-
-def prefab_half_size(name: str) -> Tuple[float, float]:
-    lname = str(name).lower()
-    for key, value in PREFAB_HALF_SIZES.items():
-        if key.lower() in lname:
-            return value
-    return 1.0, 1.0
 
 
 def obstacle_to_bbox(obs: Dict[str, Any]) -> Optional[Dict[str, float]]:

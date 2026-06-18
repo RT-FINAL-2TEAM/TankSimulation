@@ -88,6 +88,20 @@ PREFAB_HALF_SIZES: Dict[str, Tuple[float, float]] = {
     "Wall002": (3.0, 1.0),
 }
 
+
+def prefab_half_size(name: str) -> Tuple[float, float]:
+    """프리팹 이름으로 (half_x, half_y) 충돌 반경을 조회한다(미등록 시 1.0×1.0).
+
+    PREFAB_HALF_SIZES와 한 곳에 두어, potential·path_planning이 각자 복붙하던 구현을
+    단일 출처로 통합한다.
+    """
+    lname = str(name).lower()
+    for key, value in PREFAB_HALF_SIZES.items():
+        if key.lower() in lname:
+            return value
+    return 1.0, 1.0
+
+
 # 카메라 + LiDAR 캘리브레이션 / 오버레이 기본값. 이 캘리브레이션은 raw LiDAR 전처리가 아니라
 # local-path/fusion 레이어에 속한다.
 CAMERA_LIDAR_PROJECTION_PARAMS = {
