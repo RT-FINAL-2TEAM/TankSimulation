@@ -16,6 +16,7 @@ def generate_launch_description():
                 "input_topic": "/tank/sensor/lidar/all_detected_points_map",
                 "map_frame": "tank_map",
                 "auto_finalize_after_idle_sec": 0.0,
+                "save_dir": "~/tank_project/recon_reports/terrain_maps",
             }],
         ),
     ])

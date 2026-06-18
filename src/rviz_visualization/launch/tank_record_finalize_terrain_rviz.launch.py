@@ -20,7 +20,7 @@ def generate_launch_description():
                 "fallback_ground_percentile": 70.0,
                 "fallback_ground_margin": 0.70,
                 "publish_period_sec": 0.5,
-                "save_dir": "~/tank_terrain_maps",
+                "save_dir": "~/tank_project/recon_reports/terrain_maps",
                 "save_csv": False,
                 "auto_finalize_after_idle_sec": 0.0,
                 "grid_cell_size": 0.8,
