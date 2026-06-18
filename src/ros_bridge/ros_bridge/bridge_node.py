@@ -244,6 +244,19 @@ class RosBridge(Node):
         )
 
         # ----------------------------------------------------
+        # LLM 위험도/전술 결정 구독 → MFD(aiLog)에 노출
+        # route_risk_node가 발행한 최신 결정을 latest["decision"]에 저장하면
+        # /api/dashboard/state가 aiLog로 노출하고 MFD 프론트가 렌더한다.
+        # ----------------------------------------------------
+        self.sub_risk_report = self.create_subscription(
+            String,
+            "/tank/risk/route_report",
+            self.on_risk_report,
+            10,
+            callback_group=self.control_callback_group,
+        )
+
+        # ----------------------------------------------------
         # Internal shared state
         # ----------------------------------------------------
         # 공유 상태 보호용 Lock이다. Flask thread와 ROS2 callback thread가 동시에 접근하는 것을 막는다.
@@ -412,6 +425,29 @@ class RosBridge(Node):
             # 외부에서 받은 값을 참조로 최신 상태 저장소에 반영한다. (불필요한 deepcopy 제거)
             self._latest[key] = value
 
+    def get_latest_snapshot(self) -> Dict[str, Any]:
+        """Return a JSON-friendly copy of the bridge state for dashboard views."""
+        now = now_wall()
+        with self._lock:
+            latest_command_age = None
+            if self._latest_command_stamp is not None:
+                latest_command_age = now - self._latest_command_stamp
+            return {
+                "available": True,
+                "timestampWall": now,
+                "mode": TANK_MODE,
+                "routeCounts": deepcopy(self._route_counts),
+                "route_counts": deepcopy(self._route_counts),
+                "latest": deepcopy(self._latest),
+                "latestCommand": deepcopy(self._latest_command),
+                "latestCommandAgeSec": latest_command_age,
+                "hasOneShotOverride": self._one_shot_override is not None,
+                "coordinatePolicy": {
+                    "raw": "Unity API x,y,z",
+                    "map": "x=raw.x, y=raw.z, z=raw.y",
+                },
+            }
+
     # --------------------------------------------------------
     # Command callbacks
     # --------------------------------------------------------
@@ -478,6 +514,26 @@ class RosBridge(Node):
             })
         except Exception as exc:
             self.get_logger().error(f"Failed to log fused objects: {exc}")
+
+    def on_risk_report(self, msg: String) -> None:
+        """route_risk_node의 LLM 전술 결정을 받아 latest["decision"]에 저장(MFD aiLog 노출)."""
+        try:
+            data = json.loads(msg.data)
+        except Exception as exc:
+            self.get_logger().warn(f"risk report parse 실패: {exc}")
+            return
+        res = data.get("result") if isinstance(data, dict) else None
+        res = res if isinstance(res, dict) else {}
+        rl = res.get("risk_level") if isinstance(res.get("risk_level"), dict) else {}
+        summary = (
+            f"추천 route_{res.get('selected_route', '?')} · "
+            f"risk A:{rl.get('A', '?')}/B:{rl.get('B', '?')} · {res.get('summary', '')}"
+        )
+        self.update_latest("decision", {
+            "summary": summary,
+            "result": res,
+            "timestamp_wall": now_wall(),
+        })
 
     # /get_action 응답에 실제로 사용할 명령과 명령 출처 문자열을 선택한다.
     def select_action_command(self) -> Tuple[Dict[str, Any], str]:

@@ -45,7 +45,7 @@ import threading
 
 # Optional:
 # - bridge/executor/spin_thread가 아직 생성되지 않았을 때 None일 수 있음을 type hint로 표현한다.
-from typing import Optional
+from typing import Any, Optional
 
 
 ############################################################
@@ -55,14 +55,27 @@ from typing import Optional
 # rclpy:
 # - ROS2 Python client library이다.
 # - rclpy.init(), rclpy.ok(), rclpy.shutdown()으로 ROS2 lifecycle을 관리한다.
-import rclpy
+try:
+    import rclpy
+except Exception as exc:  # pragma: no cover - runtime environment guard
+    rclpy = None
+    _ROS_IMPORT_ERROR = exc
+else:
+    _ROS_IMPORT_ERROR = None
 
 # MultiThreadedExecutor:
 # - ROS2 callback을 처리하는 executor이다.
 # - 여러 callback을 병렬 처리할 수 있다.
 # - 이 프로젝트에서는 Flask 요청 처리와 ROS2 subscriber/timer callback이 동시에 들어올 수 있으므로
 #   SingleThreadedExecutor보다 MultiThreadedExecutor가 안전하다.
-from rclpy.executors import MultiThreadedExecutor
+if rclpy is not None:
+    try:
+        from rclpy.executors import MultiThreadedExecutor
+    except Exception as exc:  # pragma: no cover - runtime environment guard
+        MultiThreadedExecutor = None
+        _ROS_IMPORT_ERROR = exc
+else:
+    MultiThreadedExecutor = None
 
 
 ############################################################
@@ -73,7 +86,14 @@ from rclpy.executors import MultiThreadedExecutor
 # - bridge_node.py에 정의된 ROS2 Node 클래스이다.
 # - 시뮬레이터 데이터를 ROS2 topic으로 publish하고,
 #   ROS2 제어 명령 topic을 subscribe하는 핵심 node이다.
-from .bridge_node import RosBridge
+if rclpy is not None and MultiThreadedExecutor is not None:
+    try:
+        from .bridge_node import RosBridge
+    except Exception as exc:  # pragma: no cover - runtime environment guard
+        RosBridge = None
+        _ROS_IMPORT_ERROR = exc
+else:
+    RosBridge = None
 
 # ROS_EXECUTOR_THREADS:
 # - MultiThreadedExecutor에서 사용할 thread 개수이다.
@@ -93,13 +113,13 @@ except ImportError:
 # - 현재 실행 중인 RosBridge node 인스턴스를 저장한다.
 # - app_routes.py에서 get_bridge()를 통해 이 객체에 접근한다.
 # - 아직 start_ros()가 호출되지 않았으면 None이다.
-bridge: Optional[RosBridge] = None
+bridge: Optional[Any] = None
 
 # executor:
 # - ROS2 callback을 처리하는 executor 객체이다.
 # - RosBridge node의 subscriber callback, timer callback 등을 실행한다.
 # - 아직 start_ros()가 호출되지 않았으면 None이다.
-executor: Optional[MultiThreadedExecutor] = None
+executor: Optional[Any] = None
 
 # spin_thread:
 # - executor.spin()을 실행하는 background thread이다.
@@ -112,7 +132,7 @@ spin_thread: Optional[threading.Thread] = None
 # 5. Bridge accessor
 ############################################################
 
-def get_bridge() -> Optional[RosBridge]:
+def get_bridge() -> Optional[Any]:
     """
     현재 실행 중인 RosBridge 인스턴스를 반환한다.
 
@@ -132,6 +152,15 @@ def get_bridge() -> Optional[RosBridge]:
 
     # 현재 module 전역 변수 bridge를 그대로 반환한다.
     return bridge
+
+
+def ros_status() -> dict:
+    """Return the current ROS2 runtime status for dashboard/debug routes."""
+    return {
+        "available": bridge is not None,
+        "importError": None if _ROS_IMPORT_ERROR is None else str(_ROS_IMPORT_ERROR),
+        "executorRunning": spin_thread is not None and spin_thread.is_alive(),
+    }
 
 
 ############################################################
@@ -160,6 +189,11 @@ def start_ros() -> None:
 
     # 이 함수 안에서 module 전역 변수 bridge/executor/spin_thread를 갱신하겠다는 선언이다.
     global bridge, executor, spin_thread
+
+    if _ROS_IMPORT_ERROR is not None or rclpy is None or MultiThreadedExecutor is None or RosBridge is None:
+        print(f"[ROS] disabled: {_ROS_IMPORT_ERROR}")
+        print("[ROS] Flask routes remain available; /api/dashboard/state will report bridge unavailable.")
+        return
 
     # 이미 RosBridge node가 생성되어 있다면 중복으로 ROS2를 시작하지 않는다.
     if bridge is not None:
@@ -232,7 +266,7 @@ def stop_ros() -> None:
         bridge.destroy_node()
 
     # rclpy가 아직 살아 있으면 ROS2 Python client library를 종료한다.
-    if rclpy.ok():
+    if rclpy is not None and rclpy.ok():
         rclpy.shutdown()
 
     # 종료 후 재시작 가능하도록 전역 참조를 None으로 초기화한다.

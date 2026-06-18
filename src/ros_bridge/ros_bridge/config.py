@@ -223,14 +223,15 @@ IMAGE_DIR = Path(os.environ.get("TANK_IMAGE_DIR", "./tank_images"))
 # 이 기능은 YOLO를 다시 실행하지 않고, /detect로 들어온 최신 프레임과
 # 이미 계산된 detection 결과를 화면에 표시만 한다.
 LIVE_VIEW_ENABLED = os.environ.get("TANK_LIVE_VIEW", "true").strip().lower() in ("1", "true", "yes", "y")
-LIVE_VIEW_FPS = float(os.environ.get("TANK_LIVE_VIEW_FPS", "20"))
-LIVE_VIEW_JPEG_QUALITY = int(os.environ.get("TANK_LIVE_VIEW_JPEG_QUALITY", "80"))
+LIVE_VIEW_FPS = float(os.environ.get("TANK_LIVE_VIEW_FPS", "8"))
+LIVE_VIEW_JPEG_QUALITY = int(os.environ.get("TANK_LIVE_VIEW_JPEG_QUALITY", "65"))
 
 # TANK_YOLO_ASYNC=true이면 /detect 요청에서 YOLO 완료를 기다리지 않고,
 # 백그라운드 worker가 최신 프레임만 처리한다. 기본값은 기존 동기식 안전 동작이다.
 YOLO_ASYNC_ENABLED = os.environ.get("TANK_YOLO_ASYNC", "false").strip().lower() in ("1", "true", "yes", "y")
 YOLO_ASYNC_MIN_INTERVAL_SEC = float(os.environ.get("TANK_YOLO_ASYNC_MIN_INTERVAL_SEC", "0.0"))
 YOLO_ASYNC_MAX_RESULT_AGE_MS = float(os.environ.get("TANK_YOLO_ASYNC_MAX_RESULT_AGE_MS", "300"))
+YOLO_ASYNC_LOG_INTERVAL_SEC = float(os.environ.get("TANK_YOLO_ASYNC_LOG_INTERVAL_SEC", "2.0"))
 
 
 ############################################################
