@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-ROS2 node: LiDAR detected map points -> lightweight DBSCAN clusters.
-(Optimized with PointCloud2, NumPy and Scikit-Learn)
+ROS2 노드: LiDAR로 탐지한 맵 포인트 -> 경량 DBSCAN 클러스터.
+(PointCloud2, NumPy, Scikit-Learn으로 최적화)
 
-Team command compatibility:
+팀 명령 호환:
   ros2 run tank_visual_perception lidar_dbscan_cluster_node \
     --ros-args \
     -p eps:=1.5 \
@@ -40,7 +40,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 @dataclass
 class Cluster:
     cluster_id: int
-    points: np.ndarray  # (N, 3) numpy array
+    points: np.ndarray  # (N, 3) numpy 배열
 
     @property
     def count(self) -> int:
@@ -79,11 +79,11 @@ def point_msg(x: float, y: float, z: float = 0.0) -> Point:
 
 
 def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
-    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+    """PointCloud2의 XYZ 필드를 연속(contiguous) float32 (N, 3) 배열로 반환한다.
 
-    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
-    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
-    node usable on older sensor_msgs_py versions.
+    ROS2 Humble 이상의 sensor_msgs_py는 read_points_numpy()를 제공하며, 이는 모든
+    LiDAR 히트마다 Python dict/list 객체를 만드는 것을 피한다. fallback은 구버전
+    sensor_msgs_py에서도 노드가 동작하도록 유지하기 위한 것이다.
     """
     try:
         arr = point_cloud2.read_points_numpy(

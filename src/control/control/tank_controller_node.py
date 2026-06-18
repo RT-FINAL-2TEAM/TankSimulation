@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-ROS2 controller converted from the latest TankSimulation Flask controllers.
+최신 TankSimulation Flask 컨트롤러를 ROS2로 옮긴 컨트롤러.
 
-The control policy intentionally follows the team server logic:
-- target yaw = atan2(dx, dy), where map x/y corresponds Unity x/z.
-- steering command is A/D with weight proportional to yaw error.
-- speed command slows/stops for large yaw error and stops at the final goal.
-- local-minimum/stuck escape: reverse, then pivot turn.
+제어 정책은 의도적으로 팀 서버 로직을 따른다:
+- target yaw = atan2(dx, dy). 여기서 map x/y는 Unity x/z에 대응한다.
+- 조향 명령은 yaw error에 비례하는 weight의 A/D다.
+- 속도 명령은 yaw error가 크면 감속/정지하고 최종 goal에서 정지한다.
+- 지역최소/끼임(stuck) 탈출: 후진 후 제자리 선회.
 
-It publishes the official Tank Challenge /get_action JSON to /tank/control/command.
+공식 Tank Challenge /get_action JSON을 /tank/control/command로 발행한다.
 """
 
 import json

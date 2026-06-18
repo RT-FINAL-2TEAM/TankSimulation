@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Global vision / YOLO configuration values."""
+"""전역 vision / YOLO 설정값."""
 
 from __future__ import annotations
 

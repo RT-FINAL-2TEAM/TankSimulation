@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-ROS2 node: LiDAR points -> turret camera image projection overlay.
+ROS2 노드: LiDAR 포인트 -> 포탑 카메라 이미지 투영 오버레이.
 
-This node is for calibration visualization, and uses the same projection math as
-path_planning/local_path_node.py so the manually tuned calibration affects both
-RViz overlay and actual YOLO-LiDAR fusion.
+이 노드는 캘리브레이션 시각화용이며, path_planning/local_path_node.py와 동일한 투영
+수식을 쓴다. 그래서 수동으로 튜닝한 캘리브레이션이 RViz 오버레이와 실제 YOLO-LiDAR
+융합에 모두 반영된다.
 
-Subscribe:
+구독(Subscribe):
   /tank/camera/image_compressed     sensor_msgs/CompressedImage
   /tank/api/info/raw                std_msgs/String
 
-Publish:
+발행(Publish):
   /tank/camera/lidar_projection/image       sensor_msgs/Image
   /tank/camera/lidar_projection/compressed  sensor_msgs/CompressedImage
   /tank/camera/lidar_projection/status      std_msgs/String
@@ -48,11 +48,11 @@ def compressed_msg_to_cv2(msg: CompressedImage) -> Optional[np.ndarray]:
 
 
 def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
-    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+    """PointCloud2의 XYZ 필드를 연속(contiguous) float32 (N, 3) 배열로 반환한다.
 
-    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
-    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
-    node usable on older sensor_msgs_py versions.
+    ROS2 Humble 이상의 sensor_msgs_py는 read_points_numpy()를 제공해, LiDAR 히트마다
+    Python dict/list 객체를 만드는 걸 피한다. fallback은 더 오래된 sensor_msgs_py
+    버전에서도 노드가 동작하게 유지한다.
     """
     try:
         arr = point_cloud2.read_points_numpy(
@@ -225,7 +225,7 @@ class LidarCameraOverlayNode(Node):
         total_count = int(lidar_points.shape[0])
         for x, y, z in lidar_points:
             map_pos = {"x": float(x), "y": float(y), "z": float(z)}
-            # map.x == raw.x, map.y == raw.z.  Distance filter is only for overlay load limiting.
+            # map.x == raw.x, map.y == raw.z. 거리 필터는 오버레이 부하 제한용일 뿐이다.
             distance = math.hypot(map_pos["x"] - cam_raw_x, map_pos["y"] - cam_raw_z)
             if distance < self.min_distance or distance > self.max_distance:
                 continue

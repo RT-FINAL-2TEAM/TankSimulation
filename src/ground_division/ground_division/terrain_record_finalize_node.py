@@ -56,11 +56,11 @@ except Exception:  # pragma: no cover - optional dependency
 
 
 def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
-    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+    """PointCloud2의 XYZ 필드를 연속된 float32 (N, 3) 배열로 반환한다.
 
-    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
-    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
-    node usable on older sensor_msgs_py versions.
+    ROS2 Humble 이상의 sensor_msgs_py는 read_points_numpy()를 제공하며, 이는 모든
+    LiDAR hit마다 Python dict/list 객체를 만드는 비용을 피한다. fallback 경로는
+    구버전 sensor_msgs_py에서도 노드가 동작하도록 유지한다.
     """
     try:
         arr = point_cloud2.read_points_numpy(
@@ -92,7 +92,7 @@ class TerrainRecordFinalizeNode(Node):
         super().__init__("terrain_record_finalize_node")
 
         # -----------------------------
-        # Parameters
+        # 파라미터
         # -----------------------------
         # 기본은 lidar_processor_node가 이미 분리한 결과를 그대로 사용한다.
         # use_preclassified_lidar=False로 두면 예전처럼 all_detected_points_map을 다시 분리한다.
@@ -157,7 +157,7 @@ class TerrainRecordFinalizeNode(Node):
         self.save_dir.mkdir(parents=True, exist_ok=True)
 
         # -----------------------------
-        # Internal state
+        # 내부 상태
         # -----------------------------
         # _recording_points는 최종 ground 후보, 즉 terrain_points_map 누적분이다.
         # _recording_obstacle_points는 detected_points_map 누적분이며 final_non_ground_points로 저장한다.
@@ -178,7 +178,7 @@ class TerrainRecordFinalizeNode(Node):
         self._last_summary = "아직 finalize되지 않았습니다."
 
         # -----------------------------
-        # ROS interfaces
+        # ROS 인터페이스
         # -----------------------------
         # JSON(String) 대신 PointCloud2로 직접 구독.
         # 기본 모드: lidar_processor_node의 분리 결과를 그대로 기록한다.
@@ -221,7 +221,7 @@ class TerrainRecordFinalizeNode(Node):
         )
 
     # ------------------------------------------------------------------
-    # Input parsing (Optimized for PointCloud2)
+    # 입력 파싱 (PointCloud2에 최적화)
     # ------------------------------------------------------------------
     def _record_pc2_points(self, msg: PointCloud2, target: str) -> None:
         """바이너리 PointCloud2를 NumPy로 변환해 terrain 또는 obstacle 누적 버퍼에 기록한다."""
@@ -264,11 +264,11 @@ class TerrainRecordFinalizeNode(Node):
         self._record_pc2_points(msg, "obstacle")
 
     def on_lidar_pc2(self, msg: PointCloud2) -> None:
-        """Legacy mode: all_detected_points_map을 기록한 뒤 finalize 시 다시 분리한다."""
+        """레거시 모드: all_detected_points_map을 기록한 뒤 finalize 시 다시 분리한다."""
         self._record_pc2_points(msg, "terrain")
 
     # ------------------------------------------------------------------
-    # Services
+    # 서비스
     # ------------------------------------------------------------------
     def on_finalize_service(self, request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
         ok, summary = self.finalize_map()
@@ -313,7 +313,7 @@ class TerrainRecordFinalizeNode(Node):
             self.finalize_map()
 
     # ------------------------------------------------------------------
-    # Final map generation
+    # 최종 지도 생성
     # ------------------------------------------------------------------
     def finalize_map(self) -> Tuple[bool, str]:
         if len(self._recording_points) < self.min_points_to_finalize:
@@ -472,7 +472,7 @@ class TerrainRecordFinalizeNode(Node):
         return points[mask], points[~mask], "fallback_z_filter"
 
     # ------------------------------------------------------------------
-    # Publishing / visualization
+    # 발행 / 시각화
     # ------------------------------------------------------------------
     def on_publish_timer(self) -> None:
         if self._finalized:
@@ -654,7 +654,7 @@ class TerrainRecordFinalizeNode(Node):
         return marker
 
     # ------------------------------------------------------------------
-    # Saving
+    # 저장
     # ------------------------------------------------------------------
     def save_outputs(
         self,
@@ -664,7 +664,7 @@ class TerrainRecordFinalizeNode(Node):
         non_ground: np.ndarray,
         method: str,
     ) -> None:
-        import json # Local import for saving meta
+        import json # 메타 저장용 지역 import
         
         np.save(str(out_prefix) + "_accumulated.npy", accumulated)
         np.save(str(out_prefix) + "_ground.npy", ground)
@@ -675,7 +675,7 @@ class TerrainRecordFinalizeNode(Node):
             np.savetxt(str(out_prefix) + "_ground.csv", ground, delimiter=",", header="x,y,z", comments="")
             np.savetxt(str(out_prefix) + "_non_ground.csv", non_ground, delimiter=",", header="x,y,z", comments="")
 
-        import time # Local
+        import time # 지역 import
         meta = {
             "created_wall_time": time.time(),
             "map_frame": self.map_frame,

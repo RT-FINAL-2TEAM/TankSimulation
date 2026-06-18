@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Global control package configuration values."""
+"""control 패키지 전역 설정값."""
 
 from __future__ import annotations
 
