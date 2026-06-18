@@ -39,6 +39,7 @@ from control.config import (
     STOP_DISTANCE,
     STRAIGHT_WS_WEIGHT,
     STEERING_FULL_ERROR_DEG,
+    STEERING_KD,
     STUCK_CHECK_PERIOD,
     STUCK_MIN_MOVEMENT,
     TARGET_TTL_SEC,
@@ -101,6 +102,7 @@ class TeamPathControllerNode(Node):
         self.declare_parameter("steering_full_error_deg", STEERING_FULL_ERROR_DEG)
         self.declare_parameter("min_ad_weight", MIN_AD_WEIGHT)
         self.declare_parameter("max_ad_weight", MAX_AD_WEIGHT)
+        self.declare_parameter("steering_kd", STEERING_KD)
         self.declare_parameter("straight_ws_weight", STRAIGHT_WS_WEIGHT)
         self.declare_parameter("turn_ws_weight", TURN_WS_WEIGHT)
         self.declare_parameter("rotate_in_place_angle_deg", ROTATE_IN_PLACE_ANGLE_DEG)
@@ -119,6 +121,10 @@ class TeamPathControllerNode(Node):
         self.steering_full_error_deg = max(1.0, float(self.get_parameter("steering_full_error_deg").value))
         self.min_ad_weight = float(self.get_parameter("min_ad_weight").value)
         self.max_ad_weight = float(self.get_parameter("max_ad_weight").value)
+        self.controller_hz = max(1.0, float(self.get_parameter("controller_hz").value))
+        self.steering_kd = float(self.get_parameter("steering_kd").value)
+        # PD(rate feedback)용 상태: 직전 헤딩값(yaw_rate 산출). None이면 첫 틱 rate=0.
+        self._last_current_yaw: Optional[float] = None
         self.straight_ws_weight = float(self.get_parameter("straight_ws_weight").value)
         self.turn_ws_weight = float(self.get_parameter("turn_ws_weight").value)
         self.rotate_in_place_angle_deg = float(self.get_parameter("rotate_in_place_angle_deg").value)
@@ -271,10 +277,19 @@ class TeamPathControllerNode(Node):
         dy = target[1] - self.current_pos[1]
         desired_yaw = math.degrees(math.atan2(dx, dy))
         yaw_error = normalize_angle(desired_yaw - self.current_yaw)
+        # yaw_rate: 헤딩 자체의 회전속도(deg/s). 타겟(setpoint) 변화엔 안 반응 → derivative kick 방지.
+        if self._last_current_yaw is None:
+            yaw_rate = 0.0
+        else:
+            yaw_rate = normalize_angle(self.current_yaw - self._last_current_yaw) * self.controller_hz
+        self._last_current_yaw = self.current_yaw
         if abs(yaw_error) < self.heading_deadband_deg:
             return "", 0.0, yaw_error, desired_yaw
-        cmd = "D" if yaw_error > 0 else "A"
-        weight = abs(yaw_error) / self.steering_full_error_deg
+        # PD: P가 타겟으로 끌고, D(rate feedback)가 빠른 회전을 눌러 오버슈팅(=A↔D weaving) 억제.
+        # 회전명령을 0으로 죽이지 않아(coast 없음) 좁은 코리더에서 언더스티어로 벽 긁는 부작용 없음.
+        u = yaw_error - self.steering_kd * yaw_rate
+        cmd = "D" if u > 0 else "A"
+        weight = abs(u) / self.steering_full_error_deg
         if self.min_ad_weight > 0:
             weight = max(self.min_ad_weight, weight)
         weight = clamp(weight, 0.0, self.max_ad_weight)

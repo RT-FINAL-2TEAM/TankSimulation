@@ -203,6 +203,8 @@ def generate_launch_description():
                 "steering_full_error_deg": 45.0,
                 "min_ad_weight": 0.0,
                 "max_ad_weight": 1.0,
+                # weaving(A↔D 토글) 완화: PD(rate feedback) D 게인. 0이면 기존 순수 P 거동.
+                "steering_kd": 0.2,
                 "straight_ws_weight": 1.0,
                 "turn_ws_weight": 0.4,
                 "rotate_in_place_angle_deg": 60.0,
