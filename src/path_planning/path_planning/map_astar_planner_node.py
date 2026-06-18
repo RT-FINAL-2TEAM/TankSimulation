@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-ROS2 conversion of the latest TankSimulation path-planning work.
+TankSimulation 최신 경로계획 작업을 ROS2로 이식한 노드.
 
-Source intent from TankSimulation.zip:
-- src/planning/path_planning.py: grid A* with obstacle inflation and LOS smoothing.
-- tests/step3_threat_avoidance/run_server.py: do not rely on GT obstacles by default;
-  accumulate LiDAR obstacles, detect when they block the current route, then replan.
+TankSimulation.zip의 원본 의도:
+- src/planning/path_planning.py: 장애물 inflate + LOS 스무딩이 들어간 격자 A*.
+- tests/step3_threat_avoidance/run_server.py: 기본적으로 GT 장애물에 의존하지 않는다.
+  LiDAR 장애물을 누적하고, 그것이 현재 루트를 막는지 감지한 뒤 재탐색한다.
 
-This node keeps the same ROS2 outputs so existing RViz/controller nodes continue to work.
+기존 RViz/컨트롤러 노드가 계속 동작하도록 ROS2 출력은 동일하게 유지한다.
 
-Important integration policy:
-- A* global path is NOT recomputed every timer tick.
-- By default it plans once after start/goal is known, then only replans on explicit goal/GT-obstacle update.
-- LiDAR-based dynamic replanning is opt-in and rate-limited; APF should handle normal local avoidance.
+중요한 통합 정책:
+- A* 전역 경로를 타이머 틱마다 재계산하지 않는다.
+- 기본적으로 start/goal을 알게 되면 1회 계획하고, 이후엔 명시적 goal/GT-장애물 갱신 시에만 재탐색한다.
+- LiDAR 기반 동적 재탐색은 opt-in이며 속도 제한이 걸린다. 일반적인 국소 회피는 APF가 처리해야 한다.
 """
 
 import csv
@@ -101,11 +101,11 @@ def clamp(v: float, lo: float, hi: float) -> float:
 
 
 def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
-    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+    """PointCloud2의 XYZ 필드를 연속(contiguous) float32 (N, 3) 배열로 반환한다.
 
-    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
-    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
-    node usable on older sensor_msgs_py versions.
+    ROS2 Humble 이상의 sensor_msgs_py는 read_points_numpy()를 제공해, LiDAR 점마다
+    Python dict/list 객체를 만드는 비용을 피한다. fallback은 구버전 sensor_msgs_py에서도
+    노드가 동작하도록 유지하기 위한 것이다.
     """
     try:
         arr = point_cloud2.read_points_numpy(
@@ -310,7 +310,7 @@ def plan_global_path(
 
 
 def extract_payload_list(data: Any, key: str = "obstacles") -> List[Any]:
-    """Accept bridge payloads and direct payloads."""
+    """브릿지 payload와 직접 payload를 모두 허용한다."""
     if isinstance(data, list):
         return data
     if not isinstance(data, dict):
@@ -362,7 +362,7 @@ def parse_obstacles_payload(payload: Any) -> List[Dict[str, float]]:
 
 
 def find_lookahead_along_path(pos: Tuple[float, float], route: Sequence[Tuple[float, float]], lookahead_dist: float) -> Tuple[Tuple[float, float], int]:
-    """Project current position to path, then advance by lookahead distance."""
+    """현재 위치를 경로에 투영한 뒤, lookahead 거리만큼 전진한 지점을 구한다."""
     if not route:
         return pos, 0
     if len(route) == 1:
@@ -419,12 +419,12 @@ class TeamDynamicAStarPlannerNode(Node):
         self.declare_parameter("use_path_smoothing", USE_PATH_SMOOTHING)
         self.declare_parameter("use_gt_obstacles", USE_GT_OBSTACLES)
         self.declare_parameter("enable_dynamic_replan", ENABLE_DYNAMIC_REPLAN)
-        # Periodic replanning caused the vehicle to chase a constantly moving global path.
-        # Keep it disabled by default. Set >0 only for deliberate experiments.
+        # 주기적 재탐색은 전차가 끊임없이 움직이는 전역경로를 쫓게 만들었다.
+        # 기본은 비활성으로 둔다. 의도적인 실험에서만 >0으로 설정한다.
         self.declare_parameter("enable_periodic_replan", ENABLE_PERIODIC_REPLAN)
         self.declare_parameter("replan_period_sec", REPLAN_PERIOD_SEC)
-        # LiDAR replanning is also throttled because raw LiDAR points can repeatedly mark
-        # the current path as blocked and cause planning loops.
+        # LiDAR 재탐색에도 속도 제한을 둔다. raw LiDAR 점이 현재 경로를 반복적으로 막힘으로
+        # 표시해 계획 루프를 유발할 수 있기 때문이다.
         self.declare_parameter("dynamic_replan_cooldown_sec", DYNAMIC_REPLAN_COOLDOWN_SEC)
         self.declare_parameter("plan_retry_period_sec", PLAN_RETRY_PERIOD_SEC)
         self.declare_parameter("path_block_margin", PATH_BLOCK_MARGIN)
@@ -517,7 +517,7 @@ class TeamDynamicAStarPlannerNode(Node):
         self.route: List[Tuple[float, float]] = []
         self.route_version = 0
         self.route_index = 0
-        # Use monotonic wall time for planner throttling; ROS time can stay at 0 when /clock is not active.
+        # planner 속도 제한엔 monotonic wall time을 쓴다. /clock이 비활성이면 ROS time이 0에 머물 수 있다.
         self.last_plan_wall = -1e9
         self.last_plan_attempt_wall = -1e9
         self.last_dynamic_replan_wall = -1e9
@@ -590,7 +590,7 @@ class TeamDynamicAStarPlannerNode(Node):
             self.get_logger().warn(f"failed to parse /tank/map/obstacles: {exc}")
             return
 
-        # Update even when the list is empty; otherwise stale GT obstacles can remain forever.
+        # 리스트가 비어 있어도 갱신한다. 안 그러면 stale GT 장애물이 영영 남을 수 있다.
         old_obstacles = self.gt_obstacles
         self.gt_obstacles = obs
         if self.use_gt_obstacles and obs != old_obstacles:
@@ -604,8 +604,8 @@ class TeamDynamicAStarPlannerNode(Node):
     def lidar_cb(self, msg: PointCloud2) -> None:
         try:
             points = pointcloud2_to_xyz_array(msg)
-            # LidarObstacleMemory still owns the planning-side memory/clustering logic.
-            # Feed it a minimal in-memory payload instead of parsing a LiDAR JSON String.
+            # 계획 쪽 메모리/클러스터링 로직은 여전히 LidarObstacleMemory가 담당한다.
+            # LiDAR JSON String을 파싱하는 대신 최소한의 in-memory payload를 넘겨준다.
             point_items = [
                 {
                     "isDetected": True,
@@ -644,7 +644,7 @@ class TeamDynamicAStarPlannerNode(Node):
                     if bbox is None:
                         continue
                     try:
-                        # Cluster bbox is in ROS map x/y/z. A* bbox uses x/z keys, where z means map-plane y.
+                        # 클러스터 bbox는 ROS map x/y/z 좌표다. A* bbox는 x/z 키를 쓰며, 여기서 z는 map 평면의 y를 뜻한다.
                         bboxes.append({
                             "x_min": float(bbox["x_min"]) - margin,
                             "x_max": float(bbox["x_max"]) + margin,
@@ -659,8 +659,8 @@ class TeamDynamicAStarPlannerNode(Node):
             self.latest_cluster_bboxes = bboxes
             self.latest_cluster_count = len(clusters) if isinstance(clusters, list) else 0
             if self.use_lidar_cluster_bboxes:
-                # Publish cluster-derived A* bboxes even when dynamic replanning is disabled,
-                # so RViz/debug nodes can verify that the DBSCAN output is connected to planner bbox input.
+                # 동적 재탐색이 꺼져 있어도 클러스터에서 유도한 A* bbox를 발행한다.
+                # RViz/디버그 노드가 DBSCAN 출력이 planner bbox 입력에 연결됐는지 확인할 수 있도록.
                 self.publish_lidar_bboxes(bboxes)
         except Exception as exc:
             self.get_logger().warn(f"failed to parse lidar clusters: {exc}")
@@ -878,14 +878,14 @@ class TeamDynamicAStarPlannerNode(Node):
         need_plan = False
         reason = ""
 
-        # 1) Initial or event-driven plan request. Retry slowly if planning fails.
+        # 1) 초기 또는 이벤트 기반 계획 요청. 계획이 실패하면 천천히 재시도한다.
         if not self.route and self.plan_request_pending:
             if (wall_now - self.last_plan_attempt_wall) >= self.plan_retry_period_sec:
                 need_plan = True
                 reason = self.plan_request_reason or "initial"
 
-        # 2) Optional LiDAR dynamic replanning. Disabled by default because APF should
-        #    solve local avoidance; this prevents continuous global-path regeneration.
+        # 2) 선택적 LiDAR 동적 재탐색. 국소 회피는 APF가 풀어야 하므로 기본은 비활성이다.
+        #    전역경로가 끊임없이 재생성되는 것을 막는다.
         elif self.route and self.enable_dynamic_replan:
             cooldown_ok = (wall_now - self.last_dynamic_replan_wall) >= self.dynamic_replan_cooldown_sec
             blocked_now = self.lidar_obstacles.is_current_path_blocked(
@@ -905,7 +905,7 @@ class TeamDynamicAStarPlannerNode(Node):
                 need_plan = True
                 reason = "lidar_path_blocked"
 
-        # 3) Optional low-rate route refresh. Also disabled by default.
+        # 3) 선택적 저빈도 루트 갱신. 이것도 기본은 비활성이다.
         if (
             not need_plan
             and self.route
@@ -917,7 +917,7 @@ class TeamDynamicAStarPlannerNode(Node):
             reason = "periodic_refresh"
 
         if get_distance(self.current_pos, self.goal_pos) < self.goal_tolerance:
-            # Keep publishing the final target while controller stops.
+            # 컨트롤러가 멈추는 동안에도 최종 목표점을 계속 발행한다.
             pass
         elif need_plan:
             self.maybe_plan(reason)

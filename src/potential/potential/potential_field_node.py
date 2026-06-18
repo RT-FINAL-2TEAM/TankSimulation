@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Lecture-style Artificial Potential Field node for Tank Challenge ROS2.
+Tank Challenge ROS2용 강의식(lecture-style) 인공 포텐셜 필드(APF) 노드.
 
-This implementation keeps the existing ROS2 topic contract, but rewrites the
-internal APF calculation so that it follows the common potential-field lecture
-formulation explicitly:
+이 구현은 기존 ROS2 토픽 규약은 그대로 유지하되, 내부 APF 계산을 일반적인
+포텐셜 필드 강의 공식에 명시적으로 따르도록 다시 작성한 것이다:
 
     U_A = 1/2 * k_A * d^2
     F_A = -grad(U_A) = k_A * (r_D - r_B)
@@ -17,15 +16,14 @@ formulation explicitly:
     theta_D = atan2(F_y, F_x)
     theta_dot_S = k_theta * wrap(theta_D - theta)
 
-The node publishes the same local target used by control, plus detailed
-status/debug topics for RViz and tuning.
+이 노드는 control이 사용하는 동일한 로컬 타깃을 발행하고, 추가로 RViz·튜닝용
+상태/디버그 토픽도 발행한다.
 
-Design policy:
-- User-tunable values are placed as global variables near the top of this file.
-- The same values are also declared as ROS2 parameters, so launch files can still
-  override them later.
-- The controller remains responsible for converting the local target into W/A/S/D.
-  This APF node computes the desired force direction and local target.
+설계 방침:
+- 사용자가 튜닝하는 값은 이 파일 상단의 전역 변수로 둔다.
+- 동일한 값을 ROS2 파라미터로도 선언하므로, launch 파일에서 나중에 덮어쓸 수 있다.
+- 로컬 타깃을 W/A/S/D로 변환하는 책임은 여전히 controller에 있다.
+  이 APF 노드는 원하는 힘의 방향과 로컬 타깃만 계산한다.
 """
 
 import json
@@ -51,10 +49,10 @@ except Exception:  # pragma: no cover
 
 
 # =============================================================================
-# 0. User-tunable global variables
+# 0. 사용자 튜닝 전역 변수
 # =============================================================================
-# Global defaults are centralized in potential.config. ROS2 parameters below keep
-# launch-time override compatibility.
+# 전역 기본값은 potential.config에 모아 둔다. 아래 ROS2 파라미터는 launch 시점
+# 덮어쓰기 호환성을 유지한다.
 from lidar.payloads import parse_lidar_points_payload
 from path_planning.config import PREFAB_HALF_SIZES
 from potential.config import (
@@ -103,7 +101,7 @@ from potential.config import (
 
 
 # =============================================================================
-# 1. Math utilities
+# 1. 수학 유틸리티
 # =============================================================================
 
 
@@ -124,11 +122,11 @@ def clamp(value: float, low: float, high: float) -> float:
 
 
 def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
-    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+    """PointCloud2의 XYZ 필드를 연속 메모리 float32 (N, 3) 배열로 반환한다.
 
-    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
-    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
-    node usable on older sensor_msgs_py versions.
+    ROS2 Humble 이상의 sensor_msgs_py는 read_points_numpy()를 제공하며, 이는
+    모든 LiDAR 점마다 파이썬 dict/list 객체를 만드는 것을 피한다. fallback은
+    구버전 sensor_msgs_py에서도 노드가 동작하도록 유지한다.
     """
     try:
         arr = point_cloud2.read_points_numpy(
@@ -170,7 +168,7 @@ def limit_norm(v: Tuple[float, float], max_norm: float) -> Tuple[float, float]:
 
 
 def normalize_angle_rad(angle: float) -> float:
-    """Wrap angle to [-pi, pi]. This removes atan2 discontinuity at ±pi."""
+    """각도를 [-pi, pi] 범위로 감싼다. ±pi에서의 atan2 불연속을 제거한다."""
     return math.atan2(math.sin(angle), math.cos(angle))
 
 
@@ -179,10 +177,10 @@ def normalize_angle_deg(angle: float) -> float:
 
 
 def quaternion_msg_to_yaw_rad(q: Any) -> float:
-    """Standard ROS 2D yaw from geometry_msgs Quaternion.
+    """geometry_msgs Quaternion에서 표준 ROS 2D yaw를 구한다.
 
-    The APF status uses this only for desired angular velocity debugging. The
-    local-target position remains valid even if orientation is not perfect.
+    APF 상태에서는 이를 원하는 각속도 디버깅 용도로만 쓴다. 자세(orientation)가
+    완벽하지 않더라도 로컬 타깃 위치는 여전히 유효하다.
     """
     x = float(getattr(q, "x", 0.0))
     y = float(getattr(q, "y", 0.0))
@@ -199,10 +197,10 @@ def yaw_rad_to_quaternion_z(yaw: float) -> Tuple[float, float, float, float]:
 
 
 def simulator_quaternion_to_yaw_deg(rot: Dict[str, Any]) -> float:
-    """Yaw helper for .map quaternion written by the simulator.
+    """시뮬레이터가 기록한 .map quaternion용 yaw 헬퍼.
 
-    Existing map files use Unity-like fields. We keep the previous Y-axis yaw
-    extraction because it was used for threat-map parsing.
+    기존 맵 파일은 Unity 형식의 필드를 쓴다. 위협 맵 파싱에 쓰이던 기존
+    Y축 yaw 추출 방식을 그대로 유지한다.
     """
     qx = float(rot.get("x", 0.0))
     qy = float(rot.get("y", 0.0))
@@ -214,7 +212,7 @@ def simulator_quaternion_to_yaw_deg(rot: Dict[str, Any]) -> float:
 
 
 # =============================================================================
-# 2. Lecture-style APF equations
+# 2. 강의식(lecture-style) APF 수식
 # =============================================================================
 
 
@@ -224,7 +222,7 @@ def calc_attractive_force(
     k_att: float,
     max_force: float,
 ) -> Tuple[Tuple[float, float], float]:
-    """Attractive potential and force.
+    """인력 포텐셜과 힘.
 
     d = ||r_B - r_D||
     U_A = 1/2 * k_A * d^2
@@ -245,14 +243,14 @@ def _repulsive_from_point(
     k_rep: float,
     g_star: float,
 ) -> Tuple[Tuple[float, float], float]:
-    """Repulsive potential and force from one obstacle point.
+    """단일 장애물 점이 만드는 척력 포텐셜과 힘.
 
     g = ||r_B - r_O||
     U_R = 1/2 * k_R * (1/g - 1/g*)^2, if g <= g*
     F_R = -grad(U_R) = k_R * (1/g - 1/g*) / g^3 * (r_B - r_O)
 
-    The sign is selected so that the force pushes the vehicle away from the
-    obstacle. This is the physically useful obstacle-avoidance direction.
+    힘이 차량을 장애물에서 밀어내는 방향이 되도록 부호를 선택한다. 이것이
+    물리적으로 유용한 장애물 회피 방향이다.
     """
     g = get_distance(pos, obs)
     if g <= 1e-6 or g > g_star:
@@ -276,7 +274,7 @@ def calc_repulsive_force(
     use_tangent: bool,
     tangent_gain_scale: float,
 ) -> Tuple[Tuple[float, float], Tuple[float, float], float]:
-    """Sum lecture-style repulsion and optional tangential wrapping force."""
+    """강의식 척력과 선택적 접선(tangential) 우회력을 합산한다."""
     rep_x, rep_y = 0.0, 0.0
     tan_x, tan_y = 0.0, 0.0
     total_potential = 0.0
@@ -293,8 +291,8 @@ def calc_repulsive_force(
         if not use_tangent or pot <= 0.0:
             continue
 
-        # Tangential component is not part of the basic APF derivation. It is a
-        # practical extension to reduce local minima and head-on oscillation.
+        # 접선 성분은 기본 APF 유도에는 포함되지 않는다. 지역 최소점(local
+        # minima)과 정면 진동을 줄이기 위한 실용적 확장이다.
         g = get_distance(pos, obs)
         if g <= 1e-6:
             continue
@@ -303,7 +301,7 @@ def calc_repulsive_force(
         ccw = (-away_y, away_x)
         cw = (away_y, -away_x)
 
-        # Pick the tangent direction that is more aligned with the attractive target.
+        # 인력 타깃과 더 잘 정렬되는 접선 방향을 고른다.
         if ccw[0] * dest_x + ccw[1] * dest_y >= cw[0] * dest_x + cw[1] * dest_y:
             tx, ty = ccw
         else:
@@ -451,16 +449,16 @@ def compute_desired_motion(
     max_omega: float,
     strategy: str,
 ) -> Dict[str, float]:
-    """Compute lecture-style desired velocity and angular velocity.
+    """강의식 원하는 속도와 각속도를 계산한다.
 
     theta_D = atan2(F_y, F_x)
     theta_dot_S = k_theta * wrap(theta_D - theta)
 
-    Strategy:
-    - first: move only after heading error is inside epsilon.
-    - second: rotate first until epsilon, then translate while continuing rotation.
-      In this APF node both strategies expose the same target direction; the
-      difference is represented in desired_speed for status/debugging.
+    전략(strategy):
+    - first: 헤딩 오차가 epsilon 안에 들어온 뒤에만 이동한다.
+    - second: epsilon에 들 때까지 먼저 회전하고, 그 뒤 회전을 이어가며 병진한다.
+      이 APF 노드에서는 두 전략 모두 동일한 타깃 방향을 노출하며, 차이는
+      상태/디버깅용 desired_speed에 표현된다.
     """
     f_norm = vector_norm(result_force)
     if f_norm < 1e-9:
@@ -494,12 +492,12 @@ def compute_desired_motion(
 
 
 # =============================================================================
-# 3. Payload parsing utilities
+# 3. 페이로드 파싱 유틸리티
 # =============================================================================
 
 
 def parse_discovered_objects_payload(payload: Any) -> List[Tuple[float, float]]:
-    """Parse /tank/map/discovered/objects into map x/y obstacle points."""
+    """/tank/map/discovered/objects를 map x/y 장애물 점으로 파싱한다."""
     points: List[Tuple[float, float]] = []
     if not isinstance(payload, dict):
         return points
@@ -528,7 +526,7 @@ def parse_discovered_objects_payload(payload: Any) -> List[Tuple[float, float]]:
             if pos is None:
                 continue
             try:
-                # saved discovered map policy: raw.x=map.x, raw.z=map.y
+                # 저장된 discovered 맵 규약: raw.x=map.x, raw.z=map.y
                 points.append((float(pos.get("x", 0.0)), float(pos.get("z", 0.0))))
             except Exception:
                 continue
@@ -538,7 +536,7 @@ def parse_discovered_objects_payload(payload: Any) -> List[Tuple[float, float]]:
 
 
 def parse_lidar_clusters_payload(payload: Any, min_count: int = 2) -> List[Tuple[float, float]]:
-    """Parse /tank/visual_perception/lidar_clusters into map x/y obstacle points."""
+    """/tank/visual_perception/lidar_clusters를 map x/y 장애물 점으로 파싱한다."""
     points: List[Tuple[float, float]] = []
     if not isinstance(payload, dict):
         return points
@@ -564,11 +562,11 @@ def parse_lidar_clusters_payload(payload: Any, min_count: int = 2) -> List[Tuple
 
 
 def load_apf_weight_profile(path: str, profile_name: str) -> Dict[str, Any]:
-    """Load heuristic/RL-ready APF weight profile YAML.
+    """휴리스틱/RL 대비 APF 가중치 프로파일 YAML을 로드한다.
 
-    The current APF equation still uses ROS parameters as the source of truth.
-    This profile is exposed in status and can be used by launch/RL code to choose
-    object/situation/terrain multipliers later.
+    현재 APF 수식은 여전히 ROS 파라미터를 단일 출처로 사용한다. 이 프로파일은
+    상태(status)에 노출되며, 추후 launch/RL 코드가 객체/상황/지형 배율을
+    선택하는 데 쓸 수 있다.
     """
     if yaml is None or not path:
         return {}
@@ -661,11 +659,11 @@ def filter_obstacles_for_apf(
     voxel_resolution: float,
     max_points: int,
 ) -> List[Tuple[float, float]]:
-    """Keep only obstacle points relevant to the next local segment.
+    """다음 로컬 구간에 관련된 장애물 점만 남긴다.
 
-    Raw LiDAR may contain thousands of points. Feeding all points into APF makes
-    the repulsive force saturate and causes oscillation. This filter keeps points
-    in the target-facing sector or near the path corridor, then voxel-downsamples.
+    raw LiDAR는 수천 개의 점을 가질 수 있다. 모든 점을 APF에 넣으면 척력이
+    포화되어 진동을 일으킨다. 이 필터는 타깃을 향한 섹터나 경로 코리더 근처의
+    점만 남긴 뒤 voxel 다운샘플링한다.
     """
     if not obstacles:
         return []
@@ -722,7 +720,7 @@ def filter_obstacles_for_apf(
 
 
 # =============================================================================
-# 4. ROS2 node
+# 4. ROS2 노드
 # =============================================================================
 
 
@@ -736,7 +734,7 @@ class TeamPotentialFieldNode(Node):
         except Exception:
             pass
 
-        # ROS2 parameter mirror of global variables.
+        # 전역 변수를 ROS2 파라미터로 미러링한다.
         self.declare_parameter("target_pose_topic", TARGET_POSE_TOPIC)
         self.declare_parameter("fallback_goal_topic", FALLBACK_GOAL_TOPIC)
         self.declare_parameter("lidar_points_topic", "/tank/sensor/lidar/detected_points_map")
@@ -862,7 +860,7 @@ class TeamPotentialFieldNode(Node):
         )
 
     # -------------------------------------------------------------------------
-    # Callbacks
+    # 콜백
     # -------------------------------------------------------------------------
 
     def player_cb(self, msg: PoseStamped) -> None:
@@ -881,7 +879,7 @@ class TeamPotentialFieldNode(Node):
             if points.size == 0:
                 self.raw_obstacles = []
                 return
-            # APF uses only map-plane x/y.  Filtering/voxel limiting is done in timer_cb.
+            # APF는 map 평면 x/y만 사용한다. 필터링/voxel 제한은 timer_cb에서 한다.
             self.raw_obstacles = [(float(x), float(y)) for x, y in points[:, :2]]
         except Exception as exc:
             self.get_logger().warn(f"failed to parse lidar APF PointCloud2: {exc}")
@@ -906,7 +904,7 @@ class TeamPotentialFieldNode(Node):
             self.get_logger().warn(f"failed to parse gt obstacles for APF: {exc}")
 
     # -------------------------------------------------------------------------
-    # Publishing helpers
+    # 발행(publish) 헬퍼
     # -------------------------------------------------------------------------
 
     def publish_vec(self, pub: Any, vec: Tuple[float, float]) -> None:
@@ -975,7 +973,7 @@ class TeamPotentialFieldNode(Node):
         self.pub_markers.publish(arr)
 
     # -------------------------------------------------------------------------
-    # Main APF cycle
+    # 메인 APF 사이클
     # -------------------------------------------------------------------------
 
     def timer_cb(self) -> None:
@@ -1052,7 +1050,7 @@ class TeamPotentialFieldNode(Node):
                 )
             source = "lecture_apf_result"
 
-        # Publish vector topics.
+        # 벡터 토픽을 발행한다.
         self.publish_vec(self.pub_att, forces.attractive)
         self.publish_vec(self.pub_rep, forces.repulsive)
         self.publish_vec(self.pub_tan, forces.tangential)
@@ -1060,7 +1058,7 @@ class TeamPotentialFieldNode(Node):
         self.publish_vec(self.pub_res, forces.result)
         self.publish_markers(forces)
 
-        # Publish local target pose. Orientation encodes desired force direction.
+        # 로컬 타깃 pose를 발행한다. orientation에 원하는 힘의 방향을 인코딩한다.
         theta_d = float(motion["theta_desired_rad"])
         qx, qy, qz, qw = yaw_rad_to_quaternion_z(theta_d)
         lt = PoseStamped()

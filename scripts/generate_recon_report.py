@@ -498,7 +498,7 @@ def render_exposure_figure(rid: str,
     for th in threats:
         tx, tz = float(th["x"]), float(th["z"])
         if str(th.get("type")) == "House002" or str(th.get("prefabName", "")).startswith("House002"):
-            center_mpl = 90.0 - float(th.get("yaw", 0.0))   # atan2(dx,dz)→matplotlib(+x,CCW): 90-yaw
+            center_mpl = 90.0 - float(th.get("yaw", 0.0))   # atan2(dx,dz)→matplotlib(+x기준 반시계): 90-yaw
             ax.add_patch(Wedge((tx, tz), tg.HOUSE_RADIUS_M,
                                center_mpl - tg.HOUSE_FOV_HALF_DEG, center_mpl + tg.HOUSE_FOV_HALF_DEG,
                                facecolor="#d62728", alpha=0.13, edgecolor="#d62728", lw=0.8, zorder=2))

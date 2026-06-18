@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Global path-planning configuration values.
+"""전역 경로계획 설정값.
 
 시뮬레이션 상황에 따라 바꿀 수 있는 A* / route / topic 기본값을 이 파일에 모은다.
-LiDAR raw parsing이나 clustering 기본값은 lidar.config가 source of truth이다.
+LiDAR raw 파싱이나 clustering 기본값은 lidar.config가 단일 출처(source of truth)다.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ DEFAULT_GOAL_Y = env_float("TANK_PLANNER_DEFAULT_GOAL_Y", 250.0)
 MAX_EXPANSIONS = env_int("TANK_PLANNER_MAX_EXPANSIONS", 250000)
 PLANNER_HZ = env_float("TANK_PLANNER_HZ", 10.0)
 
-# Fallback sizes when /update_obstacle gives prefabName/position rather than bbox.
+# /update_obstacle가 bbox 대신 prefabName/position을 줄 때 쓰는 대체(fallback) 크기.
 PREFAB_HALF_SIZES: Dict[str, Tuple[float, float]] = {
     "Human": (0.5, 0.5),
     "Tree": (1.0, 1.0),
@@ -88,8 +88,8 @@ PREFAB_HALF_SIZES: Dict[str, Tuple[float, float]] = {
     "Wall002": (3.0, 1.0),
 }
 
-# Camera + LiDAR calibration / overlay defaults. This calibration belongs to the
-# local-path/fusion layer, not to raw LiDAR preprocessing.
+# 카메라 + LiDAR 캘리브레이션 / 오버레이 기본값. 이 캘리브레이션은 raw LiDAR 전처리가 아니라
+# local-path/fusion 레이어에 속한다.
 CAMERA_LIDAR_PROJECTION_PARAMS = {
     "tx": env_float("TANK_CAM_LIDAR_TX", 0.28),
     "ty": env_float("TANK_CAM_LIDAR_TY", 0.02),
@@ -111,7 +111,7 @@ TOPIC_INFO_RAW = os.environ.get("TANK_TOPIC_INFO_RAW", "/tank/api/info/raw")
 TOPIC_CAMERA_LIDAR_PROJECTION_IMAGE = os.environ.get("TANK_TOPIC_CAMERA_LIDAR_PROJECTION_IMAGE", "/tank/camera/lidar_projection/image")
 TOPIC_CAMERA_LIDAR_PROJECTION_COMPRESSED = os.environ.get("TANK_TOPIC_CAMERA_LIDAR_PROJECTION_COMPRESSED", "/tank/camera/lidar_projection/compressed")
 
-# Local path / camera-LiDAR fusion topics and default colors.
+# local path / 카메라-LiDAR 융합 토픽과 기본 색상.
 TOPIC_DETECTIONS = os.environ.get("TANK_TOPIC_DETECTIONS", "/tank/perception/detections")
 TOPIC_PLAYER_STATE = os.environ.get("TANK_TOPIC_PLAYER_STATE", "/tank/player/state")
 TOPIC_TURRET = os.environ.get("TANK_TOPIC_TURRET", "/tank/api/get_action/turret")
@@ -132,11 +132,11 @@ CLASS_COLOR_DEFAULTS = {
     "unknown": "#FFFFFF",
 }
 
-# Visual perception / clustering integration.
+# visual perception / clustering 통합.
 TOPIC_LIDAR_CLUSTERS = os.environ.get("TANK_TOPIC_LIDAR_CLUSTERS", "/tank/visual_perception/lidar_clusters")
 
 
-# TankSimulation route A/B strategy integration.
+# TankSimulation route A/B 전략 통합.
 USE_ROUTE_WAYPOINTS = env_bool("TANK_PLANNER_USE_ROUTE_WAYPOINTS", False)
 ROUTE_MAP_NAME = os.environ.get("TANK_PLANNER_ROUTE_MAP_NAME", "finalmap")
 ROUTE_ID = os.environ.get("TANK_PLANNER_ROUTE_ID", "B")

@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Local path / local mapping node for YOLO + LiDAR calibrated fusion.
+YOLO + LiDAR 캘리브레이션 융합을 위한 로컬 경로 / 로컬 매핑 노드.
 
 패키지 역할 원칙:
 - vision: 객체 class + bbox 제공
 - lidar: LiDAR raw schema 해석 및 map 좌표 변환
-- tank_visual_perception: camera-LiDAR projection calibration math + overlay/cluster 노드
-- path_planning/local_path_node: 객체의 map 위치 추정과 discovered map update
+- tank_visual_perception: camera-LiDAR projection 캘리브레이션 수식 + overlay/cluster 노드
+- path_planning/local_path_node: 객체의 map 위치 추정과 discovered map 갱신
 
 수정 사항 (Robust Version):
 1. 스레드 안전성(Thread Safety) 확보를 위한 Lock 적용
@@ -49,11 +49,11 @@ except Exception:
 
 
 def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
-    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+    """PointCloud2의 XYZ 필드를 연속 float32 (N, 3) 배열로 반환한다.
 
-    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
-    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
-    node usable on older sensor_msgs_py versions.
+    ROS2 Humble 이상의 sensor_msgs_py는 read_points_numpy()를 제공하는데, 이는 LiDAR hit마다
+    Python dict/list 객체를 만드는 것을 피한다. fallback은 구버전 sensor_msgs_py에서도 이 노드를
+    쓸 수 있게 유지한다.
     """
     try:
         arr = point_cloud2.read_points_numpy(
@@ -188,8 +188,8 @@ class LocalPathNode(Node):
         self.min_detection_conf = float(self._cfg(["fusion", "min_detection_confidence"], 0.20))
         self.allow_angle_fallback = bool(self._cfg(["fusion", "allow_angle_fallback"], True))
 
-        # Strict semantic fusion policy.  A semantic object should be created only
-        # when a YOLO detection and a LiDAR DBSCAN cluster can be matched.
+        # Strict semantic 융합 정책. semantic 객체는 YOLO detection과 LiDAR DBSCAN cluster가
+        # 매칭될 때만 생성해야 한다.
         self.semantic_requires_cluster = bool(self._cfg(["fusion", "semantic_requires_cluster"], True))
         self.cluster_match_max_center_norm = float(self._cfg(["fusion", "cluster_match_max_center_norm"], 1.75))
         self.cluster_match_max_score = float(self._cfg(["fusion", "cluster_match_max_score"], 2.10))
@@ -323,7 +323,7 @@ class LocalPathNode(Node):
         self.get_logger().info("local_path_node started (PC2 Optimized Version)")
 
     # ------------------------------------------------------------------
-    # Configuration helpers
+    # 설정(Configuration) 헬퍼
     # ------------------------------------------------------------------
     def _load_config(self, path: Path) -> Dict[str, Any]:
         if yaml is None:
@@ -345,7 +345,7 @@ class LocalPathNode(Node):
         return cur
 
     # ------------------------------------------------------------------
-    # Callbacks (Thread Safe)
+    # 콜백(Callbacks) — 스레드 안전(Thread Safe)
     # ------------------------------------------------------------------
     def detections_cb(self, msg: String) -> None:
         try:
@@ -404,7 +404,7 @@ class LocalPathNode(Node):
                 if dist < 10.0:
                     self.recon_logger.total_distance += dist
             self.player_pose = msg
-            # Recon report trajectory logging: map x=position.x, map y/z=position.y, yaw=body heading.
+            # Recon 보고서 궤적 로깅: map x=position.x, map y/z=position.y, yaw=body heading.
             self.recon_logger.log_pose(
                 self.sim_time,
                 float(msg.pose.position.x),
@@ -508,7 +508,7 @@ class LocalPathNode(Node):
             self.get_logger().warn(f"Failed to parse /tank/map/recon/raw: {exc}")
 
     # ------------------------------------------------------------------
-    # Fusion (Time Sync & Decay Logic Added)
+    # 융합(Fusion) — Time Sync & Decay 로직 추가
     # ------------------------------------------------------------------
     def timer_cb(self) -> None:
         with self._lock:
@@ -625,7 +625,7 @@ class LocalPathNode(Node):
                 max_async_result_age_ms=self.max_async_result_age_ms,
             )
 
-        # Camera/LiDAR time synchronization.
+        # 카메라/LiDAR time synchronization.
         # Fusion이 DBSCAN cluster를 우선 사용하므로, 가능하면 detection timestamp와 cluster timestamp를 비교한다.
         # 단, 기본값은 hard drop이 아니라 warning이다. strict drop은 config에서 drop_on_sync_mismatch=true일 때만 수행한다.
         det_ts = self._as_float(self.latest_detections_payload.get("timestamp_wall", 0.0))
@@ -689,7 +689,7 @@ class LocalPathNode(Node):
             "allow_angle_fallback": self.allow_angle_fallback,
         })
 
-        # Preferred path: global one-to-one YOLO bbox <-> DBSCAN cluster assignment.
+        # 우선 경로: 전역 일대일(global one-to-one) YOLO bbox <-> DBSCAN cluster 할당.
         if self.prefer_clusters and projected_clusters:
             fused = self._fuse_with_global_cluster_assignment(
                 parsed_detections,
@@ -705,7 +705,7 @@ class LocalPathNode(Node):
             if fused:
                 return finish("ok_projection_cluster", fused)
 
-        # Strict mode: no semantic object is emitted unless YOLO and DBSCAN cluster agree.
+        # Strict 모드: YOLO와 DBSCAN cluster가 일치하지 않으면 semantic 객체를 내보내지 않는다.
         if self.semantic_requires_cluster:
             if projection_context is None:
                 return finish("strict_no_projection_context")
@@ -713,7 +713,7 @@ class LocalPathNode(Node):
                 return finish("strict_no_projected_cluster")
             return finish("strict_no_cluster_assignment")
 
-        # Legacy fallback path kept only for emergency debugging when semantic_requires_cluster=false.
+        # Legacy fallback 경로 — semantic_requires_cluster=false일 때 긴급 디버깅용으로만 유지한다.
         angle_points = self._build_angle_lidar_points(px, py) if self.allow_angle_fallback else []
         projected_points = self._project_raw_lidar_points(projection_context, px, py, int(image_w), int(image_h)) if projection_context else []
         debug.update({
@@ -868,7 +868,7 @@ class LocalPathNode(Node):
             distance = math.hypot(x - px, y - py)
             if distance < self.min_fusion_range_m or distance > self.max_fusion_range_m:
                 continue
-            # Projection utilities use Unity raw xyz.  PC2 is map xyz, so convert back.
+            # projection 유틸리티는 Unity raw xyz를 쓴다. PC2는 map xyz이므로 다시 변환한다.
             map_pos = {"x": x, "y": y, "z": z}
             raw_pos = map_to_raw_xyz(map_pos)
             projected = project_point(
@@ -949,8 +949,8 @@ class LocalPathNode(Node):
         class_name = parsed.class_name
         margin = self.cluster_bbox_margin_px
         if class_name == "person":
-            # Person bbox is narrow and usually touches the bottom of the camera image.
-            # Allow extra vertical slack while keeping x alignment meaningful.
+            # person bbox는 좁고 보통 카메라 이미지 하단에 닿는다.
+            # x 정렬은 의미 있게 유지하면서 수직 여유를 추가로 허용한다.
             margin = max(margin, self.cluster_bbox_margin_px)
         if not point_inside_bbox(cluster["u"], cluster["v"], bbox, margin, image_w, image_h):
             return None
@@ -962,7 +962,7 @@ class LocalPathNode(Node):
         dy_norm = abs(float(cluster["v"]) - ay) / half_h
 
         if class_name == "person":
-            # For a person, LiDAR often hits legs/feet, so y can drift more than x.
+            # person의 경우 LiDAR가 다리/발에 자주 맞으므로 y가 x보다 더 많이 어긋날 수 있다.
             if dx_norm > self.cluster_match_person_x_limit or dy_norm > self.cluster_match_person_y_limit:
                 return None
             center_norm = math.sqrt(dx_norm * dx_norm + 0.35 * dy_norm * dy_norm)
@@ -1018,8 +1018,8 @@ class LocalPathNode(Node):
             }
             return []
 
-        # A cluster that is plausible for multiple detections should go to the best
-        # aligned bbox, not to whichever detection is processed first.
+        # 여러 detection에 들어맞을 법한 cluster는 먼저 처리되는 detection이 아니라
+        # 가장 잘 정렬된 bbox에 할당되어야 한다.
         candidates.sort(key=lambda c: (c["score"], c["bbox_area_norm"], -int(c["cluster"].get("count", 0))))
         used_detections: set[int] = set()
         used_clusters: set[int] = set()
@@ -1031,8 +1031,8 @@ class LocalPathNode(Node):
             if det_index in used_detections or cluster_id in used_clusters:
                 continue
 
-            # If the same detection has a nearly identical alternative cluster, reject
-            # this detection for safety.  This prevents ambiguous front/back matches.
+            # 같은 detection이 거의 동일한 대체 cluster를 가지면 안전을 위해 이 detection을
+            # 기각한다. 앞/뒤(front/back)가 애매한 매칭을 막는다.
             same_det = [
                 c for c in candidates
                 if int(c["det_index"]) == det_index
@@ -1219,7 +1219,7 @@ class LocalPathNode(Node):
             obj.confirmed_wall = now
 
     # ------------------------------------------------------------------
-    # Publishing / services
+    # 퍼블리싱(Publishing) / 서비스
     # ------------------------------------------------------------------
     def publish_fused(self, fused: List[Dict[str, Any]]) -> None:
         payload = {
@@ -1322,7 +1322,7 @@ class LocalPathNode(Node):
         }
 
     # ------------------------------------------------------------------
-    # Marker creation
+    # 마커(Marker) 생성
     # ------------------------------------------------------------------
     def make_current_markers(self, fused: List[Dict[str, Any]]) -> MarkerArray:
         markers = MarkerArray()
@@ -1354,8 +1354,8 @@ class LocalPathNode(Node):
     def make_discovered_markers(self, discovered_list: List[DiscoveredObject]) -> MarkerArray:
         markers = MarkerArray()
 
-        # Clear stale candidate/SAVED markers first.  This keeps RViz from showing
-        # an old candidate as if it were still active after memory decay removed it.
+        # stale candidate/SAVED 마커를 먼저 지운다. 이렇게 하면 memory decay로 제거된 옛 candidate를
+        # RViz가 여전히 활성인 것처럼 표시하는 것을 막는다.
         clear_marker = Marker()
         clear_marker.header.frame_id = self.map_frame
         clear_marker.header.stamp = self.get_clock().now().to_msg()
@@ -1445,7 +1445,7 @@ class LocalPathNode(Node):
         return m
 
     # ------------------------------------------------------------------
-    # Math / parsing helpers
+    # 수식(Math) / 파싱 헬퍼
     # ------------------------------------------------------------------
     def _make_fusion_debug_base_locked(self) -> Dict[str, Any]:
         det_payload = self.latest_detections_payload if isinstance(self.latest_detections_payload, dict) else {}
