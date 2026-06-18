@@ -81,7 +81,8 @@ class TerrainRecordFinalizeNode(Node):
         self.declare_parameter("min_points_to_finalize", 30)
         self.declare_parameter("max_points_before_random_crop", 300000)
         self.declare_parameter("publish_period_sec", 1.0)
-        self.declare_parameter("save_dir", "~/tank_terrain_maps")
+        # 저장 기본 경로를 프로젝트 안으로(launch 없이 ros2 run으로 직접 띄워도 여기로).
+        self.declare_parameter("save_dir", "~/tank_project/recon_reports/terrain_maps")
         self.declare_parameter("save_csv", False)
         self.declare_parameter("auto_finalize_after_idle_sec", 0.0)  # 0이면 자동 finalize 끔
         self.declare_parameter("grid_cell_size", 0.5)
