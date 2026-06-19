@@ -49,7 +49,7 @@ from std_msgs.msg import Empty, Int32, String
 # /get_action 제어 명령 생성/검증 함수들을 가져온다.
 from .commands import fallback_command, neutral_command, validate_action_command
 # 실행 모드, 명령 유효시간, 좌표 frame 이름 같은 전역 설정값을 가져온다.
-from .config import AUTO_FALLBACK, COMMAND_TTL_SEC, MAP_FRAME, SAVE_FULL_INFO, TANK_MODE, UNITY_FRAME
+from .config import AUTO_FALLBACK, COMMAND_TTL_SEC, EPISODE_CONTROL_ENABLED, MAP_FRAME, SAVE_FULL_INFO, TANK_MODE, UNITY_FRAME
 # 시간, JSON 변환, 좌표 변환, 로그 저장 유틸리티를 가져온다.
 from .utils import (
     # SAVE_JSONL 옵션이 켜져 있으면 이 endpoint 데이터를 JSONL 파일에 저장한다.
@@ -231,6 +231,15 @@ class RosBridge(Node):
             10,
             callback_group=self.control_callback_group,
         )
+        # Subscriber 생성: '/tank/episode/control' topic의 String 메시지를 받아 self.on_episode_control callback으로 처리한다.
+        # RL 학습 env(또는 Step 0 수동 테스트)가 reset/pause/start를 요청하면 다음 /info 응답 control 필드로 시뮬에 하달한다.
+        self.sub_episode_control = self.create_subscription(
+            String,
+            "/tank/episode/control",
+            self.on_episode_control,
+            10,
+            callback_group=self.control_callback_group,
+        )
 
         # ----------------------------------------------------
         # 센서 융합 데이터 로깅 subscription
@@ -267,6 +276,8 @@ class RosBridge(Node):
         self._latest_command_stamp: Optional[float] = None
         # 다음 /get_action 응답 1회에만 사용할 override 명령을 저장한다.
         self._one_shot_override: Optional[Dict[str, Any]] = None
+        # 다음 /info 응답 1회에만 실어 보낼 에피소드 제어값(reset/pause/start)을 저장한다.
+        self._pending_episode_control: Optional[str] = None
         # 명령 수신 경로의 진단 로그를 throttle(빈도 제한)하기 위한 값이다.
         self._last_command_log_wall: float = 0.0
 
@@ -502,6 +513,41 @@ class RosBridge(Node):
             self._one_shot_override = command
         # 실행 터미널에 bridge 초기화 상태를 ROS2 logger로 출력한다.
         self.get_logger().info("one-shot /get_action override received")
+
+    # /tank/episode/control로 받은 에피소드 제어(reset/pause/start)를 1회성으로 저장한다.
+    # 다음 /info 응답 control 필드로 시뮬에 하달된다. EPISODE_CONTROL_ENABLED가 꺼져 있으면 무시한다.
+    def on_episode_control(self, msg: String) -> None:
+        # 기능 플래그가 꺼져 있으면(기본값) 안전하게 무시한다 — 시뮬에 아무 제어도 보내지 않는다.
+        if not EPISODE_CONTROL_ENABLED:
+            self.get_logger().warn(
+                "ignoring /tank/episode/control: TANK_EPISODE_CONTROL is off (set it to enable reset/pause/start)"
+            )
+            return
+        # 공백을 제거하고 소문자로 정규화한 제어값을 읽는다.
+        control = str(msg.data).strip().lower()
+        # 공식 API가 정의한 제어값만 허용한다(reset/pause/start). 그 외(빈 문자열 포함)는 무시한다.
+        if control not in ("reset", "pause", "start"):
+            self.get_logger().error(f"invalid /tank/episode/control value: {msg.data!r} (expected reset/pause/start)")
+            return
+        # 공유 상태를 읽거나 쓸 때 Lock을 잡아 thread race condition을 방지한다.
+        with self._lock:
+            # 다음 /info 응답 1회에만 실어 보낼 에피소드 제어값을 저장한다.
+            self._pending_episode_control = control
+        # 어떤 제어가 큐잉됐는지 터미널에 출력한다(라이브 reset 테스트에서 확인용).
+        self.get_logger().info(f"episode control queued for next /info response: {control}")
+
+    # 대기 중인 에피소드 제어값을 1회 소비(drain)해 반환한다. 없으면 ""를 반환한다.
+    # /info route가 응답 control 필드에 넣을 값을 가져갈 때 호출한다.
+    def take_episode_control(self) -> str:
+        # 기능 플래그가 꺼져 있으면 항상 ""를 반환한다(기존 동작 그대로).
+        if not EPISODE_CONTROL_ENABLED:
+            return ""
+        # 공유 상태를 읽거나 쓸 때 Lock을 잡아 thread race condition을 방지한다.
+        with self._lock:
+            # 대기값을 꺼내고 즉시 비워서 같은 제어가 두 번 전송되지 않게 한다(1회성).
+            control = self._pending_episode_control or ""
+            self._pending_episode_control = None
+        return control
 
     # 퓨전된 객체 데이터를 수신하여 로그로 저장한다.
     def on_fused_objects(self, msg: String) -> None:

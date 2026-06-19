@@ -76,6 +76,7 @@ from .commands import fallback_command, init_config
 # - monitor: trackingMode=False, logMode=True 중심 관측.
 # - auto   : trackingMode=True, logMode=True 중심 자율제어.
 from .config import (
+    EPISODE_CONTROL_ENABLED,
     IMAGE_DIR,
     LIVE_VIEW_ENABLED,
     LIVE_VIEW_FPS,
@@ -759,8 +760,12 @@ def route_info():
     print(pretty(compact_payload.get("data", {})))
 
     # 시뮬레이터에 성공 응답을 반환한다.
-    # control은 향후 pause/reset 등의 episode 제어에 사용할 수 있다.
-    return jsonify({"status": "success", "message": "Data received", "control": ""})
+    # control 필드: 대기 중인 에피소드 제어값(reset/pause/start)을 1회 실어 보낸다.
+    # TANK_EPISODE_CONTROL이 꺼져 있거나 대기값이 없으면 ""(기존 동작 그대로, 아무 제어도 안 보냄).
+    control = bridge.take_episode_control() if bridge else ""
+    if control:
+        print(f"[info] sending episode control to sim: {control}")
+    return jsonify({"status": "success", "message": "Data received", "control": control})
 
 
 ############################################################
@@ -1483,4 +1488,6 @@ def route_health():
         "ros_bridge": bridge is not None,
         "port": PORT,
         "command_topic": "/tank/control/command",
+        # 에피소드 제어(reset/pause/start) 활성 여부 — 정찰 자동 리셋이 동작하려면 true여야 한다.
+        "episode_control": EPISODE_CONTROL_ENABLED,
     })

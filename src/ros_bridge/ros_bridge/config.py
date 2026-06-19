@@ -168,6 +168,18 @@ AUTO_FALLBACK = os.environ.get("TANK_AUTO_FALLBACK", "stop").strip().lower()
 if AUTO_FALLBACK not in ("neutral", "stop"):
     AUTO_FALLBACK = "stop"
 
+# EPISODE_CONTROL_ENABLED는 ROS가 시뮬 에피소드 제어(reset/pause/start)를 /info 응답의
+# control 필드로 하달하도록 허용할지 결정한다. 강화학습 학습 루프(에피소드 리셋)의 전제다.
+#
+# false:
+# - 기본값. /info 응답 control은 항상 ""(기존 동작 그대로, 시뮬에 아무 제어도 안 보냄).
+#
+# true:
+# - /tank/episode/control 토픽으로 받은 1회성 제어값(reset/pause/start)을 다음 /info 응답
+#   control 필드에 실어 시뮬로 보낸다. (공식 API: /info 응답 control 범위 = pause/reset)
+# - 주의: 실제 Unity 빌드가 control:reset을 honor하는지는 라이브 검증 필요(Step 0).
+EPISODE_CONTROL_ENABLED = os.environ.get("TANK_EPISODE_CONTROL", "false").strip().lower() in ("1", "true", "yes", "y")
+
 
 ############################################################
 # 5. 선택적 로컬 JSON/이미지 로깅
