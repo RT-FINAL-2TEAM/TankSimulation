@@ -17,7 +17,6 @@ setup(
     maintainer_email='wol00107@gmail.com',
     description='전차 워크스페이스 공용 헬퍼 (LiDAR PointCloud2→numpy 변환 등)',
     license='TODO',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [],
     },

@@ -62,12 +62,12 @@ mapping:
   - tent
   - car
   - house
-  save_directory: ~/tank_discovered_maps
+  save_directory: ~/tankcc/tank_discovered_maps
   save_latest_filename: discovered_objects_latest.map
   save_timestamped_copy: true
   save_confirmed_only: true
-  min_confirm_observations: 5
-  min_confirm_age_sec: 1.0
+  min_confirm_observations: 1
+  min_confirm_age_sec: 0.0
   track_id_merge_enabled: true
   track_id_merge_radius_m: 10.0
   merge_across_classes: false

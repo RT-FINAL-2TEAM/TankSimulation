@@ -193,7 +193,7 @@ class LocalPathNode(Node):
         self.ema_alpha = float(self._cfg(["mapping", "position_ema_alpha"], 0.35))
         self.add_classes = set(str(x).lower() for x in self._cfg(["mapping", "add_classes"], ["person", "rock", "tank", "car", "house", "tent"]))
         self.merge_radius_by_class = dict(self._cfg(["mapping", "merge_radius_by_class"], {}) or {})
-        self.save_directory = Path(str(self._cfg(["mapping", "save_directory"], "~/tank_discovered_maps"))).expanduser()
+        self.save_directory = Path(str(self._cfg(["mapping", "save_directory"], "~/tankcc/tank_discovered_maps"))).expanduser()
         self.save_latest_filename = str(self._cfg(["mapping", "save_latest_filename"], "discovered_objects_latest.map"))
         self.save_timestamped_copy = bool(self._cfg(["mapping", "save_timestamped_copy"], True))
         self.save_confirmed_only = bool(self._cfg(["mapping", "save_confirmed_only"], True))
