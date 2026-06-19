@@ -674,15 +674,24 @@ def render_view_page() -> str:
             let overviewImage = null;
             let overviewImageLoaded = false;
             let overviewImageError = null;
-            const PENDING_ROUTE_FACTORS = [
-                { label: "DIST", value: "AI", level: "pending", score: null },
-                { label: "TIME", value: "AI", level: "pending", score: null },
-                { label: "TERRAIN", value: "AI", level: "pending", score: null },
-                { label: "PERSON", value: "AI", level: "pending", score: null },
-                { label: "HOUSE", value: "AI", level: "pending", score: null },
-                { label: "TANK", value: "AI", level: "pending", score: null },
-                { label: "OBS", value: "AI", level: "pending", score: null }
-            ];
+            function routeFactorLevel(score) {
+                if (!Number.isFinite(score)) return "pending";
+                if (score >= 70) return "high";
+                if (score >= 35) return "mid";
+                return "low";
+            }
+            function fallbackRouteFactors(length) {
+                const distanceScore = Math.max(0, Math.min(100, Math.round((Number(length) / 450) * 100)));
+                const eta = Number(length) / 8;
+                const etaScore = Math.max(0, Math.min(100, Math.round((eta / 60) * 100)));
+                return [
+                    { label: "DIST", value: `${Math.round(Number(length))}m`, level: routeFactorLevel(distanceScore), score: distanceScore },
+                    { label: "ETA", value: `${Math.round(eta)}s`, level: routeFactorLevel(etaScore), score: etaScore },
+                    { label: "EXPO", value: "AI", level: "pending", score: null },
+                    { label: "OBS", value: "AI", level: "pending", score: null },
+                    { label: "BLOCK", value: "AI", level: "pending", score: null }
+                ];
+            }
             const FALLBACK_ROUTE_CANDIDATES = {
                 selected: null,
                 decisionMode: "llm_pending",
@@ -697,12 +706,12 @@ def render_view_page() -> str:
                         color: "#39ff88",
                         summary: "AI assessment pending.",
                         riskScore: null,
-                        length: 242,
+                        length: 263,
                         points: [
-                            { x: 60, y: 27 }, { x: 50, y: 50 }, { x: 42, y: 100 },
-                            { x: 42, y: 150 }, { x: 42, y: 200 }, { x: 85, y: 240 }, { x: 117, y: 250 }
+                            { x: 60, y: 30 }, { x: 35, y: 100 },
+                            { x: 70, y: 180 }, { x: 105.23, y: 275 }
                         ],
-                        factors: PENDING_ROUTE_FACTORS
+                        factors: fallbackRouteFactors(263)
                     },
                     {
                         id: "B",
@@ -713,14 +722,13 @@ def render_view_page() -> str:
                         color: "#44d9ff",
                         summary: "AI assessment pending.",
                         riskScore: null,
-                        length: 282,
+                        length: 343,
                         points: [
-                            { x: 60, y: 27 }, { x: 80, y: 30 }, { x: 120, y: 55 },
-                            { x: 155, y: 95 }, { x: 183, y: 116 }, { x: 192, y: 136 },
-                            { x: 186, y: 160 }, { x: 162, y: 190 }, { x: 138, y: 220 },
-                            { x: 117, y: 240 }, { x: 117, y: 250 }
+                            { x: 60, y: 30 }, { x: 120, y: 70 }, { x: 160, y: 105 },
+                            { x: 188, y: 122 }, { x: 198, y: 142 }, { x: 190, y: 160 },
+                            { x: 160, y: 200 }, { x: 130, y: 240 }, { x: 105.23, y: 275 }
                         ],
-                        factors: PENDING_ROUTE_FACTORS
+                        factors: fallbackRouteFactors(343)
                     }
                 ]
             };
@@ -1418,7 +1426,7 @@ def render_view_page() -> str:
                                 <div class="route-chip" style="color:${color}">${escapeHtml(candidate.role || candidate.id)}</div>
                             </div>
                             <div class="route-summary">${escapeHtml(candidate.summary || "-")}</div>
-                            ${metricHtml("SCORE", candidate.riskScore, candidate.riskLabel || null, isSelected ? "low" : "pending")}
+                            ${metricHtml("SCORE", candidate.riskScore, candidate.riskLabel || null, candidate.scoreLevel || (isSelected ? "low" : "pending"))}
                             ${factorHtml}
                         </div>
                     `;

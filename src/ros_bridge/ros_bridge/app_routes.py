@@ -22,13 +22,15 @@
 # - image, JSON, detection 결과처럼 타입이 고정되지 않은 값을 표현할 때 사용한다.
 # Dict:
 # - Flask 요청 body, ROS2로 넘길 payload, status 응답처럼 dict 구조를 명시할 때 사용한다.
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import json
 import os
+import sys
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 
 try:
     import yaml
@@ -592,21 +594,37 @@ def _fallback_route_candidates() -> Dict[str, Any]:
             "destination": destination,
             "routes": {
                 "A": [[50.0, 50.0], [42.0, 100.0], [42.0, 150.0], [42.0, 200.0], [85.0, 240.0]],
-                "B": [[80.0, 30.0], [120.0, 55.0], [155.0, 95.0], [183.0, 116.0], [192.0, 136.0], [186.0, 160.0], [162.0, 190.0], [138.0, 220.0], [117.0, 240.0]],
+                "B": [[120.0, 70.0], [160.0, 105.0], [188.0, 122.0], [198.0, 142.0], [190.0, 160.0], [160.0, 200.0], [130.0, 240.0], [117.0, 250.0]],
             },
         },
         "built_in",
     )
 
 
-def _pending_route_factors() -> list[Dict[str, Any]]:
+def _pending_route_factors(route_length: Any = None) -> list[Dict[str, Any]]:
+    distance_score = _numeric_score(route_length, 450.0)
+    estimated_time_s = _route_estimated_time_s(route_length)
+    eta_score = _numeric_score(estimated_time_s, 60.0)
     return [
-        {"label": label, "value": "AI", "level": "pending", "score": None}
-        for label in ("DIST", "TIME", "TERRAIN", "PERSON", "HOUSE", "TANK", "OBS")
+        {
+            "label": "DIST",
+            "value": _format_metric(route_length, "m"),
+            "level": _factor_level_from_score(distance_score),
+            "score": distance_score,
+        },
+        {
+            "label": "ETA",
+            "value": _format_metric(estimated_time_s, "s"),
+            "level": _factor_level_from_score(eta_score),
+            "score": eta_score,
+        },
+        {"label": "EXPO", "value": "AI", "level": "pending", "score": None},
+        {"label": "OBS", "value": "AI", "level": "pending", "score": None},
+        {"label": "BLOCK", "value": "AI", "level": "pending", "score": None},
     ]
 
 
-def _route_candidate_payload(route_map: Dict[str, Any], source: str) -> Dict[str, Any]:
+def _route_candidate_payload(route_map: Dict[str, Any], source: str, map_name: str = "recon_map") -> Dict[str, Any]:
     start_raw = route_map.get("start") or [60.0, 27.0]
     destination_raw = route_map.get("destination") or [117.0, 250.0]
     routes = route_map.get("routes") if isinstance(route_map.get("routes"), dict) else {}
@@ -638,19 +656,21 @@ def _route_candidate_payload(route_map: Dict[str, Any], source: str) -> Dict[str
         if not isinstance(raw_points, list):
             continue
         points = [start] + [_route_point(point) for point in raw_points] + [destination]
+        route_length = _route_length(points)
         route_meta = deepcopy(meta[route_id])
         route_meta.update(
             {
                 "id": route_id,
                 "selected": False,
                 "points": points,
-                "length": _route_length(points),
+                "length": route_length,
+                "factors": _pending_route_factors(route_length),
             }
         )
         candidates.append(route_meta)
     return {
         "source": source,
-        "mapName": "recon_map",
+        "mapName": map_name,
         "selected": None,
         "start": start,
         "destination": destination,
@@ -660,19 +680,523 @@ def _route_candidate_payload(route_map: Dict[str, Any], source: str) -> Dict[str
     }
 
 
-def _load_route_candidates_payload() -> Dict[str, Any]:
+def _risk_report_result(report: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(report, dict):
+        return {}
+    result = report.get("result")
+    if isinstance(result, dict):
+        return result
+    if "selected_route" in report or "risk_level" in report:
+        return report
+    return {}
+
+
+def _forced_route_id() -> Optional[str]:
+    raw = os.environ.get("TANK_FORCE_ROUTE", "A").strip().upper()
+    if raw in {"", "0", "FALSE", "NO", "NONE", "OFF", "AUTO"}:
+        return None
+    if raw in {"A", "B"}:
+        return raw
+    return None
+
+
+def _forced_route_label(route_id: str) -> str:
+    return "LEFT A" if route_id == "A" else "RIGHT B"
+
+
+def _apply_forced_route_policy(result: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+
+    forced = _forced_route_id()
+    if forced not in {"A", "B"}:
+        return deepcopy(result)
+
+    updated = deepcopy(result)
+    previous = str(updated.get("selected_route") or "").strip().upper()
+    label = _forced_route_label(forced)
+    policy_note = f"임무 정책상 {label} 루트를 반드시 선택합니다. 위험 수치는 참고용으로만 표시합니다."
+
+    updated["selected_route"] = forced
+    updated["confidence"] = "high"
+    updated["summary"] = policy_note
+
+    existing_reason = str(updated.get("decision_reason") or "").strip()
+    if previous in {"A", "B"} and previous != forced:
+        updated["decision_reason"] = (
+            f"{policy_note} 기존 LLM/점수 판단은 {previous}였지만 강제 정책을 우선했습니다."
+            + (f" 기존 판단: {existing_reason}" if existing_reason else "")
+        )
+    elif existing_reason and policy_note not in existing_reason:
+        updated["decision_reason"] = f"{policy_note} 기존 판단: {existing_reason}"
+    else:
+        updated["decision_reason"] = policy_note
+
+    recommended = updated.get("recommended_behavior")
+    if not isinstance(recommended, dict):
+        recommended = {}
+    risk_level = updated.get("risk_level") if isinstance(updated.get("risk_level"), dict) else {}
+    forced_level = str(risk_level.get(forced) or "").lower()
+    recommended["speed_policy"] = "slow" if forced_level in {"high", "critical"} else "medium"
+    caution_points = recommended.get("caution_points")
+    if not isinstance(caution_points, list):
+        caution_points = []
+    if policy_note not in caution_points:
+        caution_points.insert(0, policy_note)
+    recommended["caution_points"] = caution_points
+    recommended["tactical_note"] = (
+        f"{label} 루트 고정 운용입니다. 장애물/노출 수치가 높아도 선택 경로는 바꾸지 않습니다."
+    )
+    updated["recommended_behavior"] = recommended
+
+    return updated
+
+
+def _risk_score_for_level(level: Any) -> Optional[int]:
+    scores = {
+        "low": 20,
+        "medium": 50,
+        "high": 78,
+        "critical": 95,
+    }
+    return scores.get(str(level or "").strip().lower())
+
+
+def _risk_level_class(level: Any) -> str:
+    text = str(level or "").strip().lower()
+    if text == "low":
+        return "low"
+    if text == "medium":
+        return "mid"
+    if text in {"high", "critical"}:
+        return "high"
+    return "pending"
+
+
+def _numeric_score(value: Any, high_value: float) -> Optional[int]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if high_value <= 0:
+        return None
+    return int(round(max(0.0, min(100.0, (number / high_value) * 100.0))))
+
+
+def _factor_level_from_score(score: Optional[int]) -> str:
+    if score is None:
+        return "pending"
+    if score >= 70:
+        return "high"
+    if score >= 35:
+        return "mid"
+    return "low"
+
+
+def _format_metric(value: Any, suffix: str = "") -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if number.is_integer():
+        return f"{int(number)}{suffix}"
+    return f"{number:.1f}{suffix}"
+
+
+def _route_estimated_time_s(route_length: Any) -> Optional[float]:
+    try:
+        length = float(route_length)
+    except (TypeError, ValueError):
+        return None
+    try:
+        speed_mps = float(os.environ.get("TANK_ROUTE_EST_SPEED_MPS", "8.0"))
+    except (TypeError, ValueError):
+        speed_mps = 8.0
+    if speed_mps <= 0:
+        return None
+    return length / speed_mps
+
+
+def _route_risk_factors(level: Any, evidence: Dict[str, Any], route_length: Any = None) -> list[Dict[str, Any]]:
+    distance_score = _numeric_score(route_length, 450.0)
+    estimated_time_s = _route_estimated_time_s(route_length)
+    eta_score = _numeric_score(estimated_time_s, 60.0)
+    exposure_score = _numeric_score(evidence.get("enemy_visible_time_s"), 30.0)
+    obstacle_score = _numeric_score(evidence.get("obstacle_count"), 30.0)
+    blocked_score = _numeric_score(evidence.get("blocked_segment_count"), 3.0)
+    return [
+        {
+            "label": "DIST",
+            "value": _format_metric(route_length, "m"),
+            "level": _factor_level_from_score(distance_score),
+            "score": distance_score,
+        },
+        {
+            "label": "ETA",
+            "value": _format_metric(estimated_time_s, "s"),
+            "level": _factor_level_from_score(eta_score),
+            "score": eta_score,
+        },
+        {
+            "label": "EXPO",
+            "value": _format_metric(evidence.get("enemy_visible_time_s"), "s"),
+            "level": _factor_level_from_score(exposure_score),
+            "score": exposure_score,
+        },
+        {
+            "label": "OBS",
+            "value": _format_metric(evidence.get("obstacle_count")),
+            "level": _factor_level_from_score(obstacle_score),
+            "score": obstacle_score,
+        },
+        {
+            "label": "BLOCK",
+            "value": _format_metric(evidence.get("blocked_segment_count")),
+            "level": _factor_level_from_score(blocked_score),
+            "score": blocked_score,
+        },
+    ]
+
+
+def _apply_route_risk_report(payload: Dict[str, Any], report: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    result = _apply_forced_route_policy(_risk_report_result(report))
+    if not result:
+        return payload
+
+    selected = str(result.get("selected_route") or "").strip().upper()
+    if selected not in {"A", "B"}:
+        selected = None
+
+    risk_levels = result.get("risk_level") if isinstance(result.get("risk_level"), dict) else {}
+    key_risks = result.get("key_risks") if isinstance(result.get("key_risks"), dict) else {}
+    used_evidence = result.get("used_evidence") if isinstance(result.get("used_evidence"), dict) else {}
+
+    merged = deepcopy(payload)
+    merged["selected"] = selected
+    merged["decisionMode"] = "mission_forced" if _forced_route_id() else "llm_ready" if selected else "llm_unresolved"
+    merged["decisionNote"] = (
+        result.get("decision_reason")
+        or result.get("summary")
+        or "LLM route assessment received."
+    )
+    merged["llmReport"] = deepcopy(report)
+
+    for candidate in merged.get("candidates", []):
+        if not isinstance(candidate, dict):
+            continue
+        route_id = str(candidate.get("id") or "").strip().upper()
+        if route_id not in {"A", "B"}:
+            continue
+        route_level = risk_levels.get(route_id)
+        route_score = _risk_score_for_level(route_level)
+        route_evidence = used_evidence.get(route_id) if isinstance(used_evidence.get(route_id), dict) else {}
+        route_risks = key_risks.get(route_id) if isinstance(key_risks.get(route_id), list) else []
+
+        candidate["selected"] = bool(selected and route_id == selected)
+        candidate["riskScore"] = route_score
+        candidate["riskLabel"] = str(route_level or "-").upper()
+        candidate["scoreLevel"] = _risk_level_class(route_level)
+        if route_risks:
+            candidate["summary"] = str(route_risks[0])
+        elif route_id == selected and result.get("summary"):
+            candidate["summary"] = str(result.get("summary"))
+        else:
+            candidate["summary"] = "LLM assessment received."
+        candidate["factors"] = _route_risk_factors(route_level, route_evidence, candidate.get("length"))
+
+    return merged
+
+
+def _resolve_route_risk_result_path() -> Path:
+    env_path = os.environ.get("TANK_ROUTE_RISK_RESULT_PATH", "").strip()
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+    return Path(__file__).resolve().parents[3] / "recon_reports" / "route_risk_result.json"
+
+
+def _resolve_route_comparison_path() -> Path:
+    env_path = os.environ.get("TANK_ROUTE_COMPARISON_PATH", "").strip()
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+    return Path(__file__).resolve().parents[3] / "recon_reports" / "route_comparison.json"
+
+
+def _load_route_risk_result_file(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    result_path = path or _resolve_route_risk_result_path()
+    if not result_path.exists():
+        return None
+    try:
+        with result_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _route_risk_file_selected(path: Optional[Path] = None) -> Optional[str]:
+    data = _load_route_risk_result_file(path)
+    result = _risk_report_result(data)
+    selected = str(result.get("selected_route") or "").strip().upper() if result else ""
+    return selected if selected in {"A", "B"} else None
+
+
+_ROUTE_RISK_RUNTIME_LOCK = Lock()
+_ROUTE_RISK_RUNTIME: Dict[str, Any] = {
+    "attempted": False,
+    "running": False,
+    "last_error": None,
+    "report": None,
+}
+
+
+def _load_route_comparison_data() -> Optional[Dict[str, Any]]:
+    path = _resolve_route_comparison_path()
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return None
+        if not isinstance(data.get("route_A"), dict) or not isinstance(data.get("route_B"), dict):
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def _route_value(data: Dict[str, Any], route_key: str, field: str, default: float = 0.0) -> float:
+    route_data = data.get(route_key) if isinstance(data.get(route_key), dict) else {}
+    try:
+        return float(route_data.get(field, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _heuristic_route_score(data: Dict[str, Any], route_key: str) -> float:
+    enemy_visible = _route_value(data, route_key, "enemy_visible_time_s")
+    continuous_visible = _route_value(data, route_key, "max_continuous_visible_time_s")
+    obstacle_count = _route_value(data, route_key, "obstacle_count")
+    blocked_count = _route_value(data, route_key, "blocked_segment_count")
+    enemy_count = _route_value(data, route_key, "enemy_count")
+    closest_enemy = _route_value(data, route_key, "closest_enemy_distance_m", 100.0)
+    pitch_std = _route_value(data, route_key, "pitch_std_deg")
+    roll_std = _route_value(data, route_key, "roll_std_deg")
+    distance_risk = max(0.0, 80.0 - closest_enemy) / 10.0
+    return (
+        enemy_visible * 2.0
+        + continuous_visible * 3.0
+        + obstacle_count * 0.8
+        + blocked_count * 12.0
+        + enemy_count * 5.0
+        + distance_risk
+        + pitch_std
+        + roll_std
+    )
+
+
+def _heuristic_level(score: float) -> str:
+    if score >= 85.0:
+        return "critical"
+    if score >= 55.0:
+        return "high"
+    if score >= 28.0:
+        return "medium"
+    return "low"
+
+
+def _route_evidence(data: Dict[str, Any], route_key: str) -> Dict[str, Any]:
+    route_data = data.get(route_key) if isinstance(data.get(route_key), dict) else {}
+    return {
+        "enemy_visible_time_s": route_data.get("enemy_visible_time_s"),
+        "obstacle_count": route_data.get("obstacle_count"),
+        "blocked_segment_count": route_data.get("blocked_segment_count"),
+        "reason": "",
+    }
+
+
+def _heuristic_route_risk_report(reason: str) -> Optional[Dict[str, Any]]:
+    comparison = _load_route_comparison_data()
+    if not isinstance(comparison, dict):
+        return None
+    score_a = _heuristic_route_score(comparison, "route_A")
+    score_b = _heuristic_route_score(comparison, "route_B")
+    score_selected = "A" if score_a <= score_b else "B"
+    selected = _forced_route_id() or score_selected
+    policy_reason = ""
+    if selected != score_selected:
+        policy_reason = (
+            f" 임무 정책으로 {_forced_route_label(selected)} 루트를 강제 선택했습니다."
+            f" 점수 기준 임시 선택은 {score_selected}였습니다."
+        )
+    result = {
+        "selected_route": selected,
+        "risk_level": {
+            "A": _heuristic_level(score_a),
+            "B": _heuristic_level(score_b),
+        },
+        "confidence": "medium",
+        "summary": f"ROS/LLM 결과가 없어 route_comparison.json 기준으로 {selected} 루트를 임시 선택했습니다.{policy_reason}",
+        "decision_reason": f"{reason}{policy_reason}",
+        "key_risks": {
+            "A": [
+                f"노출 {comparison.get('route_A', {}).get('enemy_visible_time_s', '-')}s, 장애물 {comparison.get('route_A', {}).get('obstacle_count', '-')}개, 차단 {comparison.get('route_A', {}).get('blocked_segment_count', '-')}구간"
+            ],
+            "B": [
+                f"노출 {comparison.get('route_B', {}).get('enemy_visible_time_s', '-')}s, 장애물 {comparison.get('route_B', {}).get('obstacle_count', '-')}개, 차단 {comparison.get('route_B', {}).get('blocked_segment_count', '-')}구간"
+            ],
+        },
+        "recommended_behavior": {
+            "speed_policy": "slow" if selected is None else "medium",
+            "caution_points": ["이 결과는 Ollama LLM 실행 전 임시 판단입니다."],
+            "tactical_note": "Ollama가 실행되면 같은 입력으로 LLM 판단 파일을 생성해 Web에 자동 반영합니다.",
+        },
+        "used_evidence": {
+            "A": _route_evidence(comparison, "route_A"),
+            "B": _route_evidence(comparison, "route_B"),
+        },
+    }
+    return {
+        "ok": True,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "model": "heuristic-fallback",
+        "parsed_ok": True,
+        "validated_ok": True,
+        "retry_used": False,
+        "result": result,
+        "raw_text": reason,
+        "source": "route_comparison_heuristic_fallback",
+    }
+
+
+def _ensure_risk_analysis_source_path() -> None:
+    package_root = Path(__file__).resolve().parents[2] / "risk_analysis"
+    package_path = str(package_root)
+    if package_root.exists() and package_path not in sys.path:
+        sys.path.insert(0, package_path)
+
+
+def _run_route_risk_llm_once() -> None:
+    result_path = _resolve_route_risk_result_path()
+    comparison = _load_route_comparison_data()
+    if not isinstance(comparison, dict):
+        with _ROUTE_RISK_RUNTIME_LOCK:
+            _ROUTE_RISK_RUNTIME["last_error"] = f"comparison file not found: {_resolve_route_comparison_path()}"
+            _ROUTE_RISK_RUNTIME["running"] = False
+        return
+    try:
+        _ensure_risk_analysis_source_path()
+        from risk_analysis.llm_reporter import LLMReporter
+
+        reporter = LLMReporter(
+            ollama_url=os.environ.get("TANK_OLLAMA_URL", "http://localhost:11434/api/generate"),
+            model_name=os.environ.get("TANK_LLM_MODEL", os.environ.get("TANK_OLLAMA_MODEL", "qwen3:0.6b")),
+            timeout_sec=int(os.environ.get("TANK_LLM_TIMEOUT_SEC", "1800")),
+        )
+        report = reporter.generate_route_decision(comparison)
+        report["source"] = "windows_direct_ollama"
+        report["input_file"] = str(_resolve_route_comparison_path())
+        report["output_file"] = str(result_path)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        with result_path.open("w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+        with _ROUTE_RISK_RUNTIME_LOCK:
+            _ROUTE_RISK_RUNTIME["report"] = deepcopy(report)
+            _ROUTE_RISK_RUNTIME["last_error"] = None
+    except Exception as exc:
+        with _ROUTE_RISK_RUNTIME_LOCK:
+            _ROUTE_RISK_RUNTIME["last_error"] = str(exc)
+    finally:
+        with _ROUTE_RISK_RUNTIME_LOCK:
+            _ROUTE_RISK_RUNTIME["running"] = False
+
+
+def _maybe_start_route_risk_llm() -> None:
+    auto_run = os.environ.get("TANK_LLM_AUTO_RUN", "true").strip().lower() in ("1", "true", "yes", "y")
+    if not auto_run:
+        return
+    with _ROUTE_RISK_RUNTIME_LOCK:
+        if _ROUTE_RISK_RUNTIME["attempted"] or _ROUTE_RISK_RUNTIME["running"]:
+            return
+        _ROUTE_RISK_RUNTIME["attempted"] = True
+        _ROUTE_RISK_RUNTIME["running"] = True
+    Thread(target=_run_route_risk_llm_once, daemon=True, name="RouteRiskLLM").start()
+
+
+def _load_saved_route_risk_report(*, allow_auto_run: bool = True) -> Optional[Dict[str, Any]]:
+    path = _resolve_route_risk_result_path()
+    if not path.exists():
+        with _ROUTE_RISK_RUNTIME_LOCK:
+            memory_report = deepcopy(_ROUTE_RISK_RUNTIME.get("report"))
+            running = bool(_ROUTE_RISK_RUNTIME.get("running"))
+            last_error = _ROUTE_RISK_RUNTIME.get("last_error")
+        if isinstance(memory_report, dict):
+            return memory_report
+        if allow_auto_run:
+            _maybe_start_route_risk_llm()
+        if running:
+            return _heuristic_route_risk_report("Ollama LLM route analysis is running in the background.")
+        if last_error:
+            return _heuristic_route_risk_report(f"Ollama LLM route analysis failed: {last_error}")
+        return _heuristic_route_risk_report("Ollama LLM route analysis has not completed yet.")
+    try:
+        data = _load_route_risk_result_file(path)
+        if not isinstance(data, dict):
+            return None
+        result = _risk_report_result(data)
+        selected = str(result.get("selected_route") or "").strip().upper() if result else ""
+        if selected not in {"A", "B"}:
+            if allow_auto_run:
+                _maybe_start_route_risk_llm()
+            reason = result.get("decision_reason") if isinstance(result, dict) else None
+            return _heuristic_route_risk_report(
+                f"Saved LLM result did not include a selected route; using route_comparison fallback. {reason or ''}".strip()
+            )
+        return data
+    except Exception:
+        return None
+
+
+def _route_risk_ai_entry(report: Dict[str, Any]) -> Dict[str, Any]:
+    result = _risk_report_result(report)
+    result = _apply_forced_route_policy(result)
+    return {
+        "timestamp_wall": now_wall(),
+        "source": report.get("source") or "route_risk_result_file",
+        "model": report.get("model"),
+        "selected_route": result.get("selected_route"),
+        "confidence": result.get("confidence"),
+        "summary": result.get("summary"),
+        "decision_reason": result.get("decision_reason"),
+        "validated_ok": report.get("validated_ok"),
+    }
+
+
+def _load_route_candidates_payload(route_risk_report: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     path = _resolve_route_config_path()
+    report = route_risk_report if isinstance(route_risk_report, dict) else _load_saved_route_risk_report()
     if yaml is None or not path.exists():
-        return _fallback_route_candidates()
+        return _apply_route_risk_report(_fallback_route_candidates(), report)
     try:
         with path.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
-        route_map = data.get("recon_map")
+        preferred_map = os.environ.get("TANK_ROUTE_CANDIDATE_MAP", "finalmap").strip() or "finalmap"
+        route_map = data.get(preferred_map)
+        map_name = preferred_map
         if not isinstance(route_map, dict):
-            return _fallback_route_candidates()
-        return _route_candidate_payload(route_map, str(path))
+            route_map = data.get("recon_map")
+            map_name = "recon_map"
+        if not isinstance(route_map, dict):
+            for key, value in data.items():
+                if isinstance(value, dict) and isinstance(value.get("routes"), dict):
+                    route_map = value
+                    map_name = str(key)
+                    break
+        if not isinstance(route_map, dict):
+            return _apply_route_risk_report(_fallback_route_candidates(), report)
+        return _apply_route_risk_report(_route_candidate_payload(route_map, str(path), map_name), report)
     except Exception:
-        return _fallback_route_candidates()
+        return _apply_route_risk_report(_fallback_route_candidates(), report)
 
 ############################################################
 # 4-1. Client IP allowlist
@@ -1179,6 +1703,9 @@ def route_dashboard_state():
     latest = payload.get("bridge", {}).get("latest", {})
     if not isinstance(latest, dict):
         latest = {}
+    route_risk_report = latest.get("route_risk_report")
+    if not isinstance(route_risk_report, dict):
+        route_risk_report = _load_saved_route_risk_report()
 
     detect_result = latest.get("detect_result") if isinstance(latest.get("detect_result"), dict) else {}
     detections = detect_result.get("detections") if isinstance(detect_result, dict) else []
@@ -1202,6 +1729,8 @@ def route_dashboard_state():
         if value:
             payload["aiLog"] = [value]
             break
+    if not payload["aiLog"] and isinstance(route_risk_report, dict):
+        payload["aiLog"] = [_route_risk_ai_entry(route_risk_report)]
 
     timestamp = detect_result.get("timestamp_wall") if isinstance(detect_result, dict) else None
     payload["reconLog"] = [
@@ -1239,9 +1768,57 @@ def route_dashboard_state():
     except Exception as exc:  # noqa: BLE001
         payload["staticMap"] = {"loaded": False, "error": str(exc)}
 
-    payload["routeCandidates"] = _load_route_candidates_payload()
+    payload["routeCandidates"] = _load_route_candidates_payload(route_risk_report)
 
     return jsonify(payload)
+
+
+@app.route("/api/llm/route-risk/status", methods=["GET"])
+def route_llm_route_risk_status():
+    """Debug state for Windows/direct route risk LLM integration."""
+    result_path = _resolve_route_risk_result_path()
+    comparison_path = _resolve_route_comparison_path()
+    result_selected = _route_risk_file_selected(result_path)
+    with _ROUTE_RISK_RUNTIME_LOCK:
+        runtime = deepcopy(_ROUTE_RISK_RUNTIME)
+        runtime["report"] = bool(runtime.get("report"))
+    return jsonify({
+        "resultPath": str(result_path),
+        "resultExists": result_path.exists(),
+        "resultSelectedRoute": result_selected,
+        "resultValid": result_selected in {"A", "B"},
+        "comparisonPath": str(comparison_path),
+        "comparisonExists": comparison_path.exists(),
+        "ollamaUrl": os.environ.get("TANK_OLLAMA_URL", "http://localhost:11434/api/generate"),
+        "model": os.environ.get("TANK_LLM_MODEL", os.environ.get("TANK_OLLAMA_MODEL", "qwen3:0.6b")),
+        "forcedRoute": _forced_route_id(),
+        "autoRun": os.environ.get("TANK_LLM_AUTO_RUN", "true").strip().lower() in ("1", "true", "yes", "y"),
+        "runtime": runtime,
+    })
+
+
+@app.route("/api/llm/route-risk/run", methods=["GET", "POST"])
+def route_llm_route_risk_run():
+    """Start a Windows/direct Ollama route risk analysis without ROS."""
+    force = str(request.args.get("force", "")).strip().lower() in ("1", "true", "yes", "y")
+    result_path = _resolve_route_risk_result_path()
+    existing_selected = _route_risk_file_selected(result_path)
+    with _ROUTE_RISK_RUNTIME_LOCK:
+        if _ROUTE_RISK_RUNTIME["running"]:
+            return jsonify({"started": False, "running": True, "message": "LLM analysis is already running"})
+        if result_path.exists() and not force and existing_selected in {"A", "B"}:
+            return jsonify({
+                "started": False,
+                "running": False,
+                "message": "route_risk_result.json already exists; use ?force=true to regenerate",
+                "resultPath": str(result_path),
+                "selectedRoute": existing_selected,
+            })
+        _ROUTE_RISK_RUNTIME["attempted"] = True
+        _ROUTE_RISK_RUNTIME["running"] = True
+        _ROUTE_RISK_RUNTIME["last_error"] = None
+    Thread(target=_run_route_risk_llm_once, daemon=True, name="RouteRiskLLMManual").start()
+    return jsonify({"started": True, "running": True, "resultPath": str(result_path)})
 
 
 @app.route("/view", methods=["GET"])

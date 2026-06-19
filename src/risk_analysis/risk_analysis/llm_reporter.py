@@ -1,4 +1,5 @@
 import json
+import os
 import textwrap
 from datetime import datetime
 
@@ -16,7 +17,26 @@ class LLMReporter:
         self.model_name = model_name
         self.timeout_sec = timeout_sec
 
+    def forced_route(self):
+        raw = os.environ.get("TANK_FORCE_ROUTE", "A").strip().upper()
+        if raw in {"", "0", "FALSE", "NO", "NONE", "OFF", "AUTO"}:
+            return None
+        if raw in {"A", "B"}:
+            return raw
+        return None
+
     def build_prompt(self, comparison_data: dict) -> str:
+        forced_route = self.forced_route()
+        force_instruction = ""
+        if forced_route:
+            force_instruction = textwrap.dedent(f"""
+            FORCED MISSION POLICY:
+            - selected_route MUST be "{forced_route}".
+            - Analyze risk_level, key_risks, and used_evidence from the real input values.
+            - Even if another route appears safer, keep selected_route as "{forced_route}".
+            - Explain in Korean that the final route is forced by mission policy.
+            """).strip()
+
         return textwrap.dedent(f"""
         /no_think
 
@@ -116,6 +136,8 @@ class LLMReporter:
             }}
           }}
         }}
+
+        {force_instruction}
 
         입력 데이터:
         {json.dumps(comparison_data, ensure_ascii=False, indent=2)}
@@ -275,6 +297,46 @@ class LLMReporter:
                 "reason": old_b.get("reason", ""),
             },
         }
+
+        forced_route = self.forced_route()
+        if forced_route:
+            policy_note = (
+                f"임무 정책상 {'LEFT A' if forced_route == 'A' else 'RIGHT B'} 루트를 반드시 선택합니다. "
+                "위험 수치는 참고용으로만 표시합니다."
+            )
+            previous = parsed.get("selected_route")
+            parsed["selected_route"] = forced_route
+            parsed["confidence"] = "high"
+            parsed["summary"] = policy_note
+
+            existing_reason = parsed.get("decision_reason", "")
+            if previous in allowed_routes and previous != forced_route:
+                parsed["decision_reason"] = (
+                    f"{policy_note} 기존 LLM 판단은 {previous}였지만 강제 정책을 우선했습니다."
+                    + (f" 기존 판단: {existing_reason}" if existing_reason else "")
+                )
+            elif existing_reason and policy_note not in existing_reason:
+                parsed["decision_reason"] = f"{policy_note} 기존 판단: {existing_reason}"
+            else:
+                parsed["decision_reason"] = policy_note
+
+            recommended = parsed.get("recommended_behavior")
+            if not isinstance(recommended, dict):
+                recommended = {}
+            forced_level = str(parsed["risk_level"].get(forced_route) or "").lower()
+            recommended["speed_policy"] = "slow" if forced_level in {"high", "critical"} else "medium"
+
+            caution_points = recommended.get("caution_points")
+            if not isinstance(caution_points, list):
+                caution_points = []
+            if policy_note not in caution_points:
+                caution_points.insert(0, policy_note)
+            recommended["caution_points"] = caution_points
+            recommended["tactical_note"] = (
+                f"{'LEFT A' if forced_route == 'A' else 'RIGHT B'} 루트 고정 운용입니다. "
+                "장애물/노출 수치가 높아도 선택 경로는 바꾸지 않습니다."
+            )
+            parsed["recommended_behavior"] = recommended
 
         return parsed
 
