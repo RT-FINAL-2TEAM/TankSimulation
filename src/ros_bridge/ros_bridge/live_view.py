@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 import os
 from copy import deepcopy
-from threading import Condition, Lock, Thread
+from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -22,15 +22,9 @@ except Exception:  # pragma: no cover - runtime optional guard
     cv2 = None
 
 _state_lock = Lock()
-_frame_condition = Condition(_state_lock)
 _latest_frame: Optional[np.ndarray] = None
 _latest_frame_seq = 0
 _latest_frame_timestamp = 0.0
-_latest_frame_interval_ms: Optional[float] = None
-_source_fps_ema = 0.0
-_latest_raw_frame_bytes: Optional[bytes] = None
-_latest_raw_frame_seq = 0
-_latest_raw_frame_timestamp = 0.0
 _latest_frame_shape: Optional[List[int]] = None
 _latest_source_frame_shape: Optional[List[int]] = None
 _latest_detections: List[Dict[str, Any]] = []
@@ -39,16 +33,10 @@ _latest_detection_timestamp = 0.0
 _latest_error: Optional[str] = None
 _latest_live_decode_ms = 0.0
 _skipped_live_decode_count = 0
-_pending_frame_bytes: Optional[bytes] = None
-_pending_frame_seq = 0
-_decoded_input_frame_seq = 0
-_decode_thread: Optional[Thread] = None
-_live_decode_worker_count = 0
 
-_LIVE_VIEW_DECODE_FPS = float(os.getenv("TANK_LIVE_VIEW_DECODE_FPS", "4"))
+_LIVE_VIEW_DECODE_FPS = float(os.getenv("TANK_LIVE_VIEW_DECODE_FPS", "6"))
 _LIVE_VIEW_DECODE_INTERVAL = 1.0 / max(0.1, _LIVE_VIEW_DECODE_FPS)
-_LIVE_VIEW_MAX_SIDE = int(os.getenv("TANK_LIVE_VIEW_MAX_SIDE", "900"))
-_LIVE_VIEW_RAW_STREAM = os.getenv("TANK_LIVE_VIEW_RAW_STREAM", "true").strip().lower() in ("1", "true", "yes", "y")
+_LIVE_VIEW_MAX_SIDE = int(os.getenv("TANK_LIVE_VIEW_MAX_SIDE", "960"))
 
 _CLASS_COLORS_BGR = {
     "tank": (0, 0, 255),
@@ -87,92 +75,33 @@ def _resize_for_live_view(frame: np.ndarray) -> np.ndarray:
     return cv2.resize(frame, resized_size, interpolation=cv2.INTER_AREA)
 
 
-def _ensure_decode_worker_locked() -> None:
-    global _decode_thread
-    if _decode_thread is not None and _decode_thread.is_alive():
-        return
-    _decode_thread = Thread(target=_decode_worker_loop, daemon=True, name="LiveViewDecodeWorker")
-    _decode_thread.start()
-
-
-def _decode_worker_loop() -> None:
-    global _latest_frame, _latest_frame_seq, _latest_frame_timestamp, _latest_frame_shape
-    global _latest_source_frame_shape, _latest_error, _latest_live_decode_ms
-    global _decoded_input_frame_seq, _live_decode_worker_count
-
-    print("[live_view] decode worker started")
-    while True:
-        with _frame_condition:
-            _frame_condition.wait_for(lambda: _pending_frame_seq > _decoded_input_frame_seq)
-            image_bytes = _pending_frame_bytes
-            seq_to_decode = _pending_frame_seq
-
-        if not image_bytes:
-            time.sleep(0.01)
-            continue
-
-        with _frame_condition:
-            wait_sec = _LIVE_VIEW_DECODE_INTERVAL - (time.time() - _latest_frame_timestamp) if _latest_frame_timestamp else 0.0
-        if wait_sec > 0:
-            time.sleep(wait_sec)
-            with _frame_condition:
-                if _pending_frame_seq > seq_to_decode:
-                    image_bytes = _pending_frame_bytes
-                    seq_to_decode = _pending_frame_seq
-
-        decode_started = time.perf_counter()
-        frame = _decode_jpeg(image_bytes)
-        decode_ms = (time.perf_counter() - decode_started) * 1000.0
-        if frame is None:
-            with _frame_condition:
-                _latest_error = "live_view: failed to decode frame or cv2 unavailable"
-                _decoded_input_frame_seq = max(_decoded_input_frame_seq, seq_to_decode)
-                _frame_condition.notify_all()
-            continue
-
-        source_shape = [int(v) for v in frame.shape]
-        display_frame = _resize_for_live_view(frame)
-        display_shape = [int(v) for v in display_frame.shape]
-        with _frame_condition:
-            _latest_frame = display_frame
-            _latest_frame_seq += 1
-            _latest_frame_timestamp = time.time()
-            _latest_frame_shape = display_shape
-            _latest_source_frame_shape = source_shape
-            _latest_live_decode_ms = decode_ms
-            _latest_error = None
-            _decoded_input_frame_seq = max(_decoded_input_frame_seq, seq_to_decode)
-            _live_decode_worker_count += 1
-            _frame_condition.notify_all()
-
-
 def update_frame(image_bytes: bytes) -> Optional[List[int]]:
-    """Queue a display frame for background decode. Returns the last known source shape."""
-    global _pending_frame_bytes, _pending_frame_seq, _skipped_live_decode_count, _latest_error
-    global _latest_raw_frame_bytes, _latest_raw_frame_seq, _latest_raw_frame_timestamp
-    global _latest_frame_interval_ms, _source_fps_ema
-    if cv2 is None or not image_bytes:
-        with _frame_condition:
-            _latest_error = "live_view: cv2 unavailable or empty frame"
-            return None
-    with _frame_condition:
-        now = time.time()
-        if _latest_raw_frame_timestamp > 0.0:
-            interval_ms = (now - _latest_raw_frame_timestamp) * 1000.0
-            if interval_ms > 0.0:
-                instantaneous_fps = 1000.0 / interval_ms
-                _source_fps_ema = instantaneous_fps if _source_fps_ema <= 0.0 else (_source_fps_ema * 0.8 + instantaneous_fps * 0.2)
-                _latest_frame_interval_ms = interval_ms
-        _latest_raw_frame_timestamp = now
-        _latest_raw_frame_seq += 1
-        _latest_raw_frame_bytes = image_bytes
-        if _pending_frame_seq > _decoded_input_frame_seq:
+    """Store a throttled display frame. Returns source frame shape [h, w, c] if known."""
+    global _latest_frame, _latest_frame_seq, _latest_frame_timestamp, _latest_frame_shape, _latest_source_frame_shape, _latest_error, _latest_live_decode_ms, _skipped_live_decode_count
+    now = time.time()
+    with _state_lock:
+        if _latest_frame_timestamp and now - _latest_frame_timestamp < _LIVE_VIEW_DECODE_INTERVAL:
             _skipped_live_decode_count += 1
-        _pending_frame_seq += 1
-        _pending_frame_bytes = image_bytes
-        _ensure_decode_worker_locked()
-        _frame_condition.notify()
-        return deepcopy(_latest_source_frame_shape or _latest_frame_shape)
+            return deepcopy(_latest_source_frame_shape or _latest_frame_shape)
+    decode_started = time.perf_counter()
+    frame = _decode_jpeg(image_bytes)
+    decode_ms = (time.perf_counter() - decode_started) * 1000.0
+    if frame is None:
+        with _state_lock:
+            _latest_error = "live_view: failed to decode frame or cv2 unavailable"
+        return None
+    source_shape = [int(v) for v in frame.shape]
+    display_frame = _resize_for_live_view(frame)
+    display_shape = [int(v) for v in display_frame.shape]
+    with _state_lock:
+        _latest_frame = display_frame
+        _latest_frame_seq += 1
+        _latest_frame_timestamp = time.time()
+        _latest_frame_shape = display_shape
+        _latest_source_frame_shape = source_shape
+        _latest_live_decode_ms = decode_ms
+        _latest_error = None
+    return source_shape
 
 
 def update_detections(detections: Any, metadata: Optional[Dict[str, Any]] = None) -> None:
@@ -189,70 +118,6 @@ def _class_color(class_name: str, class_id: int = 0) -> Tuple[int, int, int]:
     if key in _CLASS_COLORS_BGR:
         return _CLASS_COLORS_BGR[key]
     return _COLOR_PALETTE_BGR[int(class_id) % len(_COLOR_PALETTE_BGR)]
-
-
-def _blend_rect(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int, color: Tuple[int, int, int], alpha: float) -> None:
-    height, width = frame.shape[:2]
-    left = max(0, min(width, x1))
-    right = max(0, min(width, x2))
-    top = max(0, min(height, y1))
-    bottom = max(0, min(height, y2))
-    if right <= left or bottom <= top:
-        return
-    roi = frame[top:bottom, left:right]
-    fill = np.full_like(roi, color, dtype=np.uint8)
-    cv2.addWeighted(fill, alpha, roi, 1.0 - alpha, 0, roi)
-
-
-def _draw_refined_box(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int, color: Tuple[int, int, int]) -> None:
-    height, width = frame.shape[:2]
-    x1 = max(0, min(width - 1, x1))
-    x2 = max(0, min(width - 1, x2))
-    y1 = max(0, min(height - 1, y1))
-    y2 = max(0, min(height - 1, y2))
-    if x2 <= x1 or y2 <= y1:
-        return
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 1, cv2.LINE_AA)
-    corner = max(10, min(24, int(min(x2 - x1, y2 - y1) * 0.22)))
-    for start, end in (
-        ((x1, y1), (x1 + corner, y1)),
-        ((x1, y1), (x1, y1 + corner)),
-        ((x2, y1), (x2 - corner, y1)),
-        ((x2, y1), (x2, y1 + corner)),
-        ((x1, y2), (x1 + corner, y2)),
-        ((x1, y2), (x1, y2 - corner)),
-        ((x2, y2), (x2 - corner, y2)),
-        ((x2, y2), (x2, y2 - corner)),
-    ):
-        cv2.line(frame, start, end, color, 1, cv2.LINE_AA)
-
-
-def _draw_refined_label(frame: np.ndarray, label: str, x: int, y: int, color: Tuple[int, int, int]) -> None:
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.45
-    thickness = 1
-    padding_x = 6
-    padding_y = 4
-    text_size, baseline = cv2.getTextSize(label, font, font_scale, thickness)
-    text_w, text_h = text_size
-    height, width = frame.shape[:2]
-
-    label_x = max(4, min(width - text_w - padding_x * 2 - 4, x))
-    label_y = y - text_h - baseline - padding_y * 2 - 4
-    if label_y < 4:
-        label_y = min(height - text_h - baseline - padding_y * 2 - 4, y + 6)
-    label_y = max(4, label_y)
-
-    bg_left = label_x
-    bg_top = label_y
-    bg_right = label_x + text_w + padding_x * 2
-    bg_bottom = label_y + text_h + baseline + padding_y * 2
-    _blend_rect(frame, bg_left, bg_top, bg_right, bg_bottom, (4, 8, 6), 0.72)
-    cv2.rectangle(frame, (bg_left, bg_top), (bg_right, bg_bottom), color, 1, cv2.LINE_AA)
-    text_origin = (label_x + padding_x, label_y + padding_y + text_h)
-    shadow_origin = (text_origin[0] + 1, text_origin[1] + 1)
-    cv2.putText(frame, label, shadow_origin, font, font_scale, (12, 18, 14), thickness, cv2.LINE_AA)
-    cv2.putText(frame, label, text_origin, font, font_scale, color, thickness, cv2.LINE_AA)
 
 
 def _draw_detections(frame: np.ndarray, detections: List[Dict[str, Any]], metadata: Dict[str, Any]) -> np.ndarray:
@@ -284,15 +149,34 @@ def _draw_detections(frame: np.ndarray, detections: List[Dict[str, Any]], metada
         fixed_id = det.get("classFixedId", det.get("id"))
         conf = float(det.get("confidence") or 0.0)
         color = _class_color(class_name, class_id)
-        _draw_refined_box(drawn, x1, y1, x2, y2, color)
+        cv2.rectangle(drawn, (x1, y1), (x2, y2), color, 2)
         id_text = ""
         if fixed_id is not None:
             id_text += f" ID:{fixed_id}"
         if track_id is not None:
             id_text += f" T:{track_id}"
         label = f"{class_name}{id_text} {conf:.2f}"
-        _draw_refined_label(drawn, label, x1, y1, color)
+        cv2.putText(
+            drawn,
+            label,
+            (x1, max(20, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
 
+    frame_seq = metadata.get("frameSeq")
+    processed_seq = metadata.get("processedFrameSeq")
+    age_ms = metadata.get("resultAgeMs")
+    async_flag = metadata.get("asyncYolo")
+    status = f"det={len(detections)}"
+    if async_flag:
+        status += f" async frame={frame_seq} yolo={processed_seq} age={age_ms:.0f}ms" if isinstance(age_ms, (int, float)) else f" async frame={frame_seq} yolo={processed_seq}"
+    else:
+        status += " sync"
+    cv2.putText(drawn, status, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 255), 2, cv2.LINE_AA)
     return drawn
 
 
@@ -421,15 +305,6 @@ def render_view_page() -> str:
                 font-size: 12px;
                 font-weight: 800;
             }
-            .feed-status-text {
-                min-width: 0;
-                max-width: 72%;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-                color: var(--cyan);
-                font-weight: 800;
-            }
             .left-tabs {
                 height: 42px;
                 display: grid;
@@ -481,13 +356,6 @@ def render_view_page() -> str:
                 display: block;
                 background: #000;
             }
-            #driveOverlay {
-                position: absolute;
-                inset: 0;
-                width: 100%;
-                height: 100%;
-                pointer-events: none;
-            }
             #mapCanvas {
                 width: 100%;
                 height: 100%;
@@ -495,6 +363,75 @@ def render_view_page() -> str:
                 background: #050806;
             }
             .readout-list { display: grid; gap: 8px; }
+            .route-compare { display: grid; gap: 10px; }
+            .route-decision {
+                border: 1px solid var(--line);
+                background: rgba(8, 24, 14, 0.74);
+                padding: 9px;
+                color: var(--text);
+                font-size: 12px;
+                line-height: 1.45;
+            }
+            .route-decision strong {
+                display: block;
+                color: var(--green);
+                margin-bottom: 4px;
+            }
+            .route-card {
+                border: 1px solid var(--line-dim);
+                background: rgba(4, 12, 8, 0.76);
+                padding: 9px;
+                display: grid;
+                gap: 8px;
+            }
+            .route-card.selected {
+                border-color: var(--green);
+                box-shadow: inset 0 0 0 1px rgba(57, 255, 136, 0.24);
+            }
+            .route-head {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+                min-width: 0;
+            }
+            .route-name { font-weight: 900; font-size: 13px; }
+            .route-chip {
+                border: 1px solid currentColor;
+                padding: 2px 5px;
+                font-size: 10px;
+                font-weight: 900;
+            }
+            .route-summary {
+                color: var(--text);
+                font-size: 12px;
+                line-height: 1.4;
+                overflow-wrap: anywhere;
+            }
+            .route-factor {
+                display: grid;
+                grid-template-columns: 44px minmax(0, 1fr) 48px;
+                align-items: center;
+                gap: 7px;
+                color: var(--muted);
+                font-size: 11px;
+                font-weight: 800;
+            }
+            .route-meter {
+                height: 4px;
+                background: rgba(57, 255, 136, 0.13);
+                overflow: hidden;
+            }
+            .route-meter span {
+                display: block;
+                height: 100%;
+                width: var(--score);
+                background: var(--green);
+            }
+            .route-factor.factor-mid .route-meter span { background: #ffd34d; }
+            .route-factor.factor-high .route-meter span { background: #ff5b64; }
+            .route-factor.factor-pending .route-meter span { background: rgba(151, 255, 184, 0.22); }
+            .route-value { color: var(--text); text-align: right; }
             .readout {
                 border-left: 2px solid var(--line);
                 background: rgba(14, 30, 20, 0.58);
@@ -517,90 +454,21 @@ def render_view_page() -> str:
                 padding: 10px;
                 font-size: 12px;
             }
-            .route-compare {
-                display: grid;
-                gap: 8px;
-            }
-            .route-decision {
-                border: 1px solid var(--line-dim);
-                background: rgba(4, 12, 8, 0.84);
-                padding: 8px;
-                font-size: 11px;
-                color: var(--muted);
-            }
-            .route-decision strong {
-                display: block;
-                color: var(--green);
-                font-size: 12px;
-                margin-bottom: 3px;
-            }
-            .route-card {
-                border: 1px solid var(--line-dim);
-                background: rgba(7, 18, 12, 0.82);
-                padding: 8px;
-                min-width: 0;
-            }
-            .route-card.selected {
-                border-color: var(--green);
-                box-shadow: inset 0 0 0 1px rgba(57, 255, 136, 0.12);
-            }
-            .route-head {
+            .map-legend {
+                position: absolute;
+                left: 10px;
+                bottom: 10px;
                 display: flex;
-                align-items: center;
-                justify-content: space-between;
                 gap: 8px;
-                margin-bottom: 6px;
-            }
-            .route-name {
-                min-width: 0;
-                color: var(--text);
-                font-size: 12px;
-                font-weight: 800;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-            }
-            .route-chip {
-                flex: 0 0 auto;
-                border: 1px solid currentColor;
-                padding: 2px 5px;
-                font-size: 10px;
-                font-weight: 800;
-            }
-            .route-summary {
+                flex-wrap: wrap;
                 color: var(--muted);
                 font-size: 11px;
-                line-height: 1.35;
-                margin-bottom: 8px;
+                pointer-events: none;
             }
-            .route-factor {
-                display: grid;
-                grid-template-columns: 46px minmax(0, 1fr) 42px;
-                align-items: center;
-                gap: 6px;
-                min-height: 18px;
-                color: var(--muted);
-                font-size: 10px;
-            }
-            .route-meter {
-                height: 4px;
-                background: rgba(216, 255, 233, 0.12);
-                overflow: hidden;
-            }
-            .route-meter span {
-                display: block;
-                height: 100%;
-                width: var(--score);
-                background: var(--factor-color);
-            }
-            .factor-low { --factor-color: var(--green); }
-            .factor-mid { --factor-color: var(--amber); }
-            .factor-high { --factor-color: var(--red); }
-            .factor-pending { --factor-color: var(--muted); }
-            .route-value {
-                text-align: right;
-                color: var(--text);
-                font-weight: 800;
+            .map-legend span {
+                background: rgba(3, 8, 5, 0.78);
+                border: 1px solid var(--line-dim);
+                padding: 3px 6px;
             }
             @media (max-width: 980px) {
                 body { overflow: auto; }
@@ -631,17 +499,16 @@ def render_view_page() -> str:
                     <div class="panel-title"><span>LEFT PANEL</span><span id="leftPanelTitle">ROUTE</span></div>
                     <div class="left-tabs">
                         <button id="tab-route" class="tab-button active" type="button" onclick="setTab('route')">ROUTE</button>
-                        <button id="tab-ai" class="tab-button" type="button" onclick="setTab('ai')">AI</button>
+                        <button id="tab-ai" class="tab-button" type="button" onclick="setTab('ai')">AI LOG</button>
                         <button id="tab-recon" class="tab-button" type="button" onclick="setTab('recon')">RECON</button>
                         <button id="tab-sensor" class="tab-button" type="button" onclick="setTab('sensor')">SENSOR</button>
                     </div>
                     <div id="leftContent" class="scroll"></div>
                 </section>
                 <section class="panel center-panel">
-                    <div class="panel-title"><span>CENTER PANEL</span><span id="feedStatusText" class="feed-status-text">det=0 sync</span></div>
+                    <div class="panel-title"><span>CENTER PANEL</span><span>DRIVE FEED / YOLO BBOX</span></div>
                     <div class="feed-wrap">
                         <img id="driveFeed" src="/video_feed" alt="drive feed">
-                        <canvas id="driveOverlay"></canvas>
                     </div>
                 </section>
                 <section class="panel right-panel">
@@ -652,6 +519,9 @@ def render_view_page() -> str:
                     </div>
                     <div class="map-wrap">
                         <canvas id="mapCanvas"></canvas>
+                        <div id="mapLegend" class="map-legend">
+                            <span>SELF</span><span>ENEMY</span><span>TARGET</span><span>WATER</span><span>RIDGE</span><span>HIGH</span><span>TREE</span><span>ROCK</span><span>HOUSE</span><span>ROUTE</span>
+                        </div>
                     </div>
                 </section>
             </main>
@@ -674,87 +544,12 @@ def render_view_page() -> str:
             let overviewImage = null;
             let overviewImageLoaded = false;
             let overviewImageError = null;
-            function routeFactorLevel(score) {
-                if (!Number.isFinite(score)) return "pending";
-                if (score >= 70) return "high";
-                if (score >= 35) return "mid";
-                return "low";
-            }
-            function fallbackRouteFactors(length) {
-                const distanceScore = Math.max(0, Math.min(100, Math.round((Number(length) / 450) * 100)));
-                const eta = Number(length) / 8;
-                const etaScore = Math.max(0, Math.min(100, Math.round((eta / 60) * 100)));
-                return [
-                    { label: "DIST", value: `${Math.round(Number(length))}m`, level: routeFactorLevel(distanceScore), score: distanceScore },
-                    { label: "ETA", value: `${Math.round(eta)}s`, level: routeFactorLevel(etaScore), score: etaScore },
-                    { label: "EXPO", value: "AI", level: "pending", score: null },
-                    { label: "OBS", value: "AI", level: "pending", score: null },
-                    { label: "BLOCK", value: "AI", level: "pending", score: null }
-                ];
-            }
-            const FALLBACK_ROUTE_CANDIDATES = {
-                selected: null,
-                decisionMode: "llm_pending",
-                decisionNote: "Waiting for LLM route assessment.",
-                candidates: [
-                    {
-                        id: "A",
-                        name: "LEFT ROUGH",
-                        side: "LEFT",
-                        role: "CANDIDATE",
-                        selected: false,
-                        color: "#39ff88",
-                        summary: "AI assessment pending.",
-                        riskScore: null,
-                        length: 263,
-                        points: [
-                            { x: 60, y: 30 }, { x: 35, y: 100 },
-                            { x: 70, y: 180 }, { x: 105.23, y: 275 }
-                        ],
-                        factors: fallbackRouteFactors(263)
-                    },
-                    {
-                        id: "B",
-                        name: "RIGHT FLAT",
-                        side: "RIGHT",
-                        role: "CANDIDATE",
-                        selected: false,
-                        color: "#44d9ff",
-                        summary: "AI assessment pending.",
-                        riskScore: null,
-                        length: 343,
-                        points: [
-                            { x: 60, y: 30 }, { x: 120, y: 70 }, { x: 160, y: 105 },
-                            { x: 188, y: 122 }, { x: 198, y: 142 }, { x: 190, y: 160 },
-                            { x: 160, y: 200 }, { x: 130, y: 240 }, { x: 105.23, y: 275 }
-                        ],
-                        factors: fallbackRouteFactors(343)
-                    }
-                ]
-            };
 
             function byId(id) { return document.getElementById(id); }
             function safe(value, fallback = "-") { return value === undefined || value === null || value === "" ? fallback : value; }
             function numberText(value, digits = 1) {
                 const n = Number(value);
                 return Number.isFinite(n) ? n.toFixed(digits) : "-";
-            }
-            function escapeHtml(value) {
-                return String(value ?? "").replace(/[&<>"']/g, (char) => ({
-                    "&": "&amp;",
-                    "<": "&lt;",
-                    ">": "&gt;",
-                    '"': "&quot;",
-                    "'": "&#39;"
-                }[char]));
-            }
-            function routeCandidateData(state) {
-                const payload = state?.routeCandidates;
-                return payload?.candidates?.length ? payload : FALLBACK_ROUTE_CANDIDATES;
-            }
-            function selectedRouteCandidate(payload) {
-                if (!payload?.selected) return null;
-                return payload?.candidates?.find((candidate) => candidate.selected || candidate.id === payload.selected) || null;
             }
             function setStatusClass(element, status) {
                 element.classList.remove("status-ok", "status-warn", "status-error");
@@ -773,7 +568,15 @@ def render_view_page() -> str:
                 byId("map-tab-terrain").classList.toggle("active", activeMapTab === "terrain");
                 byId("map-tab-ros").classList.toggle("active", activeMapTab === "ros");
                 byId("mapPanelTitle").textContent = activeMapTab === "ros" ? "ROS MAP" : "TERRAIN MAP";
+                updateMapLegend();
                 drawMap(latestState || {});
+            }
+            function updateMapLegend() {
+                const terrain = ["SELF", "ENEMY", "WATER", "RIDGE", "HIGH", "TREE", "ROCK"];
+                const ros = ["SELF", "ENEMY", "TARGET", "OBS", "ROUTE", "YOLO"];
+                byId("mapLegend").innerHTML = (activeMapTab === "ros" ? ros : terrain)
+                    .map((label) => `<span>${label}</span>`)
+                    .join("");
             }
             function latestBridge(state) { return state?.bridge?.latest || {}; }
             function routeCounts(state) { return state?.bridge?.routeCounts || state?.bridge?.route_counts || {}; }
@@ -1208,6 +1011,7 @@ def render_view_page() -> str:
                         }
                     }
                 }
+                let waterLabel = usedTexture ? "texture" : "overview";
                 if (!usedTexture) {
                     drawRockyZones(ctx, mapper, mapData);
                     const hasOverviewWater = terrainZonesOf(mapData, "water").length > 0;
@@ -1216,6 +1020,7 @@ def render_view_page() -> str:
                     } else {
                     const lowWaterLimit = grid.terrain.min + grid.terrain.span * 0.34;
                     const deepWaterLimit = grid.terrain.min + grid.terrain.span * 0.24;
+                    waterLabel = `<=${numberText(lowWaterLimit, 1)}`;
                     for (let row = 0; row < grid.rows; row += 1) {
                         for (let col = 0; col < grid.cols; col += 1) {
                             const h = (
@@ -1244,6 +1049,17 @@ def render_view_page() -> str:
                     drawContours(ctx, grid, mapper);
                 }
                 ctx.restore();
+
+                ctx.save();
+                ctx.fillStyle = "rgba(216, 255, 233, 0.82)";
+                ctx.font = "11px Consolas, monospace";
+                ctx.textAlign = "left";
+                ctx.fillText(`TOPO MAP objects=${staticObjects.length}`, rect.x + 10, rect.y + 18);
+                ctx.textAlign = "right";
+                ctx.fillText(`elev ${numberText(grid.terrain.min, 1)}..${numberText(grid.terrain.max, 1)}`, rect.x + rect.w - 10, rect.y + 18);
+                ctx.fillStyle = "rgba(68, 217, 255, 0.86)";
+                ctx.fillText(`water ${waterLabel}`, rect.x + rect.w - 10, rect.y + 34);
+                ctx.restore();
                 return true;
             }
             function getDetections(state) {
@@ -1255,146 +1071,19 @@ def render_view_page() -> str:
                 if (Array.isArray(detect?.detections)) return detect.detections;
                 return [];
             }
-            function overlayClassColor(className) {
-                const key = String(className || "").toLowerCase();
-                const colors = { person: "#39ff88", car: "#ff8c00", tank: "#ff5b64", rock: "#ffca4f", house: "#b084ff" };
-                return colors[key] || "#d8ffe9";
-            }
-            function driveImageBox(canvas, sourceW, sourceH) {
-                const w = canvas.clientWidth || 1;
-                const h = canvas.clientHeight || 1;
-                const imageAspect = sourceW / Math.max(1, sourceH);
-                const boxAspect = w / Math.max(1, h);
-                if (boxAspect > imageAspect) {
-                    const drawH = h;
-                    const drawW = h * imageAspect;
-                    return { x: (w - drawW) * 0.5, y: 0, w: drawW, h: drawH };
-                }
-                const drawW = w;
-                const drawH = w / Math.max(0.001, imageAspect);
-                return { x: 0, y: (h - drawH) * 0.5, w: drawW, h: drawH };
-            }
-            function drawOverlayBox(ctx, box, color) {
-                ctx.save();
-                ctx.strokeStyle = color;
-                ctx.lineWidth = 1;
-                ctx.beginPath();
-                ctx.rect(box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1);
-                ctx.stroke();
-                const corner = Math.max(10, Math.min(24, Math.min(box.x2 - box.x1, box.y2 - box.y1) * 0.22));
-                const segments = [
-                    [box.x1, box.y1, box.x1 + corner, box.y1],
-                    [box.x1, box.y1, box.x1, box.y1 + corner],
-                    [box.x2, box.y1, box.x2 - corner, box.y1],
-                    [box.x2, box.y1, box.x2, box.y1 + corner],
-                    [box.x1, box.y2, box.x1 + corner, box.y2],
-                    [box.x1, box.y2, box.x1, box.y2 - corner],
-                    [box.x2, box.y2, box.x2 - corner, box.y2],
-                    [box.x2, box.y2, box.x2, box.y2 - corner],
-                ];
-                for (const [x1, y1, x2, y2] of segments) {
-                    ctx.beginPath();
-                    ctx.moveTo(x1, y1);
-                    ctx.lineTo(x2, y2);
-                    ctx.stroke();
-                }
-                ctx.restore();
-            }
-            function drawOverlayLabel(ctx, text, x, y, color, canvasW, canvasH) {
-                ctx.save();
-                ctx.font = "11px Consolas, monospace";
-                ctx.textBaseline = "top";
-                const padX = 6;
-                const padY = 4;
-                const metrics = ctx.measureText(text);
-                const textW = metrics.width;
-                const textH = 12;
-                let left = Math.max(4, Math.min(canvasW - textW - padX * 2 - 4, x));
-                let top = y - textH - padY * 2 - 7;
-                if (top < 4) top = Math.min(canvasH - textH - padY * 2 - 4, y + 6);
-                top = Math.max(4, top);
-                ctx.fillStyle = "rgba(4, 8, 6, 0.72)";
-                ctx.fillRect(left, top, textW + padX * 2, textH + padY * 2);
-                ctx.strokeStyle = color;
-                ctx.lineWidth = 1;
-                ctx.strokeRect(left, top, textW + padX * 2, textH + padY * 2);
-                ctx.fillStyle = color;
-                ctx.fillText(text, left + padX, top + padY);
-                ctx.restore();
-            }
-            function drawFeedOverlay(state) {
-                const canvas = byId("driveOverlay");
-                if (!canvas) return;
-                const rect = canvas.getBoundingClientRect();
-                const dpr = window.devicePixelRatio || 1;
-                const width = Math.max(1, Math.floor(rect.width * dpr));
-                const height = Math.max(1, Math.floor(rect.height * dpr));
-                if (canvas.width !== width || canvas.height !== height) {
-                    canvas.width = width;
-                    canvas.height = height;
-                }
-                const ctx = canvas.getContext("2d");
-                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                ctx.clearRect(0, 0, rect.width, rect.height);
-                if (state?.liveView?.rawStream !== true) return;
-                const metadata = state?.liveView?.latestDetectionMetadata || latestBridge(state)?.detect_result || {};
-                const shape = metadata.image_shape || state?.liveView?.latestSourceFrameShape || state?.yolo?.latestFrameShape || [];
-                const sourceW = Number(metadata.image?.width || shape[1] || byId("driveFeed")?.naturalWidth || 1920);
-                const sourceH = Number(metadata.image?.height || shape[0] || byId("driveFeed")?.naturalHeight || 1080);
-                if (!Number.isFinite(sourceW) || !Number.isFinite(sourceH) || sourceW <= 0 || sourceH <= 0) return;
-                const imageBox = driveImageBox(canvas, sourceW, sourceH);
-                const detections = getDetections(state);
-                for (const det of detections) {
-                    const bbox = det?.bbox;
-                    if (!Array.isArray(bbox) || bbox.length < 4) continue;
-                    const x1 = Number(bbox[0]);
-                    const y1 = Number(bbox[1]);
-                    const x2 = Number(bbox[2]);
-                    const y2 = Number(bbox[3]);
-                    if (![x1, y1, x2, y2].every(Number.isFinite)) continue;
-                    const mapped = {
-                        x1: imageBox.x + (x1 / sourceW) * imageBox.w,
-                        y1: imageBox.y + (y1 / sourceH) * imageBox.h,
-                        x2: imageBox.x + (x2 / sourceW) * imageBox.w,
-                        y2: imageBox.y + (y2 / sourceH) * imageBox.h,
-                    };
-                    const className = safe(det.className || det.class_name || det.modelClassName, "object");
-                    const color = overlayClassColor(className);
-                    drawOverlayBox(ctx, mapped, color);
-                    drawOverlayLabel(ctx, `${className} ${numberText(det.confidence, 2)}`, mapped.x1, mapped.y1, color, rect.width, rect.height);
-                }
-            }
-            function feedStatusText(state) {
-                const liveView = state?.liveView || {};
-                const metadata = liveView.latestDetectionMetadata || latestBridge(state)?.detect_result || {};
-                const detections = getDetections(state);
-                const count = Number.isFinite(Number(liveView.latestDetectionCount))
-                    ? Number(liveView.latestDetectionCount)
-                    : detections.length;
-                let text = `det=${count}`;
-                if (metadata.asyncYolo) {
-                    const frameSeq = safe(metadata.frameSeq, "-");
-                    const processedSeq = safe(metadata.processedFrameSeq, "-");
-                    const age = Number(metadata.resultAgeMs);
-                    text += Number.isFinite(age)
-                        ? ` async frame=${frameSeq} yolo=${processedSeq} age=${age.toFixed(0)}ms`
-                        : ` async frame=${frameSeq} yolo=${processedSeq}`;
-                } else {
-                    text += liveView.asyncYoloEnabled ? " async waiting" : " sync";
-                }
-                const sourceFps = Number(liveView.liveViewSourceFps);
-                if (Number.isFinite(sourceFps) && sourceFps > 0) text += ` src=${sourceFps.toFixed(1)}fps`;
-                return text;
-            }
-            function updateFeedStatus(state) {
-                const element = byId("feedStatusText");
-                if (element) element.textContent = feedStatusText(state);
-            }
             function renderReadouts(items) {
                 if (!items.length) return '<div class="empty">No data</div>';
                 return `<div class="readout-list">${items.map((item) => `
                     <div class="readout"><div class="label">${item.label}</div><div class="value">${item.value}</div></div>
                 `).join("")}</div>`;
+            }
+            function routeCandidateData(state) {
+                const payload = state?.routeCandidates;
+                return payload?.candidates?.length ? payload : { selected: null, decisionNote: "Waiting for route candidate data.", candidates: [] };
+            }
+            function selectedRouteCandidate(payload) {
+                if (!payload?.selected) return null;
+                return payload?.candidates?.find((candidate) => candidate.selected || candidate.id === payload.selected) || null;
             }
             function renderRouteComparison(state) {
                 const payload = routeCandidateData(state);
@@ -1406,15 +1095,15 @@ def render_view_page() -> str:
                     const value = displayValue ?? (hasScore ? numberText(score, 0) : "AI");
                     return `
                         <div class="route-factor factor-${level}">
-                            <span>${escapeHtml(label)}</span>
+                            <span>${label}</span>
                             <div class="route-meter"><span style="--score:${score}%"></span></div>
-                            <span class="route-value">${escapeHtml(value)}</span>
+                            <span class="route-value">${value}</span>
                         </div>
                     `;
                 };
                 const cards = (payload.candidates || []).map((candidate) => {
                     const isSelected = candidate.selected || (payload.selected && candidate.id === payload.selected);
-                    const color = escapeHtml(candidate.color || "#39ff88");
+                    const color = candidate.color || "#39ff88";
                     const factors = Array.isArray(candidate.factors) ? candidate.factors : [];
                     const factorHtml = factors.map((factor) => {
                         return metricHtml(factor.label, factor.score, factor.value, factor.level);
@@ -1422,10 +1111,10 @@ def render_view_page() -> str:
                     return `
                         <div class="route-card ${isSelected ? "selected" : ""}">
                             <div class="route-head">
-                                <div class="route-name" style="color:${color}">${escapeHtml(candidate.name || candidate.id)}</div>
-                                <div class="route-chip" style="color:${color}">${escapeHtml(candidate.role || candidate.id)}</div>
+                                <div class="route-name" style="color:${color}">${candidate.name || candidate.id}</div>
+                                <div class="route-chip" style="color:${color}">${candidate.role || candidate.id}</div>
                             </div>
-                            <div class="route-summary">${escapeHtml(candidate.summary || "-")}</div>
+                            <div class="route-summary">${candidate.summary || "-"}</div>
                             ${metricHtml("SCORE", candidate.riskScore, candidate.riskLabel || null, candidate.scoreLevel || (isSelected ? "low" : "pending"))}
                             ${factorHtml}
                         </div>
@@ -1434,8 +1123,8 @@ def render_view_page() -> str:
                 return `
                     <div class="route-compare">
                         <div class="route-decision">
-                            <strong>${escapeHtml(selected ? `${selected.side || selected.id} ROUTE SELECTED` : "AI DECISION PENDING")}</strong>
-                            ${escapeHtml(payload.decisionNote || "Route comparison is waiting for candidate data.")}
+                            <strong>${selected ? `${selected.side || selected.id} ROUTE SELECTED` : "AI DECISION PENDING"}</strong>
+                            ${payload.decisionNote || "Route comparison is waiting for candidate data."}
                         </div>
                         ${cards || '<div class="empty">No route candidates</div>'}
                     </div>
@@ -1459,7 +1148,6 @@ def render_view_page() -> str:
                 const hasFrame = Number(liveView.latestFrameSeq || 0) > 0;
                 statusValue.textContent = lastFetchOk ? (hasFrame ? "LIVE" : "NO FRAME") : "API ERROR";
                 setStatusClass(statusValue, lastFetchOk ? (hasFrame ? "status-ok" : "status-warn") : "status-error");
-                updateFeedStatus(state);
             }
             function updateLeftPanel(state) {
                 const latest = latestBridge(state);
@@ -1472,10 +1160,32 @@ def render_view_page() -> str:
                 }
                 if (activeTab === "ai") {
                     const ai = state?.aiLog || latest.ai_log || latest.llm_log || latest.decision;
-                    const values = Array.isArray(ai) ? ai : ai ? [ai] : [];
-                    byId("leftContent").innerHTML = values.length
-                        ? renderReadouts(values.slice(-8).map((entry, index) => ({ label: `AI ${index + 1}`, value: typeof entry === "string" ? entry : JSON.stringify(entry) })))
-                        : '<div class="empty">AI explanation is not connected yet.</div>';
+                    const entry = Array.isArray(ai) ? ai[ai.length - 1] : ai;
+                    if (!entry) {
+                        byId("leftContent").innerHTML = '<div class="empty">AI explanation is not connected yet.</div>';
+                        return;
+                    }
+                    if (typeof entry === "string") {
+                        byId("leftContent").innerHTML = renderReadouts([{ label: "AI", value: entry }]);
+                        return;
+                    }
+                    const res = entry.result || {};
+                    const rl = res.risk_level || {};
+                    const rb = res.recommended_behavior || {};
+                    const kr = res.key_risks || {};
+                    const arr = (v) => Array.isArray(v) ? v.join(" / ") : safe(v, "-");
+                    byId("leftContent").innerHTML = renderReadouts([
+                        { label: "추천 루트", value: safe(res.selected_route, "-") },
+                        { label: "위험도 A/B", value: `${safe(rl.A, "-")} / ${safe(rl.B, "-")}` },
+                        { label: "확신도", value: safe(res.confidence, "-") },
+                        { label: "요약", value: safe(res.summary || entry.summary, "-") },
+                        { label: "판단 근거", value: safe(res.decision_reason, "-") },
+                        { label: "속도 정책", value: safe(rb.speed_policy, "-") },
+                        { label: "주의 지점", value: arr(rb.caution_points) },
+                        { label: "전술 코멘트", value: safe(rb.tactical_note, "-") },
+                        { label: "A 위험요인", value: arr(kr.A) },
+                        { label: "B 위험요인", value: arr(kr.B) },
+                    ]);
                     return;
                 }
                 if (activeTab === "recon") {
@@ -1540,77 +1250,13 @@ def render_view_page() -> str:
                     ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
                     ctx.fill();
                 }
-                if (label) {
-                    ctx.font = "10px Consolas, monospace";
-                    const labelX = point.x + 10;
-                    const labelY = point.y - 24;
-                    const labelW = Math.ceil(ctx.measureText(label).width) + 10;
-                    const labelH = 16;
-                    ctx.fillStyle = "rgba(3, 8, 5, 0.72)";
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = 1;
-                    ctx.fillRect(labelX, labelY, labelW, labelH);
-                    ctx.strokeRect(labelX + 0.5, labelY + 0.5, labelW - 1, labelH - 1);
-                    ctx.fillStyle = color;
-                    ctx.fillText(label, labelX + 5, labelY + 11);
-                }
-                ctx.restore();
-            }
-            function drawMapTag(ctx, text, point, color, width, height) {
-                if (!point || !text) return;
-                ctx.save();
-                ctx.font = "10px Consolas, monospace";
-                const labelW = Math.ceil(ctx.measureText(text).width) + 10;
-                const labelH = 16;
-                const x = Math.max(4, Math.min(width - labelW - 4, point.x + 8));
-                const y = Math.max(4, Math.min(height - labelH - 4, point.y - 20));
-                ctx.fillStyle = "rgba(3, 8, 5, 0.74)";
-                ctx.strokeStyle = color;
-                ctx.lineWidth = 1;
-                ctx.fillRect(x, y, labelW, labelH);
-                ctx.strokeRect(x + 0.5, y + 0.5, labelW - 1, labelH - 1);
+                ctx.font = "11px Consolas, monospace";
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = "rgba(0, 0, 0, 0.62)";
+                ctx.strokeText(label, point.x + 9, point.y - 9);
                 ctx.fillStyle = color;
-                ctx.fillText(text, x + 5, y + 11);
+                ctx.fillText(label, point.x + 9, point.y - 9);
                 ctx.restore();
-            }
-            function drawRouteCandidateOverlay(ctx, mapper, state, width, height) {
-                const payload = routeCandidateData(state);
-                const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
-                if (!mapper || !candidates.length) return;
-                const ordered = [...candidates].sort((a, b) => Number(a.selected || a.id === payload.selected) - Number(b.selected || b.id === payload.selected));
-                for (const candidate of ordered) {
-                    const isSelected = candidate.selected || (payload.selected && candidate.id === payload.selected);
-                    const routePoints = Array.isArray(candidate.points)
-                        ? candidate.points.map(readPoint).filter(Boolean)
-                        : [];
-                    if (routePoints.length < 2) continue;
-                    const points = routePoints.map(mapper);
-                    const color = candidate.color || (isSelected ? "#39ff88" : "#44d9ff");
-                    ctx.save();
-                    ctx.lineJoin = "round";
-                    ctx.lineCap = "round";
-                    ctx.globalAlpha = isSelected ? 0.92 : 0.66;
-                    ctx.strokeStyle = "rgba(0, 0, 0, 0.78)";
-                    ctx.lineWidth = isSelected ? 6.5 : 5;
-                    ctx.beginPath();
-                    points.forEach((p, index) => index === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
-                    ctx.stroke();
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = isSelected ? 3.2 : 2.2;
-                    ctx.setLineDash(isSelected ? [] : [7, 5]);
-                    ctx.beginPath();
-                    points.forEach((p, index) => index === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
-                    ctx.stroke();
-                    ctx.restore();
-                    const labelPoint = points[Math.max(1, Math.floor(points.length * 0.45))];
-                    const label = isSelected ? `${candidate.side || candidate.id} SELECTED` : `${candidate.side || candidate.id} ${candidate.id || ""}`.trim();
-                    drawMapTag(ctx, label, labelPoint, color, width, height);
-                }
-                const selected = selectedRouteCandidate(payload);
-                const start = readPoint(payload.start || selected?.points?.[0]);
-                const destination = readPoint(payload.destination || selected?.points?.[selected?.points?.length - 1]);
-                drawSymbol(ctx, start ? mapper(start) : null, "#d8ffe9", "", "circle");
-                drawSymbol(ctx, destination ? mapper(destination) : null, "#ffca4f", "", "diamond");
             }
             function drawStaticObject(ctx, point, category) {
                 if (!point) return;
@@ -1744,7 +1390,6 @@ def render_view_page() -> str:
                         } else {
                             drawRosMapBase(ctx, staticPoint, staticMap);
                         }
-                        drawRouteCandidateOverlay(ctx, staticPoint, state, w, h);
                     } else if (staticMapLoadError) {
                         ctx.fillStyle = "#ff5b64";
                         ctx.font = "12px Consolas, monospace";
@@ -1757,6 +1402,14 @@ def render_view_page() -> str:
                     const destination = readPoint(latest.destination?.pose_map || latest.destination?.pose_raw || latest.goal || latest.target);
                     const obstacles = extractArray(latest.obstacles).map(readPoint).filter(Boolean);
                     const route = extractArray(latest.route || latest.path || latest.planned_route).map(readPoint).filter(Boolean);
+                    const routeCandidates = Array.isArray(state?.routeCandidates?.candidates) ? state.routeCandidates.candidates : [];
+                    const candidateRoutes = routeCandidates.map((candidate) => ({
+                        id: candidate.id,
+                        selected: candidate.selected || (state?.routeCandidates?.selected && candidate.id === state.routeCandidates.selected),
+                        color: candidate.color || "#39ff88",
+                        name: candidate.name || candidate.id,
+                        points: Array.isArray(candidate.points) ? candidate.points.map(readPoint).filter(Boolean) : []
+                    })).filter((candidate) => candidate.points.length >= 2);
                     const detections = getDetections(state);
                     const imageInfo = state?.liveView?.latestDetectionMetadata?.image || {};
                     const frameShape = state?.liveView?.latestFrameShape || state?.yolo?.latestFrameShape || [];
@@ -1775,7 +1428,25 @@ def render_view_page() -> str:
                             confidence: Number(det.confidence || 0)
                         };
                     }).filter(Boolean);
-                    const mapPoint = staticPoint || canvasPointMapper([player, enemy, destination, ...obstacles, ...route].filter(Boolean), w, h);
+                    const candidatePoints = candidateRoutes.flatMap((candidate) => candidate.points);
+                    const mapPoint = staticPoint || canvasPointMapper([player, enemy, destination, ...obstacles, ...route, ...candidatePoints].filter(Boolean), w, h);
+                    for (const candidate of candidateRoutes) {
+                        ctx.save();
+                        ctx.strokeStyle = candidate.color;
+                        ctx.lineWidth = candidate.selected ? 3 : 1.6;
+                        ctx.setLineDash(candidate.selected ? [] : [6, 5]);
+                        ctx.beginPath();
+                        candidate.points.map(mapPoint).forEach((p, index) => index === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+                        ctx.stroke();
+                        const labelPoint = mapPoint(candidate.points[Math.max(1, Math.floor(candidate.points.length * 0.55))]);
+                        ctx.setLineDash([]);
+                        ctx.fillStyle = "rgba(3, 8, 5, 0.86)";
+                        ctx.fillRect(labelPoint.x + 5, labelPoint.y - 14, candidate.selected ? 92 : 58, 18);
+                        ctx.fillStyle = candidate.color;
+                        ctx.font = "11px Consolas, monospace";
+                        ctx.fillText(candidate.selected ? `${candidate.id} SELECTED` : candidate.name, labelPoint.x + 9, labelPoint.y - 2);
+                        ctx.restore();
+                    }
                     if (activeMapTab === "ros" && route.length >= 2) {
                         ctx.strokeStyle = "#ffca4f";
                         ctx.lineWidth = 2;
@@ -1797,23 +1468,30 @@ def render_view_page() -> str:
                     if (activeMapTab === "ros" && !player && !enemy && !destination && !obstacles.length && !route.length && detectionContacts.length) {
                         const pad = 34;
                         const classColors = { house: "#b084ff", person: "#39ff88", tank: "#ff5b64", rock: "#ffca4f", car: "#ff8c00" };
+                        ctx.fillStyle = "#44d9ff";
+                        ctx.font = "13px Consolas, monospace";
+                        ctx.fillText("YOLO CONTACTS", 18, bridge.error ? (staticPoint ? 92 : 70) : (staticPoint ? 70 : 52));
                         for (const contact of detectionContacts.slice(0, 10)) {
                             const point = {
                                 x: pad + (contact.x / Math.max(1, imageW)) * (w - pad * 2),
                                 y: pad + (contact.y / Math.max(1, imageH)) * (h - pad * 2)
                             };
                             const cls = String(contact.label).toLowerCase();
-                            drawSymbol(ctx, point, classColors[cls] || "#39ff88", "", cls === "house" ? "square" : "circle");
+                            drawSymbol(ctx, point, classColors[cls] || "#39ff88", `${contact.label} ${numberText(contact.confidence, 2)}`, cls === "house" ? "square" : "circle");
                         }
                     }
                     if (activeMapTab === "ros") {
-                        for (const obstacle of obstacles) drawSymbol(ctx, mapPoint(obstacle), "#6aa884", "", "square");
-                        drawSymbol(ctx, destination ? mapPoint(destination) : null, "#ffca4f", "", "diamond");
+                        for (const obstacle of obstacles) drawSymbol(ctx, mapPoint(obstacle), "#6aa884", "OBS", "square");
+                        drawSymbol(ctx, destination ? mapPoint(destination) : null, "#ffca4f", "TARGET", "diamond");
                     }
                     drawSymbol(ctx, enemy ? mapPoint(enemy) : null, "#ff5b64", "ENEMY", "circle");
                     if (player) {
                         const selfPoint = mapPoint(player);
-                        drawSymbol(ctx, selfPoint, "#39ff88", "SELF", "circle");
+                        drawSymbol(ctx, selfPoint, "#39ff88", `SELF ${numberText(player.x, 1)},${numberText(player.y, 1)}`, "circle");
+                    } else {
+                        ctx.fillStyle = "rgba(57,255,136,0.82)";
+                        ctx.font = "12px Consolas, monospace";
+                        ctx.fillText("SELF WAITING: /info or /get_action", 18, staticPoint ? 112 : 92);
                     }
                     if (activeMapTab === "ros") drawRosStatus(ctx, bridge, latest, w);
                 } catch (err) {
@@ -1847,7 +1525,6 @@ def render_view_page() -> str:
                     updateLeftPanel(latestState);
                     drawMap(latestState);
                     updateBottomStatus(latestState);
-                    drawFeedOverlay(latestState);
                 } catch (err) {
                     lastFetchOk = false;
                     const fallback = latestState || {};
@@ -1857,7 +1534,6 @@ def render_view_page() -> str:
                     updateLeftPanel(fallback);
                     drawMap(fallback);
                     updateBottomStatus(fallback);
-                    drawFeedOverlay(fallback);
                 }
             }
             async function fetchStaticMap() {
@@ -1903,15 +1579,12 @@ def render_view_page() -> str:
                 };
                 img.src = `${info.url}?t=${Date.now()}`;
             }
-            window.addEventListener("resize", () => {
-                drawMap(latestState || {});
-                drawFeedOverlay(latestState || {});
-            });
-            byId("driveFeed").addEventListener("load", () => drawFeedOverlay(latestState || {}));
+            window.addEventListener("resize", () => drawMap(latestState || {}));
+            updateMapLegend();
             if (new URLSearchParams(window.location.search).get("map") === "ros") setMapTab("ros");
             fetchStaticMap();
             fetchDashboardState();
-            setInterval(fetchDashboardState, 200);
+            setInterval(fetchDashboardState, 300);
         </script>
     </body>
     </html>
@@ -1922,33 +1595,8 @@ def render_view_page() -> str:
 def generate_video_stream(web_fps: float = 20.0, jpeg_quality: int = 80):
     interval = 1.0 / max(1.0, float(web_fps))
     encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)] if cv2 is not None else []
-    last_sent_frame_seq = -1
-    last_sent_raw_seq = -1
-    last_sent_at = 0.0
     while True:
-        loop_started = time.perf_counter()
-        if _LIVE_VIEW_RAW_STREAM:
-            with _frame_condition:
-                if _latest_raw_frame_bytes is not None and _latest_raw_frame_seq == last_sent_raw_seq:
-                    _frame_condition.wait(timeout=interval)
-                raw_seq = _latest_raw_frame_seq
-                raw_bytes = _latest_raw_frame_bytes
-            if raw_bytes is not None and raw_seq == last_sent_raw_seq:
-                continue
-            if raw_bytes is not None:
-                now = time.perf_counter()
-                wait_sec = interval - (now - last_sent_at)
-                if wait_sec > 0:
-                    time.sleep(wait_sec)
-                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + raw_bytes + b"\r\n"
-                last_sent_raw_seq = raw_seq
-                last_sent_at = time.perf_counter()
-                continue
-
-        with _frame_condition:
-            if _latest_frame is not None and _latest_frame_seq == last_sent_frame_seq:
-                _frame_condition.wait(timeout=interval)
-            frame_seq = _latest_frame_seq
+        with _state_lock:
             frame = None if _latest_frame is None else _latest_frame.copy()
             detections = deepcopy(_latest_detections)
             metadata = deepcopy(_latest_detection_metadata)
@@ -1960,49 +1608,28 @@ def generate_video_stream(web_fps: float = 20.0, jpeg_quality: int = 80):
             ok, buffer = cv2.imencode(".jpg", frame, encode_params)
             if ok:
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
-        last_sent_frame_seq = frame_seq
-        last_sent_at = time.perf_counter()
-        elapsed = time.perf_counter() - loop_started
-        if frame_seq <= 0 and elapsed < interval:
-            time.sleep(interval - elapsed)
+        time.sleep(interval)
 
 
 def video_response(web_fps: float = 20.0, jpeg_quality: int = 80) -> Response:
-    response = Response(
-        generate_video_stream(web_fps=web_fps, jpeg_quality=jpeg_quality),
-        mimetype="multipart/x-mixed-replace; boundary=frame",
-    )
-    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["X-Accel-Buffering"] = "no"
-    return response
+    return Response(generate_video_stream(web_fps=web_fps, jpeg_quality=jpeg_quality), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
 def debug_state() -> Dict[str, Any]:
     with _state_lock:
         frame_age = time.time() - _latest_frame_timestamp if _latest_frame_timestamp else None
-        raw_age = time.time() - _latest_raw_frame_timestamp if _latest_raw_frame_timestamp else None
         det_age = time.time() - _latest_detection_timestamp if _latest_detection_timestamp else None
         return {
             "enabled": True,
             "opencvAvailable": cv2 is not None,
-            "rawStream": _LIVE_VIEW_RAW_STREAM,
             "latestFrameSeq": _latest_frame_seq,
-            "latestRawFrameSeq": _latest_raw_frame_seq,
             "latestFrameShape": deepcopy(_latest_frame_shape),
             "latestSourceFrameShape": deepcopy(_latest_source_frame_shape),
             "liveViewDecodeFps": _LIVE_VIEW_DECODE_FPS,
-            "liveViewSourceFps": _source_fps_ema,
-            "latestFrameIntervalMs": _latest_frame_interval_ms,
             "liveViewMaxSide": _LIVE_VIEW_MAX_SIDE,
             "latestLiveDecodeMs": _latest_live_decode_ms,
             "skippedLiveDecodeCount": _skipped_live_decode_count,
-            "pendingFrameSeq": _pending_frame_seq,
-            "decodedInputFrameSeq": _decoded_input_frame_seq,
-            "liveDecodeWorkerCount": _live_decode_worker_count,
-            "liveDecodeWorkerRunning": _decode_thread is not None and _decode_thread.is_alive(),
             "latestFrameAgeMs": None if frame_age is None else frame_age * 1000.0,
-            "latestRawFrameAgeMs": None if raw_age is None else raw_age * 1000.0,
             "latestDetectionCount": len(_latest_detections),
             "latestDetections": deepcopy(_latest_detections[:10]),
             "latestDetectionAgeMs": None if det_age is None else det_age * 1000.0,

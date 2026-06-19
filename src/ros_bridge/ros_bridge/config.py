@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ############################################################
-# Tank Challenge Flask + ROS2 Bridge Runtime Configuration
+# Tank Challenge Flask + ROS2 Bridge 런타임 설정
 ############################################################
 
 이 파일의 역할
@@ -24,7 +24,7 @@
 """
 
 ############################################################
-# 0. Python standard library imports
+# 0. Python 표준 라이브러리 import
 ############################################################
 
 # os: 환경변수 읽기/설정에 사용한다.
@@ -76,7 +76,7 @@ def load_env_file() -> None:
 load_env_file()
 
 ############################################################
-# 1. OpenMP duplicate runtime workaround
+# 1. OpenMP runtime 중복 로드 우회
 ############################################################
 
 # YOLO, torch, numpy, OpenCV 등을 같은 프로세스에서 사용할 때
@@ -91,7 +91,7 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 
 ############################################################
-# 2. Server mode configuration
+# 2. 서버 운용 모드 설정
 ############################################################
 
 # TANK_MODE는 bridge의 전체 운용 모드를 결정한다.
@@ -116,7 +116,7 @@ if TANK_MODE not in ("monitor", "auto"):
 
 
 ############################################################
-# 3. Flask server network configuration
+# 3. Flask 서버 네트워크 설정
 ############################################################
 
 # HOST는 Flask 서버가 어느 네트워크 인터페이스에서 요청을 받을지 결정한다.
@@ -136,7 +136,7 @@ PORT = int(os.environ.get("TANK_BRIDGE_PORT", "5000"))
 
 
 ############################################################
-# 4. ROS2 control command safety configuration
+# 4. ROS2 제어 명령 안전 설정
 ############################################################
 
 # COMMAND_TTL_SEC는 ROS2 제어 명령의 유효 시간이다.
@@ -170,7 +170,7 @@ if AUTO_FALLBACK not in ("neutral", "stop"):
 
 
 ############################################################
-# 5. Optional local JSON/Image logging
+# 5. 선택적 로컬 JSON/이미지 로깅
 ############################################################
 
 # SAVE_JSONL은 bridge가 수신한 주요 이벤트를 로컬 JSONL 파일로 저장할지 결정한다.
@@ -185,8 +185,9 @@ if AUTO_FALLBACK not in ("neutral", "stop"):
 SAVE_JSONL = os.environ.get("TANK_SAVE_JSONL", "false").strip().lower() in ("1", "true", "yes", "y")
 
 # JSONL_DIR은 JSONL 로그를 저장할 디렉터리다.
-# 상대 경로일 경우 실행 위치 기준으로 생성된다.
-JSONL_DIR = Path(os.environ.get("TANK_JSONL_DIR", "./tank_logs"))
+from datetime import datetime
+_session_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+JSONL_DIR = Path(os.environ.get("TANK_JSONL_DIR", f"./tank_logs/session_{_session_ts}"))
 
 # SAVE_FULL_INFO는 /info 원본 전체를 저장할지 결정한다.
 #
@@ -197,7 +198,7 @@ JSONL_DIR = Path(os.environ.get("TANK_JSONL_DIR", "./tank_logs"))
 # true:
 # - /info 원본 JSON 전체를 저장한다.
 # - LiDAR point까지 모두 남길 수 있어 파일이 매우 커질 수 있다.
-SAVE_FULL_INFO = os.environ.get("TANK_SAVE_FULL_INFO", "false").strip().lower() in ("1", "true", "yes", "y")
+SAVE_FULL_INFO = os.environ.get("TANK_SAVE_FULL_INFO", "true").strip().lower() in ("1", "true", "yes", "y")
 
 # SAVE_IMAGES는 /detect 또는 /stereo_image로 들어온 이미지 파일을 로컬에 저장할지 결정한다.
 #
@@ -215,28 +216,26 @@ IMAGE_DIR = Path(os.environ.get("TANK_IMAGE_DIR", "./tank_images"))
 
 
 ############################################################
-# 5-1. YOLO/live-view runtime options
+# 5-1. YOLO/live-view 런타임 옵션
 ############################################################
 
 # TANK_LIVE_VIEW=true이면 ros_bridge 안에서 /view, /video_feed를 제공한다.
 # 이 기능은 YOLO를 다시 실행하지 않고, /detect로 들어온 최신 프레임과
 # 이미 계산된 detection 결과를 화면에 표시만 한다.
 LIVE_VIEW_ENABLED = os.environ.get("TANK_LIVE_VIEW", "true").strip().lower() in ("1", "true", "yes", "y")
-LIVE_VIEW_FPS = float(os.environ.get("TANK_LIVE_VIEW_FPS", "30"))
+LIVE_VIEW_FPS = float(os.environ.get("TANK_LIVE_VIEW_FPS", "8"))
 LIVE_VIEW_JPEG_QUALITY = int(os.environ.get("TANK_LIVE_VIEW_JPEG_QUALITY", "65"))
 
 # TANK_YOLO_ASYNC=true이면 /detect 요청에서 YOLO 완료를 기다리지 않고,
 # 백그라운드 worker가 최신 프레임만 처리한다. 기본값은 기존 동기식 안전 동작이다.
 YOLO_ASYNC_ENABLED = os.environ.get("TANK_YOLO_ASYNC", "false").strip().lower() in ("1", "true", "yes", "y")
 YOLO_ASYNC_MIN_INTERVAL_SEC = float(os.environ.get("TANK_YOLO_ASYNC_MIN_INTERVAL_SEC", "0.0"))
-YOLO_ASYNC_MAX_RESULT_AGE_MS = float(os.environ.get("TANK_YOLO_ASYNC_MAX_RESULT_AGE_MS", "700"))
-YOLO_ASYNC_WAIT_FOR_FRESH_MS = float(os.environ.get("TANK_YOLO_ASYNC_WAIT_FOR_FRESH_MS", "0"))
+YOLO_ASYNC_MAX_RESULT_AGE_MS = float(os.environ.get("TANK_YOLO_ASYNC_MAX_RESULT_AGE_MS", "300"))
 YOLO_ASYNC_LOG_INTERVAL_SEC = float(os.environ.get("TANK_YOLO_ASYNC_LOG_INTERVAL_SEC", "2.0"))
-PUBLISH_DETECT_IMAGE = os.environ.get("TANK_PUBLISH_DETECT_IMAGE", "false").strip().lower() in ("1", "true", "yes", "y")
 
 
 ############################################################
-# 6. /init default simulator start positions
+# 6. /init 기본 시뮬레이터 시작 위치
 ############################################################
 
 # BLUE_START는 아군 전차 시작 좌표다.
@@ -247,22 +246,22 @@ PUBLISH_DETECT_IMAGE = os.environ.get("TANK_PUBLISH_DETECT_IMAGE", "false").stri
 # - Y: 높이 방향으로 해석
 # - Z: 전후/진행 평면 방향으로 해석
 BLUE_START = (
-    float(os.environ.get("TANK_BLUE_START_X", "60")),  # blStartX: 아군 전차 시작 X 좌표
-    float(os.environ.get("TANK_BLUE_START_Y", "8")),   # blStartY: 아군 전차 시작 Y 좌표(Alt)
-    float(os.environ.get("TANK_BLUE_START_Z", "30")),  # blStartZ: 아군 전차 시작 Z 좌표(Pos 두 번째 값)
+    float(os.environ.get("TANK_BLUE_START_X", "60.0")),  # blStartX: 아군 전차 시작 X 좌표
+    float(os.environ.get("TANK_BLUE_START_Y", "8")),       # blStartY: 아군 전차 시작 Y 좌표(Alt)
+    float(os.environ.get("TANK_BLUE_START_Z", "30.0")),    # blStartZ: 아군 전차 시작 Z 좌표(Pos 두 번째 값)
 )
 
-# RED_START는 적 전차 시작 좌표다.
-# 공식 /init 응답에서는 rdStartX, rdStartY, rdStartZ로 전달된다.
+# RED_START는 적 전차 시작(리스폰) 좌표다. 새 맵 실측 적전차 위치 = map(135.46, 276.87).
+# raw.x→map.x, raw.z→map.y 변환이므로 raw (x=135.46, z=276.87), y(고도)=10 유지.
 RED_START = (
-    float(os.environ.get("TANK_RED_START_X", "59")),   # rdStartX: 적 전차 시작 X 좌표
-    float(os.environ.get("TANK_RED_START_Y", "10")),   # rdStartY: 적 전차 시작 Y 좌표
-    float(os.environ.get("TANK_RED_START_Z", "280")),  # rdStartZ: 적 전차 시작 Z 좌표
+    float(os.environ.get("TANK_RED_START_X", "135.46")),   # rdStartX: 적 전차 시작 X 좌표 (map.x)
+    float(os.environ.get("TANK_RED_START_Y", "10")),       # rdStartY: 적 전차 시작 Y 좌표 (고도)
+    float(os.environ.get("TANK_RED_START_Z", "276.87")),   # rdStartZ: 적 전차 시작 Z 좌표 (map.y)
 )
 
 
 ############################################################
-# 7. /init mode flags from official API
+# 7. 공식 API 기반 /init 모드 플래그
 ############################################################
 
 # ENABLE_DETECT는 /init의 detectMode/detactMode에 대응한다.
@@ -302,7 +301,7 @@ LUX = int(os.environ.get("TANK_LUX", "30000"))
 
 
 ############################################################
-# 8. Coordinate frame names
+# 8. 좌표계 frame 이름
 ############################################################
 
 # UNITY_FRAME은 시뮬레이터 원본 좌표계를 표시하기 위한 ROS frame_id다.

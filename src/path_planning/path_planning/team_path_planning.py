@@ -10,6 +10,13 @@ CLEARANCE_WEIGHT = 0.4     # 여유공간 부족 1m당 추가 비용 (너무 크
 # side bias: 의도한 채널(A=서쪽 / B=동쪽)을 벗어나면 비용 가산 → 중앙 섬 반대편으로 새지 않음
 SIDE_TOL = 7.0             # 기준선에서 이만큼은 허용(m)
 SIDE_WEIGHT = 2.0          # 기준선 반대편으로 1m 넘어갈 때마다 추가 비용
+# 이미 지나친(전차 뒤) 웨이포인트는 버려서 경로가 뒤로 갔다 오는 hook을 막는다.
+# (너무 크면 뒤 웨이포인트로 후진 경로가 생김 — 1m만 허용)
+WAYPOINT_PASSED_TOL = 1.0  # 전차 z보다 이만큼 이상 뒤(z 작음)인 웨이포인트는 통과한 것으로 보고 제외(m)
+# 전차 차폭 보정: 큰 바위 반경에 소폭 버퍼를 더해 차체 충돌 여유를 준다.
+# (전역값이라 크게 잡으면 B 코리더가 막히므로 작게; 큰 여유는 루트 웨이포인트로 확보)
+TANK_HALF_WIDTH = 1.0      # 바위 반경에 더할 차폭 버퍼(m). 2로 키우면 route B가 막힘
+ROCK_RADIUS = 4.0          # 큰 바위 물리 반경(m)
 
 def create_grid(width: int, height: int, resolution: float) -> list[list[int]]:
     """해상도에 맞춘 2차원 빈 격자 맵을 생성합니다."""
@@ -259,7 +266,7 @@ def smooth_path(grid: list[list[int]], path: list[tuple[int, int]]) -> list[tupl
     return smoothed
 
 def load_static_obstacles_from_map(map_path: str) -> list[dict]:
-    """맵 파일에서 고정된 지형지물(Tree, Rock 등) 위치를 읽어 bbox 형태로 반환합니다."""
+    """맵 파일에서 고정된 지형지물(Tree, Rock, Wall 등) 위치를 읽어 bbox 형태로 반환합니다."""
     try:
         with open(map_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -280,8 +287,14 @@ def load_static_obstacles_from_map(map_path: str) -> list[dict]:
         radius = 2.5
         obs_type = 'Tree'
         if 'Rock' in prefab:
-            radius = 4.0
+            # 큰 바위: 물리 반경 + 전차 반폭만큼 더 띄워 경로 중심선이 차체를 바위 밖으로 유지
+            # (경로 중심선이 바위 5m 밖이어도 차폭 2m면 차체가 바위에 닿아 끼이던 문제 해결)
+            radius = ROCK_RADIUS + TANK_HALF_WIDTH
             obs_type = 'Rock'
+        elif 'Wall' in prefab:
+            radius = 2.0
+            obs_type = 'Wall'
+
         obstacles.append({
             'type': obs_type,
             'x_min': x - radius,
@@ -364,8 +377,11 @@ def plan_path_through_waypoints(
 
     full_path: list[tuple[float, float]] = []
     prev = start_pos
-    # 현재 위치보다 z축(북쪽)으로 뒤쳐진 웨이포인트는 이미 지나온 것으로 간주하고 버림 (후진/루프 방지)
-    valid_waypoints = [wp for wp in waypoints if wp[1] >= start_pos[1] - 10.0]
+    # 현재 위치보다 z축(북쪽)으로 뒤쳐진 웨이포인트는 이미 지나온 것으로 간주하고 버림 (후진/hook 방지).
+    # 단, 마지막(목적지) 웨이포인트는 항상 남겨 경로가 목적지까지 이어지게 한다.
+    valid_waypoints = [wp for wp in waypoints if wp[1] >= start_pos[1] - WAYPOINT_PASSED_TOL]
+    if waypoints and (not valid_waypoints or valid_waypoints[-1] is not waypoints[-1]):
+        valid_waypoints.append(waypoints[-1])
     for wp in valid_waypoints:
         start_grid = (int(prev[0] / res), int(prev[1] / res))
         goal_grid = _snap_goal(grid, int(wp[0] / res), int(wp[1] / res), side)

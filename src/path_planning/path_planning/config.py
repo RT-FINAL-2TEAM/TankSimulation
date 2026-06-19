@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Global path-planning configuration values.
+"""전역 경로계획 설정값.
 
 시뮬레이션 상황에 따라 바꿀 수 있는 A* / route / topic 기본값을 이 파일에 모은다.
-LiDAR raw parsing이나 clustering 기본값은 lidar.config가 source of truth이다.
+LiDAR raw 파싱이나 clustering 기본값은 lidar.config가 단일 출처(source of truth)다.
 """
 
 from __future__ import annotations
@@ -80,17 +80,35 @@ DEFAULT_GOAL_Y = env_float("TANK_PLANNER_DEFAULT_GOAL_Y", 250.0)
 MAX_EXPANSIONS = env_int("TANK_PLANNER_MAX_EXPANSIONS", 250000)
 PLANNER_HZ = env_float("TANK_PLANNER_HZ", 10.0)
 
-# Fallback sizes when /update_obstacle gives prefabName/position rather than bbox.
+# /update_obstacle가 bbox 대신 prefabName/position을 줄 때 쓰는 대체(fallback) 크기.
 PREFAB_HALF_SIZES: Dict[str, Tuple[float, float]] = {
     "Human": (0.5, 0.5),
     "Tree": (1.0, 1.0),
     "Rock": (1.5, 1.5),
     "Tank": (2.0, 4.0),
     "House": (4.0, 4.0),
+    "wall001x5": (8.0, 1.0),
+    "wall002x5": (8.0, 1.0),
+    "Wall001": (3.0, 1.0),
+    "Wall002": (3.0, 1.0),
 }
 
-# Camera + LiDAR calibration / overlay defaults. This calibration belongs to the
-# local-path/fusion layer, not to raw LiDAR preprocessing.
+
+def prefab_half_size(name: str) -> Tuple[float, float]:
+    """프리팹 이름으로 (half_x, half_y) 충돌 반경을 조회한다(미등록 시 1.0×1.0).
+
+    PREFAB_HALF_SIZES와 한 곳에 두어, potential·path_planning이 각자 복붙하던 구현을
+    단일 출처로 통합한다.
+    """
+    lname = str(name).lower()
+    for key, value in PREFAB_HALF_SIZES.items():
+        if key.lower() in lname:
+            return value
+    return 1.0, 1.0
+
+
+# 카메라 + LiDAR 캘리브레이션 / 오버레이 기본값. 이 캘리브레이션은 raw LiDAR 전처리가 아니라
+# local-path/fusion 레이어에 속한다.
 CAMERA_LIDAR_PROJECTION_PARAMS = {
     "tx": env_float("TANK_CAM_LIDAR_TX", 0.28),
     "ty": env_float("TANK_CAM_LIDAR_TY", 0.02),
@@ -112,7 +130,7 @@ TOPIC_INFO_RAW = os.environ.get("TANK_TOPIC_INFO_RAW", "/tank/api/info/raw")
 TOPIC_CAMERA_LIDAR_PROJECTION_IMAGE = os.environ.get("TANK_TOPIC_CAMERA_LIDAR_PROJECTION_IMAGE", "/tank/camera/lidar_projection/image")
 TOPIC_CAMERA_LIDAR_PROJECTION_COMPRESSED = os.environ.get("TANK_TOPIC_CAMERA_LIDAR_PROJECTION_COMPRESSED", "/tank/camera/lidar_projection/compressed")
 
-# Local path / camera-LiDAR fusion topics and default colors.
+# local path / 카메라-LiDAR 융합 토픽과 기본 색상.
 TOPIC_DETECTIONS = os.environ.get("TANK_TOPIC_DETECTIONS", "/tank/perception/detections")
 TOPIC_PLAYER_STATE = os.environ.get("TANK_TOPIC_PLAYER_STATE", "/tank/player/state")
 TOPIC_TURRET = os.environ.get("TANK_TOPIC_TURRET", "/tank/api/get_action/turret")
@@ -125,24 +143,29 @@ SERVICE_DISCOVERED_SAVE = os.environ.get("TANK_SERVICE_DISCOVERED_SAVE", "/tank/
 SERVICE_DISCOVERED_CLEAR = os.environ.get("TANK_SERVICE_DISCOVERED_CLEAR", "/tank/map/discovered/clear")
 LOCAL_PATH_TIMER_SEC = env_float("TANK_LOCAL_PATH_TIMER_SEC", 0.2)
 CLASS_COLOR_DEFAULTS = {
-    "person": "#39FF88",
+    "person": "#00FFFF",
     "rock": "#FFA500",
     "tank": "#FF0000",
-    "car": "#FF8C00",
-    "house": "#B084FF",
+    "wall": "#00FF00",
+    "tent": "#FFFF00",
     "unknown": "#FFFFFF",
 }
 
-# Visual perception / clustering integration.
+# visual perception / clustering 통합.
 TOPIC_LIDAR_CLUSTERS = os.environ.get("TANK_TOPIC_LIDAR_CLUSTERS", "/tank/visual_perception/lidar_clusters")
 
 
-# TankSimulation route A/B strategy integration.
+# TankSimulation route A/B 전략 통합.
 USE_ROUTE_WAYPOINTS = env_bool("TANK_PLANNER_USE_ROUTE_WAYPOINTS", True)
 ROUTE_MAP_NAME = os.environ.get("TANK_PLANNER_ROUTE_MAP_NAME", "finalmap")
 ROUTE_ID = env_route_id("TANK_PLANNER_ROUTE_ID", env_route_id("TANK_FORCE_ROUTE", "A"))
 ROUTE_SIDE = os.environ.get("TANK_PLANNER_ROUTE_SIDE", "west" if ROUTE_ID == "A" else "east")
 ROUTE_CLEARANCE_WEIGHT = env_float("TANK_PLANNER_ROUTE_CLEARANCE_WEIGHT", 0.4)
 ROUTE_CONFIG_FILE = os.environ.get("TANK_PLANNER_ROUTE_CONFIG_FILE", "")
+# 정적 맵(finalmap.map) 나무/바위를 A* 코스트맵에 넣어 전역 경로가 회피·중앙정렬하게 한다.
+# use_gt_obstacles/동적 replan과 무관한 독립 경로(부작용 회피). 빈 파일이면 rviz_visualization
+# share의 finalmap.map을 자동 해석.
+USE_STATIC_MAP = env_bool("TANK_PLANNER_USE_STATIC_MAP", True)
+STATIC_MAP_FILE = os.environ.get("TANK_PLANNER_STATIC_MAP_FILE", "")
 USE_LIDAR_CLUSTER_BBOXES = env_bool("TANK_PLANNER_USE_LIDAR_CLUSTER_BBOXES", True)
 LIDAR_CLUSTER_BBOX_MARGIN = env_float("TANK_PLANNER_LIDAR_CLUSTER_BBOX_MARGIN", 1.0)

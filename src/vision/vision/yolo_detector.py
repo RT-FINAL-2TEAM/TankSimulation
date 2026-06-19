@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-YOLO detector wrapper for Tank Challenge.
+Tank Challenge용 YOLO detector 래퍼.
 
-This module is intentionally independent from Flask and ROS2 so it can be used by:
-- ros_bridge.app_routes /detect endpoint
-- a standalone debug server
-- future ROS2 perception nodes
+이 모듈은 Flask·ROS2와 일부러 분리해 두어 다음 어디에서나 쓸 수 있다:
+- ros_bridge.app_routes의 /detect 엔드포인트
+- 독립 실행 디버그 서버
+- 향후 ROS2 인지 노드
 
-The detector returns the official Tank Challenge /detect response format:
+detector는 공식 Tank Challenge /detect 응답 포맷을 반환한다:
 [
   {
     "className": "person",
@@ -36,7 +36,7 @@ import yaml
 
 try:
     from ament_index_python.packages import get_package_share_directory
-except Exception:  # pragma: no cover - only unavailable outside ROS2 runtime
+except Exception:  # pragma: no cover - ROS2 런타임 밖에서만 사용 불가
     get_package_share_directory = None
 
 from vision.config import DEFAULT_CLASS_COLORS, DEFAULT_CONFIG_FILENAME, DEFAULT_MODEL_FILENAME
@@ -77,7 +77,7 @@ def _resolve_package_share_file(package_name: str, *parts: str) -> Optional[Path
 
 def _resolve_source_file(*parts: str) -> Path:
     # .../vision/vision/yolo_detector.py
-    # source root package dir is parent.parent
+    # 소스 루트 패키지 디렉터리는 parent.parent
     return Path(__file__).resolve().parents[1].joinpath(*parts)
 
 
@@ -103,12 +103,6 @@ def resolve_default_model_path(config: Dict[str, Any]) -> Path:
         return share_path
 
     source_path = _resolve_source_file("models", default_filename)
-    if source_path.exists():
-        return source_path
-    if source_path.suffix.lower() in {".engine", ".onnx"}:
-        pt_fallback = source_path.with_suffix(".pt")
-        if pt_fallback.exists():
-            return pt_fallback
     return source_path
 
 
@@ -129,8 +123,8 @@ class YoloRuntimeConfig:
     iou: float = 0.70
     max_det: int = 20
     max_return: int = 5
-    model_conf: float = 0.5
-    fallback_model_conf: float = 0.5
+    model_conf: float = 0.10
+    fallback_model_conf: float = 0.05
     low_conf_fallback: bool = False
     return_fallback_detections: bool = True
     tracking_enabled: bool = True
@@ -139,18 +133,18 @@ class YoloRuntimeConfig:
     enable_cache: bool = True
     min_interval_sec: float = 0.12
     warmup_runs: int = 2
-    aliases: Dict[str, str] = field(default_factory=lambda: {"blue": "person", "red": "person", "tank": "tank", "Tank": "tank", "car": "car", "house": "house"})
-    canonical_classes: set = field(default_factory=lambda: {"rock", "person", "tank", "car", "house"})
-    canonical_class_order: List[str] = field(default_factory=lambda: ["rock", "person", "tank", "car", "house"])
-    ignored_classes: set = field(default_factory=set)
-    class_fixed_ids: Dict[str, int] = field(default_factory=lambda: {"tank": 1, "rock": 2, "person": 3, "car": 4, "house": 5})
+    aliases: Dict[str, str] = field(default_factory=lambda: {"blue": "person", "red": "person", "tank": "tank", "Tank": "tank"})
+    canonical_classes: set = field(default_factory=lambda: {"car", "person", "tank", "rock", "house", "tent"})
+    ignored_classes: set = field(default_factory=lambda: {"wall"})
+    class_fixed_ids: Dict[str, int] = field(default_factory=lambda: {"car": 0, "person": 1, "tank": 2, "rock": 3, "house": 4, "tent": 5})
     class_colors: Dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CLASS_COLORS))
     default_box_color: str = "#00FF00"
-    default_confidence: float = 0.5
-    class_confidence_thresholds: Dict[str, float] = field(default_factory=dict)
+    default_confidence: float = 0.20
+    class_confidence_thresholds: Dict[str, float] = field(default_factory=lambda: {"wall": 0.15})
+    close_wall_confidence: float = 0.12
+    close_wall_area_ratio: float = 0.08
+    close_wall_min_height_ratio: float = 0.35
     shadow_filter_enabled: bool = False
-    jpeg_reduced_decode: bool = True
-    jpeg_decode_max_side: int = 960
     shadow_sigma: float = 35.0
     shadow_strength: float = 0.75
     shadow_work_scale: float = 0.35
@@ -176,18 +170,16 @@ class YoloRuntimeConfig:
 
         colors = dict(DEFAULT_CLASS_COLORS)
         colors.update(dict(_deep_get(raw, ["classes", "colors"], {}) or {}))
-        aliases = dict(_deep_get(raw, ["classes", "aliases"], {}) or {"blue": "person", "red": "person", "tank": "tank", "Tank": "tank", "car": "car", "house": "house"})
-        canonical_order = [
-            str(x).strip().lower()
-            for x in (_deep_get(raw, ["classes", "canonical"], ["rock", "person", "tank", "car", "house"]) or [])
-            if str(x).strip()
-        ]
-        canonical = set(canonical_order)
-        ignored = set(str(x).strip().lower() for x in (_deep_get(raw, ["classes", "ignored"], []) or []))
-        fixed_ids_raw = dict(_deep_get(raw, ["classes", "fixed_ids"], {}) or {"tank": 1, "rock": 2, "person": 3, "car": 4, "house": 5})
+        aliases = dict(_deep_get(raw, ["classes", "aliases"], {}) or {"blue": "person", "red": "person", "tank": "tank", "Tank": "tank"})
+        canonical = set(str(x).strip().lower() for x in (_deep_get(raw, ["classes", "canonical"], ["car", "person", "tank", "rock", "house", "tent"]) or []))
+        ignored = set(str(x).strip().lower() for x in (_deep_get(raw, ["classes", "ignored"], ["wall"]) or []))
+        fixed_ids_raw = dict(_deep_get(raw, ["classes", "fixed_ids"], {}) or {"car": 0, "person": 1, "tank": 2, "rock": 3, "house": 4, "tent": 5})
         fixed_ids = {str(k).strip().lower(): int(v) for k, v in fixed_ids_raw.items()}
 
         thresholds = dict(_deep_get(raw, ["classes", "confidence_thresholds"], {}) or {})
+        if "wall" not in thresholds:
+            thresholds["wall"] = 0.15
+
         return cls(
             model_path=model_path,
             config_path=config_path,
@@ -198,8 +190,8 @@ class YoloRuntimeConfig:
             iou=float(os.getenv("YOLO_IOU", _deep_get(raw, ["model", "iou"], 0.70))),
             max_det=int(os.getenv("YOLO_MAX_DET", _deep_get(raw, ["model", "max_det"], 20))),
             max_return=int(os.getenv("YOLO_MAX_RETURN", _deep_get(raw, ["model", "max_return"], 5))),
-            model_conf=float(os.getenv("YOLO_MODEL_CONF", _deep_get(raw, ["model", "model_confidence"], 0.5))),
-            fallback_model_conf=float(os.getenv("YOLO_FALLBACK_MODEL_CONF", _deep_get(raw, ["model", "fallback_model_confidence"], 0.5))),
+            model_conf=float(os.getenv("YOLO_MODEL_CONF", _deep_get(raw, ["model", "model_confidence"], 0.10))),
+            fallback_model_conf=float(os.getenv("YOLO_FALLBACK_MODEL_CONF", _deep_get(raw, ["model", "fallback_model_confidence"], 0.05))),
             low_conf_fallback=_env_flag("YOLO_LOW_CONF_FALLBACK", bool(_deep_get(raw, ["model", "enable_low_conf_fallback"], False))),
             return_fallback_detections=_env_flag("YOLO_RETURN_FALLBACK_DETECTIONS", True),
             tracking_enabled=_env_flag("YOLO_TRACKING", bool(_deep_get(raw, ["tracking", "enabled"], True))),
@@ -210,15 +202,15 @@ class YoloRuntimeConfig:
             warmup_runs=int(os.getenv("YOLO_WARMUP_RUNS", _deep_get(raw, ["model", "warmup_runs"], 2))),
             aliases=aliases,
             canonical_classes=canonical,
-            canonical_class_order=canonical_order,
             ignored_classes=ignored,
             class_fixed_ids=fixed_ids,
             class_colors=colors,
             default_box_color=str(_deep_get(raw, ["classes", "default_box_color"], "#00FF00")),
-            default_confidence=float(os.getenv("YOLO_DEFAULT_CONF", _deep_get(raw, ["classes", "default_confidence"], 0.5))),
+            default_confidence=float(os.getenv("YOLO_DEFAULT_CONF", _deep_get(raw, ["classes", "default_confidence"], 0.20))),
             class_confidence_thresholds={k: float(v) for k, v in thresholds.items()},
-            jpeg_reduced_decode=_env_flag("YOLO_JPEG_REDUCED_DECODE", bool(_deep_get(raw, ["preprocess", "jpeg_reduced_decode"], True))),
-            jpeg_decode_max_side=int(os.getenv("YOLO_JPEG_DECODE_MAX_SIDE", _deep_get(raw, ["preprocess", "jpeg_decode_max_side"], 960))),
+            close_wall_confidence=float(os.getenv("YOLO_CLOSE_WALL_CONF", _deep_get(raw, ["classes", "close_wall", "confidence"], 0.12))),
+            close_wall_area_ratio=float(os.getenv("YOLO_CLOSE_WALL_AREA_RATIO", _deep_get(raw, ["classes", "close_wall", "area_ratio"], 0.08))),
+            close_wall_min_height_ratio=float(os.getenv("YOLO_CLOSE_WALL_MIN_HEIGHT_RATIO", _deep_get(raw, ["classes", "close_wall", "min_height_ratio"], 0.35))),
             shadow_filter_enabled=_env_flag("YOLO_SHADOW_FILTER", bool(_deep_get(raw, ["preprocess", "shadow_filter_enabled"], False))),
             shadow_sigma=float(os.getenv("YOLO_SHADOW_SIGMA", _deep_get(raw, ["preprocess", "shadow_sigma"], 35.0))),
             shadow_strength=float(os.getenv("YOLO_SHADOW_STRENGTH", _deep_get(raw, ["preprocess", "shadow_strength"], 0.75))),
@@ -234,19 +226,8 @@ class YoloRuntimeConfig:
         )
 
 
-@dataclass
-class DecodedFrame:
-    frame: np.ndarray
-    source_shape: Tuple[int, int, int]
-    decoded_shape: Tuple[int, int, int]
-    scale_x: float
-    scale_y: float
-    decode_mode: str
-    reduced_decode: bool
-
-
 class TankYoloDetector:
-    """Thread-safe YOLO detector for /detect images."""
+    """/detect 이미지용 스레드 안전 YOLO detector."""
 
     def __init__(self, config: Optional[YoloRuntimeConfig] = None) -> None:
         self.config = config or YoloRuntimeConfig.from_environment()
@@ -272,10 +253,6 @@ class TankYoloDetector:
             "latest_raw_detections": [],
             "latest_rejected_detections": [],
             "latest_frame_shape": None,
-            "latest_decoded_frame_shape": None,
-            "latest_decode_mode": None,
-            "latest_decode_scale": None,
-            "latest_reduced_decode": False,
             "latest_model_conf_used": self.config.model_conf,
             "latest_fallback_used": False,
         }
@@ -298,21 +275,14 @@ class TankYoloDetector:
             return
 
         try:
-            self._model = YOLO(str(self.config.model_path), task="detect")
+            self._model = YOLO(str(self.config.model_path))
             self._model_names = normalize_model_names(self._model.names)
             self._public_names = {
                 class_id: self.normalize_public_class_name(name)
                 for class_id, name in self._model_names.items()
             }
             if self.config.use_cuda:
-                torch.backends.cudnn.benchmark = _env_flag("YOLO_CUDNN_BENCHMARK", True)
-                tf32_enabled = _env_flag("YOLO_TF32", True)
-                torch.backends.cuda.matmul.allow_tf32 = tf32_enabled
-                torch.backends.cudnn.allow_tf32 = tf32_enabled
-                try:
-                    torch.set_float32_matmul_precision("high")
-                except Exception:
-                    pass
+                torch.backends.cudnn.benchmark = _env_flag("YOLO_CUDNN_BENCHMARK", False)
                 warmup_image = np.zeros((max(32, self.config.imgsz), max(32, self.config.imgsz), 3), dtype=np.uint8)
                 warmup_image, _, _ = self.preprocess_frame(warmup_image)
                 for _ in range(max(1, self.config.warmup_runs)):
@@ -334,7 +304,7 @@ class TankYoloDetector:
             print(
                 "[vision] YOLO loaded: "
                 f"model={self.config.model_path}, labels={self._model_names}, public={self._public_names}, "
-                f"backend={self.runtime_backend()}, device={self.config.device}, half={self.config.half}, imgsz={self.config.imgsz}, "
+                f"device={self.config.device}, half={self.config.half}, imgsz={self.config.imgsz}, "
                 f"tracking={self.config.tracking_enabled}, tracker={self.config.tracker}, persist={self.config.track_persist}"
             )
         except Exception as exc:
@@ -349,7 +319,7 @@ class TankYoloDetector:
     def normalize_public_class_name(self, class_name: Any) -> str:
         normalized = str(class_name).strip()
         lowered = normalized.lower()
-        # YAML may contain aliases with original case or lower case. Always return canonical lower-case class names.
+        # YAML에는 alias가 원래 대소문자 또는 소문자로 들어 있을 수 있다. 항상 정규화된 소문자 클래스명을 반환한다.
         alias_value = self.config.aliases.get(normalized, self.config.aliases.get(lowered, lowered))
         return str(alias_value).strip().lower()
 
@@ -359,102 +329,11 @@ class TankYoloDetector:
     def get_box_color(self, class_name: str) -> str:
         return self.config.class_colors.get(str(class_name).strip().lower(), self.config.default_box_color)
 
-    def runtime_backend(self) -> str:
-        suffix = self.config.model_path.suffix.lower()
-        if suffix == ".engine":
-            return "tensorrt"
-        if suffix == ".onnx":
-            return "onnx"
-        if suffix == ".pt":
-            return "pytorch"
-        return suffix.lstrip(".") or "unknown"
-
-    def _read_jpeg_size(self, image_bytes: bytes) -> Optional[Tuple[int, int]]:
-        if len(image_bytes) < 4 or image_bytes[0] != 0xFF or image_bytes[1] != 0xD8:
-            return None
-        sof_markers = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
-        index = 2
-        size = len(image_bytes)
-        while index + 9 < size:
-            if image_bytes[index] != 0xFF:
-                index += 1
-                continue
-            while index < size and image_bytes[index] == 0xFF:
-                index += 1
-            if index >= size:
-                break
-            marker = image_bytes[index]
-            index += 1
-            if marker in {0xD8, 0xD9, 0x01} or 0xD0 <= marker <= 0xD7:
-                continue
-            if index + 2 > size:
-                break
-            segment_length = int.from_bytes(image_bytes[index : index + 2], "big")
-            if segment_length < 2 or index + segment_length > size:
-                break
-            if marker in sof_markers and segment_length >= 7:
-                height = int.from_bytes(image_bytes[index + 3 : index + 5], "big")
-                width = int.from_bytes(image_bytes[index + 5 : index + 7], "big")
-                if width > 0 and height > 0:
-                    return width, height
-                break
-            index += segment_length
-        return None
-
-    def _jpeg_decode_flag(self, width: int, height: int) -> Tuple[int, int, str]:
-        max_side = max(width, height)
-        target = max(1, int(self.config.jpeg_decode_max_side))
-        if not self.config.jpeg_reduced_decode or target <= 0 or max_side <= target:
-            return cv2.IMREAD_COLOR, 1, "full"
-        for factor, flag in (
-            (2, cv2.IMREAD_REDUCED_COLOR_2),
-            (4, cv2.IMREAD_REDUCED_COLOR_4),
-            (8, cv2.IMREAD_REDUCED_COLOR_8),
-        ):
-            reduced_side = max_side / float(factor)
-            if reduced_side <= target and reduced_side >= max(320.0, self.config.imgsz * 0.75):
-                return flag, factor, f"jpeg_reduced_{factor}"
-        return cv2.IMREAD_REDUCED_COLOR_2, 2, "jpeg_reduced_2"
-
-    def decode_image_bytes_with_metadata(self, image_bytes: bytes) -> Optional[DecodedFrame]:
+    def decode_image_bytes(self, image_bytes: bytes) -> Optional[np.ndarray]:
         if not image_bytes:
             return None
-        jpeg_size = self._read_jpeg_size(image_bytes)
-        decode_flag = cv2.IMREAD_COLOR
-        decode_mode = "full"
-        expected_factor = 1
-        if jpeg_size is not None:
-            decode_flag, expected_factor, decode_mode = self._jpeg_decode_flag(*jpeg_size)
         image_buffer = np.frombuffer(image_bytes, dtype=np.uint8)
-        frame = cv2.imdecode(image_buffer, decode_flag)
-        if frame is None and decode_flag != cv2.IMREAD_COLOR:
-            frame = cv2.imdecode(image_buffer, cv2.IMREAD_COLOR)
-            decode_mode = "full_fallback"
-            expected_factor = 1
-        if frame is None:
-            return None
-
-        decoded_height, decoded_width = frame.shape[:2]
-        if jpeg_size is None:
-            source_width, source_height = decoded_width, decoded_height
-        else:
-            source_width, source_height = jpeg_size
-        scale_x = source_width / float(max(1, decoded_width))
-        scale_y = source_height / float(max(1, decoded_height))
-        reduced_decode = expected_factor > 1 and (scale_x > 1.01 or scale_y > 1.01)
-        return DecodedFrame(
-            frame=frame,
-            source_shape=(int(source_height), int(source_width), int(frame.shape[2] if frame.ndim >= 3 else 1)),
-            decoded_shape=(int(decoded_height), int(decoded_width), int(frame.shape[2] if frame.ndim >= 3 else 1)),
-            scale_x=scale_x,
-            scale_y=scale_y,
-            decode_mode=decode_mode,
-            reduced_decode=reduced_decode,
-        )
-
-    def decode_image_bytes(self, image_bytes: bytes) -> Optional[np.ndarray]:
-        decoded = self.decode_image_bytes_with_metadata(image_bytes)
-        return None if decoded is None else decoded.frame
+        return cv2.imdecode(image_buffer, cv2.IMREAD_COLOR)
 
     def _clamp_float(self, value: float, lower: float, upper: float) -> float:
         return max(lower, min(upper, value))
@@ -523,6 +402,20 @@ class TankYoloDetector:
         x1, y1, x2, y2 = (float(value) for value in box[:4])
         return x2 > x1 and y2 > y1
 
+    def get_box_size_ratios(self, box: Any, frame_shape: Tuple[int, ...]) -> Tuple[float, float]:
+        frame_height, frame_width = frame_shape[:2]
+        x1, y1, x2, y2 = box[:4]
+        box_width = max(0.0, float(x2 - x1))
+        box_height = max(0.0, float(y2 - y1))
+        frame_area = max(1.0, float(frame_width * frame_height))
+        return (box_width * box_height) / frame_area, box_height / max(1.0, float(frame_height))
+
+    def is_close_wall_candidate(self, class_name: str, confidence: float, box: Any, frame_shape: Tuple[int, ...]) -> bool:
+        if class_name != "wall" or confidence < self.config.close_wall_confidence:
+            return False
+        area_ratio, height_ratio = self.get_box_size_ratios(box, frame_shape)
+        return area_ratio >= self.config.close_wall_area_ratio or height_ratio >= self.config.close_wall_min_height_ratio
+
     def evaluate_detection_for_return(self, class_name: Optional[str], confidence: float, box: Any, frame_shape: Tuple[int, ...], bypass: bool) -> Tuple[bool, Optional[str], Optional[float]]:
         if class_name is None:
             return False, "class_name_none", None
@@ -534,6 +427,8 @@ class TankYoloDetector:
             return False, "non_canonical_class", None
         if bypass:
             return True, None, None
+        if self.is_close_wall_candidate(class_name, confidence, box, frame_shape):
+            return True, None, self.config.close_wall_confidence
         threshold = self.config.class_confidence_thresholds.get(class_name, self.config.default_confidence)
         if confidence >= threshold:
             return True, None, threshold
@@ -654,12 +549,12 @@ class TankYoloDetector:
             bbox_text = ", ".join(f"{float(coord):.1f}" for coord in bbox[:4])
             print(f"[detect] class={det.get('className')} conf={float(det.get('confidence', 0.0)):.2f} bbox=[{bbox_text}]")
 
-    def detect_bytes(self, image_bytes: bytes, *, allow_cache: bool = True) -> List[Dict[str, Any]]:
+    def detect_bytes(self, image_bytes: bytes) -> List[Dict[str, Any]]:
         started_at = time.perf_counter()
         if not self.loaded or self._model is None:
             return []
 
-        cached = self._get_cached(time.time()) if allow_cache else None
+        cached = self._get_cached(time.time())
         if cached is not None:
             detections, ts = cached
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
@@ -690,19 +585,15 @@ class TankYoloDetector:
 
         try:
             decode_started = time.perf_counter()
-            decoded = self.decode_image_bytes_with_metadata(image_bytes)
+            frame = self.decode_image_bytes(image_bytes)
             decode_ms = (time.perf_counter() - decode_started) * 1000.0
-            if decoded is None:
+            if frame is None:
                 return []
-            frame = decoded.frame
-            original_shape = decoded.source_shape
+            original_shape = frame.shape
             frame_shape_list = [int(value) for value in original_shape]
-            decoded_shape_list = [int(value) for value in decoded.decoded_shape]
 
             preprocess_started = time.perf_counter()
-            processed_frame, preprocess_scale_x, preprocess_scale_y = self.preprocess_frame(frame)
-            scale_x = decoded.scale_x * preprocess_scale_x
-            scale_y = decoded.scale_y * preprocess_scale_y
+            processed_frame, scale_x, scale_y = self.preprocess_frame(frame)
             preprocess_ms = (time.perf_counter() - preprocess_started) * 1000.0
 
             yolo_started = time.perf_counter()
@@ -776,10 +667,6 @@ class TankYoloDetector:
             latest_raw_detections=raw_debug[:10],
             latest_rejected_detections=rejected[:10],
             latest_frame_shape=frame_shape_list,
-            latest_decoded_frame_shape=decoded_shape_list,
-            latest_decode_mode=decoded.decode_mode,
-            latest_decode_scale={"x": decoded.scale_x, "y": decoded.scale_y},
-            latest_reduced_decode=decoded.reduced_decode,
             latest_model_conf_used=model_conf_used,
             latest_fallback_used=fallback_used,
         )
@@ -789,7 +676,7 @@ class TankYoloDetector:
                 "[perf:/detect] "
                 f"decode={decode_ms:.1f}ms preprocess={preprocess_ms:.1f}ms "
                 f"yolo={yolo_ms:.1f}ms post={post_ms:.1f}ms total={elapsed_ms:.1f}ms "
-                f"raw={len(raw_debug)} returned={len(filtered)} decode_mode={decoded.decode_mode}"
+                f"raw={len(raw_debug)} returned={len(filtered)}"
             )
         if self.config.debug_detections:
             print("[detect] raw:", raw_debug)
@@ -806,13 +693,11 @@ class TankYoloDetector:
             "loaded": state.get("loaded"),
             "loadError": state.get("load_error"),
             "modelPath": str(self.config.model_path),
-            "runtimeBackend": self.runtime_backend(),
-            "tensorRtEnabled": self.runtime_backend() == "tensorrt",
             "configPath": str(self.config.config_path) if self.config.config_path else None,
             "modelNames": self._model_names,
             "publicNames": self._public_names,
             "classColors": self.config.class_colors,
-            "canonicalClasses": list(self.config.canonical_class_order),
+            "canonicalClasses": sorted(self.config.canonical_classes),
             "ignoredClasses": sorted(self.config.ignored_classes),
             "classFixedIds": self.config.class_fixed_ids,
             "trackingEnabled": self.config.tracking_enabled,
@@ -839,16 +724,8 @@ class TankYoloDetector:
             "latestRawDetections": state.get("latest_raw_detections"),
             "latestRejectedDetections": state.get("latest_rejected_detections"),
             "latestFrameShape": state.get("latest_frame_shape"),
-            "latestDecodedFrameShape": state.get("latest_decoded_frame_shape"),
-            "latestDecodeMode": state.get("latest_decode_mode"),
-            "latestDecodeScale": state.get("latest_decode_scale"),
-            "latestReducedDecode": state.get("latest_reduced_decode"),
-            "latestModelConfUsed": state.get("latest_model_conf_used"),
-            "latestFallbackUsed": state.get("latest_fallback_used"),
             "latestDetectCached": state.get("latest_detect_cached"),
             "latestCacheReason": state.get("latest_cache_reason"),
-            "jpegReducedDecode": self.config.jpeg_reduced_decode,
-            "jpegDecodeMaxSide": self.config.jpeg_decode_max_side,
             "cudaAvailable": torch.cuda.is_available(),
             "cudaDeviceName": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
         }
@@ -864,8 +741,3 @@ def get_detector() -> TankYoloDetector:
         if _DETECTOR_SINGLETON is None:
             _DETECTOR_SINGLETON = TankYoloDetector()
         return _DETECTOR_SINGLETON
-
-
-def peek_detector() -> Optional[TankYoloDetector]:
-    """Return the loaded detector singleton without triggering model loading."""
-    return _DETECTOR_SINGLETON

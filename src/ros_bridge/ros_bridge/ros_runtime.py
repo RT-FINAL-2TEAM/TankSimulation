@@ -57,7 +57,7 @@ from typing import Any, Optional
 # - rclpy.init(), rclpy.ok(), rclpy.shutdown()으로 ROS2 lifecycle을 관리한다.
 try:
     import rclpy
-except Exception as exc:  # pragma: no cover - runtime environment guard
+except Exception as exc:  # pragma: no cover - 런타임 환경 가드
     rclpy = None
     _ROS_IMPORT_ERROR = exc
 else:
@@ -71,7 +71,7 @@ else:
 if rclpy is not None:
     try:
         from rclpy.executors import MultiThreadedExecutor
-    except Exception as exc:  # pragma: no cover - runtime environment guard
+    except Exception as exc:  # pragma: no cover - 런타임 환경 가드
         MultiThreadedExecutor = None
         _ROS_IMPORT_ERROR = exc
 else:
@@ -89,7 +89,7 @@ else:
 if rclpy is not None and MultiThreadedExecutor is not None:
     try:
         from .bridge_node import RosBridge
-    except Exception as exc:  # pragma: no cover - runtime environment guard
+    except Exception as exc:  # pragma: no cover - 런타임 환경 가드
         RosBridge = None
         _ROS_IMPORT_ERROR = exc
 else:
@@ -155,7 +155,7 @@ def get_bridge() -> Optional[Any]:
 
 
 def ros_status() -> dict:
-    """Return the current ROS2 runtime status for dashboard/debug routes."""
+    """dashboard/debug route용으로 현재 ROS2 runtime 상태를 반환한다."""
     return {
         "available": bridge is not None,
         "importError": None if _ROS_IMPORT_ERROR is None else str(_ROS_IMPORT_ERROR),

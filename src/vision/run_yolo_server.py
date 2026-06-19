@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Compatibility wrapper for the standalone YOLO debug server.
+"""독립 실행형 YOLO 디버그 서버용 호환 래퍼.
 
-The production integration is now inside ros_bridge /detect.
-For standalone YOLO testing, run:
+실제 운영 통합은 이제 ros_bridge /detect 내부에 있다.
+독립 실행형 YOLO 테스트는 다음으로 실행한다:
     ros2 run vision yolo_debug_server
-or:
+또는:
     python3 src/vision/run_yolo_server.py
 """
 

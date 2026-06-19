@@ -1,7 +1,7 @@
 import json
 import math
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 class ReconLogger:
@@ -37,9 +37,28 @@ class ReconLogger:
         self.total_sim_time: float = 0.0
         self.total_distance: float = 0.0
 
+        # 전차 궤적(노출/발각 사후계산용). [t, x, z, yaw] map 좌표(x=map.x, z=map.y).
+        # 0.5m 이상 이동 시에만 적재해 파일 크기를 억제한다.
+        self.trajectory: list[list] = []
+        self._last_traj_xz: Optional[Tuple[float, float]] = None
+        self._traj_min_step_m: float = 0.5
+
         # terrain roughness 수집
         self._pitch_samples: list[float] = []
         self._roll_samples: list[float] = []
+
+        # 주행 품질 진단(원인 귀속: 경로/APF/제어)용 — 공식 리포트 본문엔 안 쓰고 route_*.json 원자료만 확장.
+        # 끼임/제자리 진동도 잡으려 '이동량'이 아니라 '시간(0.2s)'으로 적재한다.
+        self.route_version: int = 0
+        self.route_version_changes: int = 0
+        self.planned_paths: list[dict] = []           # [{t, version, path:[[x,z],...]}] (경로 바뀔 때만)
+        self.diag_samples: list[dict] = []            # per-step {t, p, rv, look, ltgt, cmd}
+        self._latest_lookahead: Optional[Tuple[float, float]] = None
+        self._latest_local_target: Optional[Tuple[float, float]] = None
+        self._latest_cmd: str = ""
+        self._last_path_sig = None
+        self._last_diag_t: Optional[float] = None
+        self._diag_min_dt: float = 0.2
 
     # -- 장애물 로깅 --------------------------------------------------------
 
@@ -54,6 +73,68 @@ class ReconLogger:
             "x": round(x, 2),
             "z": round(z, 2),
             "bbox": bbox,
+        })
+
+    # -- 전차 궤적 로깅 -----------------------------------------------------
+
+    def log_pose(self, sim_time: float, x: float, z: float, yaw: float = 0.0) -> None:
+        """전차 map 좌표(x=map.x, z=map.y)를 0.5m 간격으로 적재한다."""
+        if self._last_traj_xz is not None:
+            lx, lz = self._last_traj_xz
+            if math.hypot(x - lx, z - lz) < self._traj_min_step_m:
+                return
+        self._last_traj_xz = (x, z)
+        self.trajectory.append([round(sim_time, 2), round(x, 2), round(z, 2), round(yaw, 1)])
+
+    # -- 주행 품질 진단 로깅 (원인 귀속: 경로 churn / APF 불일치 / 제어 채터) ---
+
+    def set_route_version(self, version: int) -> None:
+        """planner status의 route_version. 증가할 때마다 churn 카운트."""
+        if version > self.route_version:
+            self.route_version = version
+            self.route_version_changes += 1
+
+    def set_lookahead(self, x: float, z: float) -> None:
+        self._latest_lookahead = (x, z)
+
+    def set_local_target(self, x: float, z: float) -> None:
+        self._latest_local_target = (x, z)
+
+    def set_command(self, cmd: str) -> None:
+        self._latest_cmd = cmd
+
+    def log_planned_path(self, sim_time: float, path_xz: list) -> None:
+        """전역 계획경로를 경로가 '실제로 바뀔 때만' 저장(끝점/길이 시그니처로 중복 제거, 다운샘플)."""
+        if not path_xz:
+            return
+        sig = (len(path_xz),
+               round(path_xz[0][0], 1), round(path_xz[0][1], 1),
+               round(path_xz[-1][0], 1), round(path_xz[-1][1], 1))
+        if sig == self._last_path_sig:
+            return
+        self._last_path_sig = sig
+        ds = path_xz[::3] if len(path_xz) > 60 else path_xz
+        self.planned_paths.append({
+            "t": round(sim_time, 2),
+            "version": self.route_version,
+            "path": [[round(x, 2), round(z, 2)] for (x, z) in ds],
+        })
+
+    def log_diag_sample(self, sim_time: float, px: float, pz: float) -> None:
+        """0.2s 시간 간격으로 (위치+최신 lookahead/local_target/명령+route_version) 스냅샷.
+        이동량이 아니라 시간 기준이라 끼임/제자리 진동도 포착한다."""
+        if self._last_diag_t is not None and (sim_time - self._last_diag_t) < self._diag_min_dt:
+            return
+        self._last_diag_t = sim_time
+        look = self._latest_lookahead
+        ltgt = self._latest_local_target
+        self.diag_samples.append({
+            "t": round(sim_time, 2),
+            "p": [round(px, 2), round(pz, 2)],
+            "rv": self.route_version,
+            "look": [round(look[0], 2), round(look[1], 2)] if look else None,
+            "ltgt": [round(ltgt[0], 2), round(ltgt[1], 2)] if ltgt else None,
+            "cmd": self._latest_cmd,
         })
 
     # -- 발각(노출) 로깅 ----------------------------------------------------
@@ -169,6 +250,7 @@ class ReconLogger:
                 "count": len(self.obstacles_detected),
                 "density_per_100m": density,
             },
+            "trajectory": self.trajectory,
             "obstacles_detected": self.obstacles_detected,
             "exposure": self._build_exposure_summary(),
             "vision_yolo": self._build_vision_summary(),
@@ -176,6 +258,13 @@ class ReconLogger:
             "terrain_roughness": {
                 "pitch_std_deg": self._calc_std(self._pitch_samples),
                 "roll_std_deg": self._calc_std(self._roll_samples),
+            },
+            # 주행 품질 진단 원자료(공식 리포트 본문엔 미사용 — scripts/analyze_run.py가 소비).
+            "diagnostics": {
+                "route_version_final": self.route_version,
+                "route_version_changes": self.route_version_changes,
+                "planned_paths": self.planned_paths,
+                "samples": self.diag_samples,
             },
         }
 

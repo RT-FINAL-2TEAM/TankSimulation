@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Stateful LiDAR obstacle memory for route planners.
+"""경로 planner를 위한 상태 보존형 LiDAR 장애물 메모리.
 
 Global planner가 LiDAR 기반 dynamic replan을 사용할 때 필요한 history,
 clustering, path-block check를 이 클래스 안으로 격리한다.

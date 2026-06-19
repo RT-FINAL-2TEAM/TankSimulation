@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ROS2 LiDAR preprocessing node for Tank Challenge.
+"""Tank Challenge용 ROS2 LiDAR 전처리 노드.
 
 책임 범위:
 - /tank/api/info/raw 안의 lidarOrigin, lidarRotation, lidarPoints 분리
@@ -57,7 +57,7 @@ class LidarProcessorNode(Node):
         self.declare_parameter("terrain_grid_resolution", TERRAIN_GRID_RESOLUTION)
         self.declare_parameter("terrain_climb_limit", TERRAIN_CLIMB_LIMIT)
         self.declare_parameter("terrain_obstacle_min_height", TERRAIN_OBSTACLE_MIN_HEIGHT)
-        # Large legacy JSON LiDAR topic.  Downstream nodes should consume PC2 topics.
+        # 용량 큰 레거시 JSON LiDAR 토픽. 하위 노드는 PC2 토픽을 소비해야 한다.
         self.declare_parameter("publish_legacy_lidar_json", False)
 
         self.info_raw_topic = str(self.get_parameter("info_raw_topic").value)
@@ -119,13 +119,13 @@ class LidarProcessorNode(Node):
 
     @staticmethod
     def _extract_body_angles(data: Dict[str, Any]) -> Optional[Dict[str, float]]:
-        """Accept common simulator body-heading field names."""
+        """시뮬레이터에서 흔히 쓰는 body-heading 필드명을 받아들인다."""
         for key in ("playerBody", "body", "player_body", "playerBodyDeg"):
             body = data.get(key)
             parsed = as_xyz(body)
             if parsed is not None:
                 return parsed
-        # Some bridge payloads flatten body x/y/z as playerBodyX/Y/Z.
+        # 일부 브릿지 payload는 body x/y/z를 playerBodyX/Y/Z로 펼쳐서 보낸다.
         if any(k in data for k in ("playerBodyX", "playerBodyY", "playerBodyZ")):
             return {
                 "x": to_float(data.get("playerBodyX")),
@@ -198,14 +198,14 @@ class LidarProcessorNode(Node):
             climb_limit=self.terrain_climb_limit,
             obstacle_min_height=self.terrain_obstacle_min_height,
         )
-        # Keep origin_y in payload metadata for older debugging scripts.
+        # 구버전 디버깅 스크립트를 위해 origin_y를 payload 메타데이터에 유지한다.
         detected_payload["origin_y"] = origin_y
         terrain_payload["origin_y"] = origin_y
         all_payload["origin_y"] = origin_y
 
         self.publish_int(self.pub_points_count, lidar_count)
-        # JSON serialization of thousands of LiDAR points is expensive.  Keep it
-        # behind a parameter for old debug tools; the normal fast path is PC2.
+        # 수천 개 LiDAR 포인트의 JSON 직렬화는 비용이 크다. 구형 디버그 도구를
+        # 위해 파라미터 뒤에 둔다. 정상 경로(fast path)는 PC2다.
         if self.publish_legacy_lidar_json:
             self.publish_json(self.pub_points, points_payload)
 

@@ -35,7 +35,7 @@ class PolarViewer(Node):
             PoseStamped, TOPIC_PLAYER_POSE, self.callback_pose, 10
         )
         
-        # 3. 전차 상태 구독 (전차의 Heading 각도 계산용)
+        # 3. 전차 상태 구독 (전차의 헤딩 각도 계산용)
         self.subscription_state = self.create_subscription(
             String, TOPIC_PLAYER_STATE, self.callback_state, 10
         )
@@ -79,7 +79,7 @@ class PolarViewer(Node):
         
         self.running = True
 
-        # Scatter 객체 초기화 (렌더링 최적화)
+        # scatter 객체 초기화 (렌더링 최적화)
         self.scatters = {}
         for ch in range(1, 17):
             self.scatters[ch] = self.ax.scatter([], [], s=5, color=self.colors[ch], label=f"CH{ch}")
@@ -88,7 +88,7 @@ class PolarViewer(Node):
         self.cluster_scatter = self.ax.scatter([], [], s=200, marker='o', facecolors='none', edgecolors='magenta', linewidth=2, zorder=5, label='Cluster')
         self.cluster_texts = []
             
-        # Polar 좌표계 방향 설정 (N이 0도, 시계방향)
+        # 극좌표계 방향 설정 (N이 0도, 시계방향)
         self.ax.set_theta_zero_location("N")
         self.ax.set_theta_direction(-1)
         self.ax.grid(True)

@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 
 import rclpy
@@ -59,6 +60,10 @@ class RouteRiskNode(Node):
     def run_from_file_once(self):
         try:
             comparison_data = load_json(self.input_path)
+            # MFD(aiLog)에 "분석 중"을 즉시 표시 — ollama 추론 ~10-30s 동안 멈춘 것처럼 보여
+            # 사용자가 끊는 문제 방지. 브릿지 구독자 discovery 여유를 두고 인터림 1건 발행.
+            time.sleep(1.0)
+            self.publish_result({"result": {"selected_route": "분석중", "summary": "LLM 분석 중..."}})
             result = self.llm_reporter.generate_route_decision(comparison_data)
 
             result["input_file"] = str(self.input_path)

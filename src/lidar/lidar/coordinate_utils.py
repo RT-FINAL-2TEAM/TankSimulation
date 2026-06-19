@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""LiDAR coordinate conversion utilities.
+"""LiDAR 좌표 변환 유틸리티.
 
 Unity simulator raw 좌표를 ROS/RViz map 좌표로 변환하는 정책을 이곳에만 둔다.
 좌표 정책: raw.x -> map.x, raw.z -> map.y, raw.y -> map.z

@@ -8,11 +8,14 @@ from launch_ros.actions import Node
 def generate_launch_description():
     return LaunchDescription([
         Node(
-            package="rviz_visualization",
+            # 지형 노드 단일출처화: rviz copy 삭제 → ground_division 노드로 통합(2026-06-18).
+            package="ground_division",
             executable="terrain_record_finalize_node",
             name="terrain_record_finalize_node",
             output="screen",
             parameters=[{
+                # gd 노드를 legacy 단일입력 모드로 — 기존 rviz copy처럼 all_detected_points_map을 직접 재분리.
+                "use_preclassified_lidar": False,
                 "input_topic": "/tank/sensor/lidar/all_detected_points_map",
                 "map_frame": "tank_map",
                 "voxel_size": 0.35,
@@ -20,7 +23,7 @@ def generate_launch_description():
                 "fallback_ground_percentile": 70.0,
                 "fallback_ground_margin": 0.70,
                 "publish_period_sec": 0.5,
-                "save_dir": "~/tank_terrain_maps",
+                "save_dir": "~/tank_project/recon_reports/terrain_maps",
                 "save_csv": False,
                 "auto_finalize_after_idle_sec": 0.0,
                 "grid_cell_size": 0.8,

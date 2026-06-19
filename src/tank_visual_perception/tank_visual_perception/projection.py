@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Shared LiDAR-camera projection utilities.
+"""LiDAR-카메라 투영 공용 유틸리티.
 
-Coordinate basis is the Tank Challenge / Unity raw world coordinate:
-  raw.x: right, raw.y: up, raw.z: forward
-ROS map coordinate policy used by the rest of the project:
+좌표 기준은 Tank Challenge / Unity raw 월드 좌표다:
+  raw.x: 오른쪽, raw.y: 위, raw.z: 앞
+프로젝트 나머지에서 쓰는 ROS map 좌표 규약:
   map.x = raw.x, map.y = raw.z, map.z = raw.y
 
-This module is intentionally shared by both:
-- tank_visual_perception/lidar_camera_overlay_node.py  (calibration visualization)
-- path_planning/local_path_node.py                     (actual YOLO-LiDAR fusion)
+이 모듈은 의도적으로 다음 둘이 함께 공유한다:
+- tank_visual_perception/lidar_camera_overlay_node.py  (캘리브레이션 시각화)
+- path_planning/local_path_node.py                     (실제 YOLO-LiDAR 융합)
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import numpy as np
 
 
 DEFAULT_PROJECTION_PARAMS: Dict[str, float] = {
-    # Manual calibration result from the team.
+    # 팀에서 진행한 수동 캘리브레이션 결과.
     # camera_pos = lidarOrigin + R_cam_to_world @ [tx, ty, tz]
     "tx": 0.28,
     "ty": 0.02,
@@ -70,7 +70,7 @@ def map_to_raw_xyz(map_pos: Dict[str, Any]) -> Dict[str, float]:
 
 
 def rotation_matrix_yaw_pitch_roll(yaw_deg: float, pitch_deg: float, roll_deg: float = 0.0) -> np.ndarray:
-    """Return R_cam_to_world under the Unity-like raw coordinate convention."""
+    """Unity 유사 raw 좌표 규약에서의 R_cam_to_world를 반환한다."""
     yaw = deg2rad(yaw_deg)
     pitch = deg2rad(pitch_deg)
     roll = deg2rad(roll_deg)
@@ -90,14 +90,23 @@ def get_turret_angle(info: Dict[str, Any]) -> Tuple[float, float]:
 
 
 def extract_info_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Accept /tank/api/info/raw wrapper or raw /info dict."""
+    """/tank/api/info/raw, /tank/api/info/compact 래퍼, 또는 raw /info dict를 받는다.
+
+    투영에는 lidarOrigin과 포탑 각도 같은 카메라 포즈 입력만 있으면 된다.
+    compact /info 토픽은 무거운 lidarPoints 배열을 의도적으로 제거하므로, 여기서
+    lidarPoints를 요구하면 TANK_SAVE_FULL_INFO=false일 때 local_path_node/
+    lidar_camera_overlay_node가 latest_info를 잃게 된다.
+    """
     if not isinstance(payload, dict):
         return None
     if isinstance(payload.get("data"), dict):
         payload = payload["data"]
     if not isinstance(payload, dict):
         return None
-    if "lidarOrigin" not in payload or "lidarPoints" not in payload:
+
+    # compute_camera_pose()에는 lidarOrigin만 있으면 충분하다. playerTurretX/Y는
+    # get_turret_angle()이 누락값을 이미 0.0으로 기본 처리하므로 선택사항이다.
+    if "lidarOrigin" not in payload:
         return None
     return payload
 
@@ -174,7 +183,7 @@ def point_inside_bbox(u: float, v: float, bbox: Iterable[float], margin_px: floa
 
 
 def lidar_point_raw_position(point: Dict[str, Any]) -> Optional[Dict[str, float]]:
-    """Return raw world xyz from a LiDAR point payload."""
+    """LiDAR 포인트 payload에서 raw 월드 xyz를 반환한다."""
     if not isinstance(point, dict):
         return None
     pos_raw = point.get("position_raw")
@@ -190,7 +199,7 @@ def lidar_point_raw_position(point: Dict[str, Any]) -> Optional[Dict[str, float]
 
 
 def lidar_point_map_position(point: Dict[str, Any]) -> Optional[Dict[str, float]]:
-    """Return map xyz from a LiDAR point payload."""
+    """LiDAR 포인트 payload에서 map xyz를 반환한다."""
     if not isinstance(point, dict):
         return None
     pos_map = point.get("position_map")

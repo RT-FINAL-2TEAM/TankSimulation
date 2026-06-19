@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>tank_common</name>
+  <version>0.0.0</version>
+  <description>전차 워크스페이스 공용 헬퍼 (LiDAR PointCloud2→numpy 변환 등). 여러 패키지가 복붙해 쓰던 순수 유틸의 단일 출처.</description>
+  <maintainer email="wol00107@gmail.com">Jun</maintainer>
+  <license>TODO</license>
+
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>sensor_msgs_py</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

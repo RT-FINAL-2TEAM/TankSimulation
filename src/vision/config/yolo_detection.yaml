@@ -1,39 +1,41 @@
 # YOLO detection configuration for Tank Challenge /detect endpoint.
-# These values are intentionally kept outside code so RL/perception teams can tune them later.
+# 0615 final model: car, person, tank, rock, house.
 model:
-  default_filename: best_300.engine
+  default_filename: best_final.engine
   imgsz: 416
   iou: 0.70
-  max_det: 12
+  max_det: 20
   max_return: 5
-  model_confidence: 0.5
-  fallback_model_confidence: 0.5
+  model_confidence: 0.10
+  fallback_model_confidence: 0.05
   enable_low_conf_fallback: false
   enable_cache: true
-  min_interval_sec: 0.05
+  min_interval_sec: 0.12
   half_if_cuda: true
-  warmup_runs: 3
+  warmup_runs: 2
 
 tracking:
-  # Production /detect uses predict() by default. Enable this only when trackId persistence is needed.
+  # Fusion/discovered-map 중복 방지는 trackId가 아니라 tank_map 좌표 기준으로 처리한다.
+  # 따라서 frame 끊김/지연 진단 단계에서는 tracking을 OFF한다.
   enabled: false
   tracker: bytetrack.yaml
-  persist: true
+  persist: false
 
 classes:
-  # Final public detection classes returned to the simulator and fusion pipeline.
   canonical:
-    - rock
+    - car
     - person
     - tank
-    - car
+    - rock
     - house
+    - tent
   fixed_ids:
-    tank: 1
-    rock: 2
-    person: 3
-    car: 4
-    house: 5
+    car: 0
+    person: 1
+    tank: 2
+    rock: 3
+    house: 4
+    tent: 5
   aliases:
     blue: person
     red: person
@@ -41,32 +43,35 @@ classes:
     tank: tank
     person: person
     rock: rock
-    car: car
-    Car: car
     house: house
-    House: house
-  ignored: []
+    car: car
+    tent: tent
+    wall: wall
+  ignored:
+    - wall
   default_box_color: '#00FF00'
   colors:
-    person: '#39FF88'
+    person: '#00FFFF'
     rock: '#FFA500'
     tank: '#FF0000'
-    car: '#FF8C00'
-    house: '#B084FF'
-  default_confidence: 0.5
+    car: '#FF66CC'
+    house: '#AA66FF'
+    wall: '#00FF00'
+    tent: '#FFFF00'
+  default_confidence: 0.20
   confidence_thresholds:
-    tank: 0.5
-    person: 0.5
+    tank: 0.25
+    person: 0.20
+  close_wall:
+    confidence: 0.12
+    area_ratio: 0.08
+    min_height_ratio: 0.35
 
 bbox_distance:
-  # 보류: bbox 기반 거리 추정 알고리즘은 나중에 보조 metadata/fallback으로만 검토한다.
-  # 이번 병합에서는 실제 position_map 계산에 사용하지 않는다.
   enabled: false
   publish_metadata: false
 
 preprocess:
-  jpeg_reduced_decode: true
-  jpeg_decode_max_side: 960
   shadow_filter_enabled: false
   shadow_sigma: 35.0
   shadow_strength: 0.75

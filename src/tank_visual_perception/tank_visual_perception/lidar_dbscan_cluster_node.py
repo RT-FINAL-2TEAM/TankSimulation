@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-ROS2 node: LiDAR detected map points -> lightweight DBSCAN clusters.
-(Optimized with PointCloud2, NumPy and Scikit-Learn)
+ROS2 노드: LiDAR로 탐지한 맵 포인트 -> 경량 DBSCAN 클러스터.
+(PointCloud2, NumPy, Scikit-Learn으로 최적화)
 
-Team command compatibility:
+팀 명령 호환:
   ros2 run tank_visual_perception lidar_dbscan_cluster_node \
     --ros-args \
     -p eps:=1.5 \
@@ -26,10 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List
 
 import numpy as np
-try:
-    from sklearn.cluster import DBSCAN as SklearnDBSCAN
-except Exception:  # pragma: no cover - optional acceleration dependency.
-    SklearnDBSCAN = None
+from sklearn.cluster import DBSCAN
 
 import rclpy
 from geometry_msgs.msg import Point, PoseStamped
@@ -43,7 +40,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 @dataclass
 class Cluster:
     cluster_id: int
-    points: np.ndarray  # (N, 3) numpy array
+    points: np.ndarray  # (N, 3) numpy 배열
 
     @property
     def count(self) -> int:
@@ -81,89 +78,7 @@ def point_msg(x: float, y: float, z: float = 0.0) -> Point:
     return p
 
 
-def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
-    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
-
-    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
-    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
-    node usable on older sensor_msgs_py versions.
-    """
-    try:
-        arr = point_cloud2.read_points_numpy(
-            msg, field_names=("x", "y", "z"), skip_nans=True
-        )
-    except Exception:
-        pts = point_cloud2.read_points(
-            msg, field_names=("x", "y", "z"), skip_nans=True
-        )
-        if isinstance(pts, np.ndarray):
-            arr = pts
-        else:
-            arr = np.asarray(list(pts), dtype=np.float32)
-    if arr is None:
-        return np.empty((0, 3), dtype=np.float32)
-    arr = np.asarray(arr)
-    if arr.dtype.fields:
-        arr = np.column_stack((arr["x"], arr["y"], arr["z"]))
-    arr = np.asarray(arr, dtype=np.float32)
-    if arr.size == 0:
-        return np.empty((0, 3), dtype=np.float32)
-    return np.ascontiguousarray(arr.reshape(-1, 3), dtype=np.float32)
-
-
-def fallback_dbscan_labels(points_2d: np.ndarray, eps: float, min_samples: int) -> np.ndarray:
-    """Small dependency-free DBSCAN over map-plane x/y."""
-    n = int(points_2d.shape[0])
-    if n == 0:
-        return np.empty((0,), dtype=np.int32)
-
-    eps2 = float(eps) * float(eps)
-    labels = np.full(n, -99, dtype=np.int32)  # -99: unvisited, -1: noise, >=0: cluster id
-    neighbors_cache: Dict[int, np.ndarray] = {}
-
-    def neighbors(i: int) -> np.ndarray:
-        cached = neighbors_cache.get(i)
-        if cached is not None:
-            return cached
-        diff = points_2d - points_2d[i]
-        dist2 = np.einsum("ij,ij->i", diff, diff)
-        out = np.flatnonzero(dist2 <= eps2)
-        neighbors_cache[i] = out
-        return out
-
-    cluster_id = 0
-    min_pts = max(int(min_samples), 1)
-    for i in range(n):
-        if labels[i] != -99:
-            continue
-        neigh = neighbors(i)
-        if len(neigh) < min_pts:
-            labels[i] = -1
-            continue
-
-        labels[i] = cluster_id
-        seeds = list(int(v) for v in neigh)
-        seed_seen = set(seeds)
-        k = 0
-        while k < len(seeds):
-            j = seeds[k]
-            if labels[j] == -1:
-                labels[j] = cluster_id
-            if labels[j] != -99:
-                k += 1
-                continue
-            labels[j] = cluster_id
-            neigh_j = neighbors(j)
-            if len(neigh_j) >= min_pts:
-                for candidate in neigh_j:
-                    candidate = int(candidate)
-                    if candidate not in seed_seen:
-                        seeds.append(candidate)
-                        seed_seen.add(candidate)
-            k += 1
-        cluster_id += 1
-    labels[labels == -99] = -1
-    return labels
+from tank_common.pointcloud import pointcloud2_to_xyz_array
 
 
 class LidarDbscanClusterNode(Node):
@@ -204,17 +119,12 @@ class LidarDbscanClusterNode(Node):
         self.pub_clusters = self.create_publisher(String, self.clusters_topic, 10)
         self.pub_markers = self.create_publisher(MarkerArray, self.markers_topic, 10)
         
-        if SklearnDBSCAN is not None:
-            self.dbscan_algo = SklearnDBSCAN(
-                eps=max(self.eps, 0.001),
-                min_samples=max(self.min_samples, 1),
-                algorithm="kd_tree",
-            )
-            self.cluster_algorithm = "sklearn_dbscan_2d_map_xy"
-        else:
-            self.dbscan_algo = None
-            self.cluster_algorithm = "fallback_dbscan_2d_map_xy"
-            self.get_logger().warn("scikit-learn is not installed; using dependency-free DBSCAN fallback")
+        # Scikit-learn DBSCAN 인스턴스 초기화 (KD-Tree 알고리즘 사용)
+        self.dbscan_algo = DBSCAN(
+            eps=max(self.eps, 0.001),
+            min_samples=max(self.min_samples, 1),
+            algorithm='kd_tree'
+        )
 
         self.get_logger().info(
             f"lidar_dbscan_cluster_node started: input={self.input_topic}(PC2), eps={self.eps}, "
@@ -245,10 +155,7 @@ class LidarDbscanClusterNode(Node):
 
         # DBSCAN 클러스터링 (2D x,y 기준)
         points_2d = points[:, :2]
-        if self.dbscan_algo is not None:
-            labels = self.dbscan_algo.fit_predict(points_2d)
-        else:
-            labels = fallback_dbscan_labels(points_2d, max(self.eps, 0.001), max(self.min_samples, 1))
+        labels = self.dbscan_algo.fit_predict(points_2d)
 
         # 결과 그룹화
         clusters: List[Cluster] = []
@@ -276,7 +183,7 @@ class LidarDbscanClusterNode(Node):
         data = {
             "timestamp_ros_sec": self.get_clock().now().nanoseconds * 1e-9,
             "frame_id": self.frame_id,
-            "algorithm": self.cluster_algorithm,
+            "algorithm": "sklearn_dbscan_2d_map_xy",
             "eps": self.eps,
             "min_samples": self.min_samples,
             "min_cluster_size": self.min_cluster_size,

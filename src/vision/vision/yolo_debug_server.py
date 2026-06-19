@@ -1,11 +1,10 @@
-\
 # -*- coding: utf-8 -*-
-"""Standalone debug server for the Tank Challenge YOLO detector.
+"""Tank Challenge YOLO 디텍터용 독립 실행 디버그 서버.
 
-Use this only for testing the model independent of ros_bridge:
+ros_bridge와 무관하게 모델만 단독으로 테스트할 때만 쓴다:
     ros2 run vision yolo_debug_server
 
-It intentionally defaults to port 5055 so it does not conflict with ros_bridge on port 5000.
+port 5000의 ros_bridge와 충돌하지 않도록 의도적으로 기본 포트를 5055로 둔다.
 """
 
 import os

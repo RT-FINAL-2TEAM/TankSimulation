@@ -1,87 +1,85 @@
-# YOLO + LiDAR fusion and discovered-map configuration.
-# 이 값들은 나중에 LiDAR 팀/강화학습 팀이 쉽게 조정할 수 있도록 코드 밖으로 분리한다.
-
 frame:
   map_frame: tank_map
-
 camera:
-  # Tank Challenge Q&A 기준 Turret View FOV.
   horizontal_fov_deg: 47.81061
   vertical_fov_deg: 28.0
-  # /detect topic payload에 image_shape가 없을 때 사용할 fallback.
   default_image_width: 1920
   default_image_height: 1057
-  # 현재 1차 구현은 body heading 기준이다.
-  # 추후 turret/camera extrinsic이 확정되면 body_plus_turret 또는 projection 방식으로 바꿀 수 있다.
   heading_source: body
-
 fusion:
-  # 실제 객체 위치 추정은 projection fusion을 먼저 사용하고, 실패 시 기존 angle fusion으로 fallback한다.
   method: projection_then_cluster_then_angle
   allow_angle_fallback: true
-  # bbox 중심각과 LiDAR point bearing을 매칭할 때 추가로 허용할 각도 여유.
   angle_gate_extra_deg: 4.0
   max_fusion_range_m: 45.0
   min_fusion_range_m: 0.5
   min_lidar_points_per_object: 3
-  # 가까운 point 일부의 median으로 객체 위치를 안정화한다.
   use_nearest_points: 20
-  # bbox confidence가 이 값보다 작으면 fusion/map update 대상에서 제외한다.
-  min_detection_confidence: 0.20
-
+  min_detection_confidence: 0.2
+  semantic_requires_cluster: true
+  cluster_match_max_center_norm: 1.75
+  cluster_match_max_score: 2.1
+  cluster_match_ambiguity_delta: 0.1
+  cluster_match_distance_weight: 0.0015
+  cluster_match_bbox_area_weight: 0.45
+  cluster_match_person_anchor_y: 0.9
+  cluster_match_default_anchor_y: 0.5
+  cluster_match_person_x_limit: 1.8
+  cluster_match_person_y_limit: 2.8
+  max_sync_diff_sec: 0.5
+  drop_on_sync_mismatch: false
 projection:
-  # 팀원이 수동 보정한 LiDAR-camera extrinsic을 실제 YOLO-LiDAR matching에 사용한다.
   enabled: true
   prefer_dbscan_clusters: true
-  bbox_margin_px: 8.0
-  cluster_bbox_margin_px: 18.0
-  min_projected_lidar_points: 3
+  bbox_margin_px: 16.0
+  cluster_bbox_margin_px: 45.0
+  min_projected_lidar_points: 2
   min_cluster_points: 2
   use_only_detected_points: true
   params:
     tx: 0.28
     ty: 0.02
-    tz: 11.80
+    tz: 11.8
     yaw_offset: -0.9
     pitch_offset: -0.9
     roll_offset: -0.3
     hfov: 86.0
     vfov: 60.2
-
 static_matching:
-  # recon_map에 이미 있는 장애물 주변 detection은 새 객체로 추가하지 않는다.
   add_only_unmatched_to_recon: true
   static_match_radius_m: 4.0
-  # true면 같은 category끼리만 static match한다. false면 주변 static obstacle이 있으면 이미 알려진 객체로 본다.
   same_category_only: true
-
 async_detection:
-  # TANK_YOLO_ASYNC=true일 때 직전 프레임 detection이 너무 오래되면 fusion에서 제외한다.
   drop_stale: true
   max_result_age_ms: 300
-
 mapping:
   enabled: true
-  merge_radius_m: 5.0
+  merge_radius_m: 3.0
   position_ema_alpha: 0.35
-  # 저장할 class. YOLO public className 기준.
-  # 현재 production detector는 rock/person/tank/car/house만 fusion/map update에 사용한다.
-  add_classes: [person, rock, tank, car, house]
+  add_classes:
+  - person
+  - rock
+  - tank
+  - tent
+  - car
+  - house
   save_directory: ~/tank_discovered_maps
   save_latest_filename: discovered_objects_latest.map
-  # true면 save service 호출 시 timestamp가 붙은 archive 파일도 같이 만든다.
   save_timestamped_copy: true
-  # candidate object는 RViz/topic에는 표시하지만, 파일 저장은 confirmed object만 수행한다.
   save_confirmed_only: true
   min_confirm_observations: 5
   min_confirm_age_sec: 1.0
-  # trackId가 있으면 같은 trackId를 우선 같은 candidate로 병합한다.
   track_id_merge_enabled: true
   track_id_merge_radius_m: 10.0
-  # trackId가 없거나 class가 흔들리는 경우에도 가까운 객체는 같은 candidate로 먼저 병합한다.
-  merge_across_classes: true
+  merge_across_classes: false
   class_vote_by_confidence: true
-
+  memory_decay_sec: 10.0
+  merge_radius_by_class:
+    person: 1.0
+    rock: 1.5
+    car: 2.5
+    tank: 3.0
+    house: 4.0
+    tent: 3.0
 rviz:
   current_object_lifetime_sec: 1.2
   discovered_marker_z_offset: 1.5
@@ -91,9 +89,13 @@ rviz:
   sphere_scale: 1.5
   discovered_cube_scale: 2.0
   colors:
-    person: '#39FF88'
+    person: '#00FFFF'
     rock: '#FFA500'
     tank: '#FF0000'
-    car: '#FF8C00'
-    house: '#B084FF'
+    wall: '#00FF00'
+    tent: '#FFFF00'
+    car: '#FF66CC'
+    house: '#AA66FF'
     unknown: '#FFFFFF'
+debug:
+  fusion_status: true

@@ -34,7 +34,7 @@ from threading import Lock, Thread
 
 try:
     import yaml
-except Exception:  # pragma: no cover - route UI has a built-in fallback.
+except Exception:  # pragma: no cover - optional runtime dependency
     yaml = None
 
 
@@ -87,7 +87,6 @@ from .config import (
     LIVE_VIEW_ENABLED,
     LIVE_VIEW_FPS,
     LIVE_VIEW_JPEG_QUALITY,
-    PUBLISH_DETECT_IMAGE,
     PORT,
     SAVE_IMAGES,
     TANK_MODE,
@@ -95,7 +94,6 @@ from .config import (
     YOLO_ASYNC_LOG_INTERVAL_SEC,
     YOLO_ASYNC_MAX_RESULT_AGE_MS,
     YOLO_ASYNC_MIN_INTERVAL_SEC,
-    YOLO_ASYNC_WAIT_FOR_FRESH_MS,
 )
 
 # get_bridge:
@@ -125,10 +123,9 @@ from .utils import compact_info, now_wall, pretty, raw_and_map_pose
 # ultralytics/torch가 설치되어 있지 않아도 bridge 자체가 죽지 않도록
 # 실제 detector 생성은 /detect 요청 시 lazy-loading으로 수행한다.
 try:
-    from vision.yolo_detector import get_detector, peek_detector
+    from vision.yolo_detector import get_detector
 except Exception as exc:  # pragma: no cover - runtime dependency fallback
     get_detector = None
-    peek_detector = None
     _YOLO_IMPORT_ERROR = exc
 else:
     _YOLO_IMPORT_ERROR = None
@@ -138,7 +135,7 @@ _ASYNC_YOLO_SERVICE = None
 
 
 def _get_async_yolo_service():
-    """Create the optional async YOLO worker lazily."""
+    """선택적 async YOLO worker를 lazy 방식으로 생성한다."""
     global _ASYNC_YOLO_SERVICE
     if _ASYNC_YOLO_SERVICE is None:
         if get_detector is None:
@@ -147,7 +144,6 @@ def _get_async_yolo_service():
             get_detector,
             min_interval_sec=YOLO_ASYNC_MIN_INTERVAL_SEC,
             max_result_age_ms=YOLO_ASYNC_MAX_RESULT_AGE_MS,
-            wait_for_fresh_ms=YOLO_ASYNC_WAIT_FOR_FRESH_MS,
             log_interval_sec=YOLO_ASYNC_LOG_INTERVAL_SEC,
         )
     return _ASYNC_YOLO_SERVICE
@@ -282,7 +278,7 @@ def _resolve_static_map_path() -> Path:
     except Exception:
         pass
 
-    # Source-tree fallback: .../src/ros_bridge/ros_bridge/app_routes.py -> .../src
+    # source tree fallback: .../src/ros_bridge/ros_bridge/app_routes.py -> .../src
     return Path(__file__).resolve().parents[2] / "rviz_visualization" / "map" / "finalmap.map"
 
 
@@ -321,7 +317,7 @@ def _map_object_category(name: Any) -> str:
 
 
 def _overview_terrain_zones() -> Dict[str, Any]:
-    """Manual terrain zones traced from the supplied top-down map overview."""
+    """제공된 top-down map overview에서 수작업으로 따낸 terrain zone들."""
 
     return {
         "source": "user_overview_image",
@@ -585,20 +581,48 @@ def _route_length(points: list[Dict[str, float]]) -> float:
     return total
 
 
-def _fallback_route_candidates() -> Dict[str, Any]:
-    start = [60.0, 27.0]
-    destination = [117.0, 250.0]
-    return _route_candidate_payload(
-        {
-            "start": start,
-            "destination": destination,
-            "routes": {
-                "A": [[50.0, 50.0], [42.0, 100.0], [42.0, 150.0], [42.0, 200.0], [85.0, 240.0]],
-                "B": [[120.0, 70.0], [160.0, 105.0], [188.0, 122.0], [198.0, 142.0], [190.0, 160.0], [160.0, 200.0], [130.0, 240.0], [117.0, 250.0]],
-            },
-        },
-        "built_in",
-    )
+def _numeric_score(value: Any, high_value: float) -> Optional[int]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if high_value <= 0:
+        return None
+    return int(round(max(0.0, min(100.0, (number / high_value) * 100.0))))
+
+
+def _factor_level_from_score(score: Optional[int]) -> str:
+    if score is None:
+        return "pending"
+    if score >= 70:
+        return "high"
+    if score >= 35:
+        return "mid"
+    return "low"
+
+
+def _format_metric(value: Any, suffix: str = "") -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if number.is_integer():
+        return f"{int(number)}{suffix}"
+    return f"{number:.1f}{suffix}"
+
+
+def _route_estimated_time_s(route_length: Any) -> Optional[float]:
+    try:
+        length = float(route_length)
+    except (TypeError, ValueError):
+        return None
+    try:
+        speed_mps = float(os.environ.get("TANK_ROUTE_EST_SPEED_MPS", "8.0"))
+    except (TypeError, ValueError):
+        speed_mps = 8.0
+    if speed_mps <= 0:
+        return None
+    return length / speed_mps
 
 
 def _pending_route_factors(route_length: Any = None) -> list[Dict[str, Any]]:
@@ -624,9 +648,47 @@ def _pending_route_factors(route_length: Any = None) -> list[Dict[str, Any]]:
     ]
 
 
-def _route_candidate_payload(route_map: Dict[str, Any], source: str, map_name: str = "recon_map") -> Dict[str, Any]:
-    start_raw = route_map.get("start") or [60.0, 27.0]
-    destination_raw = route_map.get("destination") or [117.0, 250.0]
+def _forced_route_id() -> Optional[str]:
+    raw = os.environ.get("TANK_FORCE_ROUTE", "A").strip().upper()
+    if raw in {"", "0", "FALSE", "NO", "NONE", "OFF", "AUTO"}:
+        return None
+    if raw in {"A", "B"}:
+        return raw
+    return None
+
+
+def _forced_route_label(route_id: str) -> str:
+    return "LEFT A" if route_id == "A" else "RIGHT B"
+
+
+def _fallback_route_candidates() -> Dict[str, Any]:
+    start = [59.0, 27.0]
+    destination = [110.0, 276.5]
+    return _route_candidate_payload(
+        {
+            "start": start,
+            "destination": destination,
+            "routes": {
+                "A": [[50.0, 140.0], [51.0, 271.0]],
+                "B": [
+                    [120.0, 70.0],
+                    [160.0, 105.0],
+                    [188.0, 122.0],
+                    [198.0, 142.0],
+                    [190.0, 160.0],
+                    [160.0, 200.0],
+                    [130.0, 240.0],
+                ],
+            },
+        },
+        "built_in",
+        "finalmap",
+    )
+
+
+def _route_candidate_payload(route_map: Dict[str, Any], source: str, map_name: str = "finalmap") -> Dict[str, Any]:
+    start_raw = route_map.get("start") or [59.0, 27.0]
+    destination_raw = route_map.get("destination") or [110.0, 276.5]
     routes = route_map.get("routes") if isinstance(route_map.get("routes"), dict) else {}
     meta = {
         "A": {
@@ -691,23 +753,30 @@ def _risk_report_result(report: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return {}
 
 
-def _forced_route_id() -> Optional[str]:
-    raw = os.environ.get("TANK_FORCE_ROUTE", "A").strip().upper()
-    if raw in {"", "0", "FALSE", "NO", "NONE", "OFF", "AUTO"}:
-        return None
-    if raw in {"A", "B"}:
-        return raw
-    return None
+def _risk_score_for_level(level: Any) -> Optional[int]:
+    scores = {
+        "low": 20,
+        "medium": 50,
+        "high": 78,
+        "critical": 95,
+    }
+    return scores.get(str(level or "").strip().lower())
 
 
-def _forced_route_label(route_id: str) -> str:
-    return "LEFT A" if route_id == "A" else "RIGHT B"
+def _risk_level_class(level: Any) -> str:
+    text = str(level or "").strip().lower()
+    if text == "low":
+        return "low"
+    if text == "medium":
+        return "mid"
+    if text in {"high", "critical"}:
+        return "high"
+    return "pending"
 
 
 def _apply_forced_route_policy(result: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(result, dict):
         return {}
-
     forced = _forced_route_id()
     if forced not in {"A", "B"}:
         return deepcopy(result)
@@ -716,11 +785,9 @@ def _apply_forced_route_policy(result: Dict[str, Any]) -> Dict[str, Any]:
     previous = str(updated.get("selected_route") or "").strip().upper()
     label = _forced_route_label(forced)
     policy_note = f"임무 정책상 {label} 루트를 반드시 선택합니다. 위험 수치는 참고용으로만 표시합니다."
-
     updated["selected_route"] = forced
     updated["confidence"] = "high"
     updated["summary"] = policy_note
-
     existing_reason = str(updated.get("decision_reason") or "").strip()
     if previous in {"A", "B"} and previous != forced:
         updated["decision_reason"] = (
@@ -748,73 +815,7 @@ def _apply_forced_route_policy(result: Dict[str, Any]) -> Dict[str, Any]:
         f"{label} 루트 고정 운용입니다. 장애물/노출 수치가 높아도 선택 경로는 바꾸지 않습니다."
     )
     updated["recommended_behavior"] = recommended
-
     return updated
-
-
-def _risk_score_for_level(level: Any) -> Optional[int]:
-    scores = {
-        "low": 20,
-        "medium": 50,
-        "high": 78,
-        "critical": 95,
-    }
-    return scores.get(str(level or "").strip().lower())
-
-
-def _risk_level_class(level: Any) -> str:
-    text = str(level or "").strip().lower()
-    if text == "low":
-        return "low"
-    if text == "medium":
-        return "mid"
-    if text in {"high", "critical"}:
-        return "high"
-    return "pending"
-
-
-def _numeric_score(value: Any, high_value: float) -> Optional[int]:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if high_value <= 0:
-        return None
-    return int(round(max(0.0, min(100.0, (number / high_value) * 100.0))))
-
-
-def _factor_level_from_score(score: Optional[int]) -> str:
-    if score is None:
-        return "pending"
-    if score >= 70:
-        return "high"
-    if score >= 35:
-        return "mid"
-    return "low"
-
-
-def _format_metric(value: Any, suffix: str = "") -> str:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return "-"
-    if number.is_integer():
-        return f"{int(number)}{suffix}"
-    return f"{number:.1f}{suffix}"
-
-
-def _route_estimated_time_s(route_length: Any) -> Optional[float]:
-    try:
-        length = float(route_length)
-    except (TypeError, ValueError):
-        return None
-    try:
-        speed_mps = float(os.environ.get("TANK_ROUTE_EST_SPEED_MPS", "8.0"))
-    except (TypeError, ValueError):
-        speed_mps = 8.0
-    if speed_mps <= 0:
-        return None
-    return length / speed_mps
 
 
 def _route_risk_factors(level: Any, evidence: Dict[str, Any], route_length: Any = None) -> list[Dict[str, Any]]:
@@ -1026,8 +1027,8 @@ def _heuristic_route_risk_report(reason: str) -> Optional[Dict[str, Any]]:
     policy_reason = ""
     if selected != score_selected:
         policy_reason = (
-            f" 임무 정책으로 {_forced_route_label(selected)} 루트를 강제 선택했습니다."
-            f" 점수 기준 임시 선택은 {score_selected}였습니다."
+            f" Mission policy forces {_forced_route_label(selected)}."
+            f" Score-based fallback would choose {score_selected}."
         )
     result = {
         "selected_route": selected,
@@ -1036,20 +1037,20 @@ def _heuristic_route_risk_report(reason: str) -> Optional[Dict[str, Any]]:
             "B": _heuristic_level(score_b),
         },
         "confidence": "medium",
-        "summary": f"ROS/LLM 결과가 없어 route_comparison.json 기준으로 {selected} 루트를 임시 선택했습니다.{policy_reason}",
+        "summary": f"route_comparison.json fallback selected {selected}.{policy_reason}",
         "decision_reason": f"{reason}{policy_reason}",
         "key_risks": {
             "A": [
-                f"노출 {comparison.get('route_A', {}).get('enemy_visible_time_s', '-')}s, 장애물 {comparison.get('route_A', {}).get('obstacle_count', '-')}개, 차단 {comparison.get('route_A', {}).get('blocked_segment_count', '-')}구간"
+                f"exposure {comparison.get('route_A', {}).get('enemy_visible_time_s', '-')}s, obstacles {comparison.get('route_A', {}).get('obstacle_count', '-')}, blocked {comparison.get('route_A', {}).get('blocked_segment_count', '-')}"
             ],
             "B": [
-                f"노출 {comparison.get('route_B', {}).get('enemy_visible_time_s', '-')}s, 장애물 {comparison.get('route_B', {}).get('obstacle_count', '-')}개, 차단 {comparison.get('route_B', {}).get('blocked_segment_count', '-')}구간"
+                f"exposure {comparison.get('route_B', {}).get('enemy_visible_time_s', '-')}s, obstacles {comparison.get('route_B', {}).get('obstacle_count', '-')}, blocked {comparison.get('route_B', {}).get('blocked_segment_count', '-')}"
             ],
         },
         "recommended_behavior": {
-            "speed_policy": "slow" if selected is None else "medium",
-            "caution_points": ["이 결과는 Ollama LLM 실행 전 임시 판단입니다."],
-            "tactical_note": "Ollama가 실행되면 같은 입력으로 LLM 판단 파일을 생성해 Web에 자동 반영합니다.",
+            "speed_policy": "medium",
+            "caution_points": ["Fallback result before Ollama LLM succeeds."],
+            "tactical_note": "Ollama result will replace this fallback when available.",
         },
         "used_evidence": {
             "A": _route_evidence(comparison, "route_A"),
@@ -1158,8 +1159,7 @@ def _load_saved_route_risk_report(*, allow_auto_run: bool = True) -> Optional[Di
 
 
 def _route_risk_ai_entry(report: Dict[str, Any]) -> Dict[str, Any]:
-    result = _risk_report_result(report)
-    result = _apply_forced_route_policy(result)
+    result = _apply_forced_route_policy(_risk_report_result(report))
     return {
         "timestamp_wall": now_wall(),
         "source": report.get("source") or "route_risk_result_file",
@@ -1169,6 +1169,7 @@ def _route_risk_ai_entry(report: Dict[str, Any]) -> Dict[str, Any]:
         "summary": result.get("summary"),
         "decision_reason": result.get("decision_reason"),
         "validated_ok": report.get("validated_ok"),
+        "result": result,
     }
 
 
@@ -1183,9 +1184,6 @@ def _load_route_candidates_payload(route_risk_report: Optional[Dict[str, Any]] =
         preferred_map = os.environ.get("TANK_ROUTE_CANDIDATE_MAP", "finalmap").strip() or "finalmap"
         route_map = data.get(preferred_map)
         map_name = preferred_map
-        if not isinstance(route_map, dict):
-            route_map = data.get("recon_map")
-            map_name = "recon_map"
         if not isinstance(route_map, dict):
             for key, value in data.items():
                 if isinstance(value, dict) and isinstance(value.get("routes"), dict):
@@ -1218,6 +1216,7 @@ DEFAULT_ALLOWED_CLIENTS = {
     "127.0.0.1",
     "::1",
     # "192.168.0.44",  # Windows / Tank Simulator PC IP
+    "192.168.0.18",  # Windows / Tank Simulator PC IP
 }
 
 _allowed_clients_env = os.environ.get("TANK_ALLOWED_CLIENTS", "").strip()
@@ -1230,8 +1229,6 @@ if _allowed_clients_env:
 else:
     ALLOWED_CLIENTS = DEFAULT_ALLOWED_CLIENTS
 
-REQUEST_LOG_ENABLED = os.environ.get("TANK_REQUEST_LOG", "false").strip().lower() in ("1", "true", "yes", "y")
-
 
 @app.before_request
 def block_other_clients():
@@ -1241,8 +1238,7 @@ def block_other_clients():
     if client_ip and "," in client_ip:
         client_ip = client_ip.split(",", 1)[0].strip()
 
-    if REQUEST_LOG_ENABLED:
-        print(f"[REQ] {client_ip} {request.method} {request.path}")
+    print(f"[REQ] {client_ip} {request.method} {request.path}")
     _fallback_count(request.path)
 
     if client_ip not in ALLOWED_CLIENTS:
@@ -1293,9 +1289,8 @@ def route_init():
     # 터미널 로그:
     # 시뮬레이터가 실제로 /init을 호출했는지,
     # 어떤 초기 설정값을 받아가는지 확인하기 위한 출력이다.
-    if REQUEST_LOG_ENABLED:
-        print("[init] config")
-        print(pretty(config))
+    print("[init] config")
+    print(pretty(config))
 
     # 현재 실행 중인 ROS2 bridge node를 가져온다.
     # bridge가 None이면 ROS2 node가 아직 준비되지 않은 상태이다.
@@ -1335,8 +1330,7 @@ def route_start():
     """Tank Challenge 공식 GET /start endpoint."""
 
     # 터미널에서 episode start 요청이 들어왔음을 확인한다.
-    if REQUEST_LOG_ENABLED:
-        print("[start] requested")
+    print("[start] requested")
 
     # ROS2 bridge node를 가져온다.
     bridge = get_bridge()
@@ -1345,11 +1339,9 @@ def route_start():
     if bridge:
         bridge.handle_start()
 
-    # An empty control keeps the simulator's current Start/Pause state.
-    control = os.environ.get("TANK_START_CONTROL", "").strip().lower()
-    if control not in ("", "start", "pause"):
-        control = ""
-    return jsonify({"control": control})
+    # 공식 API 응답 형식을 맞추기 위해 control key를 반환한다.
+    # 빈 문자열은 별도 pause/reset/start 명령을 내리지 않는다는 의미로 사용한다.
+    return jsonify({"control": os.environ.get("TANK_START_CONTROL", "start")})
 
 
 ############################################################
@@ -1411,9 +1403,8 @@ def route_info():
 
     # 터미널에는 /info 전체 원본이 아니라 compact 형태만 출력한다.
     # LiDAR points가 많으면 터미널이 과도하게 길어지기 때문이다.
-    if REQUEST_LOG_ENABLED:
-        print("[info] compact")
-        print(pretty(compact_payload.get("data", {})))
+    print("[info] compact")
+    print(pretty(compact_payload.get("data", {})))
 
     # 시뮬레이터에 성공 응답을 반환한다.
     # control은 향후 pause/reset 등의 episode 제어에 사용할 수 있다.
@@ -1488,9 +1479,8 @@ def route_get_action():
         _store_fallback_get_action(data, command)
 
     # 실제로 시뮬레이터에 반환하는 명령을 터미널에 출력한다.
-    if REQUEST_LOG_ENABLED:
-        print("🎮 /get_action response")
-        print(pretty(command))
+    print("🎮 /get_action response")
+    print(pretty(command))
 
     # 시뮬레이터는 이 JSON을 읽어서 전차 이동/포탑/발사를 수행한다.
     return jsonify(command)
@@ -1534,7 +1524,7 @@ def route_get_action():
 
 @app.route("/detect", methods=["POST"])
 def route_detect():
-    """Tank Challenge official POST /detect endpoint with optional async YOLO and live view."""
+    """Tank Challenge 공식 POST /detect endpoint. 선택적 async YOLO와 live view를 지원한다."""
 
     image = request.files.get("image")
     if image is None:
@@ -1549,7 +1539,7 @@ def route_detect():
         path = IMAGE_DIR / f"detect_{int(now_wall() * 1000)}.jpg"
         path.write_bytes(image_bytes)
 
-    # Store the frame for optional web live view. This does not run YOLO.
+    # 선택적 web live view를 위해 frame을 저장한다. 여기서는 YOLO를 실행하지 않는다.
     frame_shape = None
     if LIVE_VIEW_ENABLED:
         try:
@@ -1559,11 +1549,11 @@ def route_detect():
             frame_shape = None
 
     bridge = get_bridge()
-    if bridge and PUBLISH_DETECT_IMAGE:
+    if bridge:
         bridge.handle_detect_image(image_bytes, metadata={"route": "/detect"})
 
     detections = []
-    metadata = {"ros_image_published": bool(PUBLISH_DETECT_IMAGE)}
+    metadata = {}
     if isinstance(frame_shape, list) and len(frame_shape) >= 2:
         metadata["image_shape"] = frame_shape
         metadata["image"] = {"height": frame_shape[0], "width": frame_shape[1]}
@@ -1582,13 +1572,10 @@ def route_detect():
             detections = []
             metadata["yolo_error"] = str(exc)
 
-    # Add detector debug metadata when available. In async mode, the frame shape above is preferred.
-    detector_for_debug = None
+    # detector debug metadata가 있으면 추가한다. async 모드에서는 위에서 구한 frame shape를 우선한다.
     if get_detector is not None:
-        detector_for_debug = peek_detector() if YOLO_ASYNC_ENABLED and peek_detector is not None else get_detector()
-    if detector_for_debug is not None:
         try:
-            debug = detector_for_debug.debug_state()
+            debug = get_detector().debug_state()
             debug_shape = debug.get("latestFrameShape")
             if "image_shape" not in metadata and isinstance(debug_shape, list) and len(debug_shape) >= 2:
                 metadata["image_shape"] = debug_shape
@@ -1614,7 +1601,7 @@ def route_detect():
 
 @app.route("/debug/yolo", methods=["GET"])
 def route_debug_yolo():
-    """Return current embedded YOLO runtime/debug state."""
+    """현재 내장 YOLO runtime/debug 상태를 반환한다."""
     if get_detector is None:
         return jsonify({"loaded": False, "importError": str(_YOLO_IMPORT_ERROR)})
     try:
@@ -1625,7 +1612,7 @@ def route_debug_yolo():
 
 @app.route("/api/static-map", methods=["GET"])
 def route_static_map():
-    """Return the static terrain/object map used by the browser MFD."""
+    """browser MFD가 사용하는 static terrain/object map을 반환한다."""
     try:
         return jsonify(_load_static_map_payload())
     except Exception as exc:  # noqa: BLE001
@@ -1634,7 +1621,7 @@ def route_static_map():
 
 @app.route("/api/static-map/overview", methods=["GET"])
 def route_static_map_overview():
-    """Return the top-down map overview texture when one is available."""
+    """사용 가능한 경우 top-down map overview texture를 반환한다."""
     try:
         overview_path = _resolve_static_map_overview_path()
         if not overview_path.exists():
@@ -1646,7 +1633,7 @@ def route_static_map_overview():
 
 @app.route("/api/dashboard/state", methods=["GET"])
 def route_dashboard_state():
-    """Combined state payload for the browser MFD dashboard."""
+    """browser MFD dashboard용으로 합쳐진 state payload."""
     payload: Dict[str, Any] = {
         "serverTime": now_wall(),
         "mode": TANK_MODE,
@@ -1672,11 +1659,7 @@ def route_dashboard_state():
         if get_detector is None:
             payload["yolo"] = {"loaded": False, "importError": str(_YOLO_IMPORT_ERROR)}
         else:
-            detector_for_debug = peek_detector() if YOLO_ASYNC_ENABLED and peek_detector is not None else get_detector()
-            if detector_for_debug is None:
-                payload["yolo"] = {"loaded": False, "pendingAsyncLoad": True}
-            else:
-                payload["yolo"] = detector_for_debug.debug_state()
+            payload["yolo"] = get_detector().debug_state()
     except Exception as exc:  # noqa: BLE001
         payload["yolo"] = {"loaded": False, "error": str(exc)}
 
@@ -1823,7 +1806,7 @@ def route_llm_route_risk_run():
 
 @app.route("/view", methods=["GET"])
 def route_live_view():
-    """Browser live view for latest /detect image and detection overlay."""
+    """최신 /detect image와 detection overlay를 보여주는 browser live view."""
     if not LIVE_VIEW_ENABLED:
         return jsonify({"enabled": False, "error": "TANK_LIVE_VIEW is false"}), 404
     return live_view.render_view_page()
@@ -1831,7 +1814,7 @@ def route_live_view():
 
 @app.route("/video_feed", methods=["GET"])
 def route_video_feed():
-    """MJPEG stream used by /view."""
+    """/view가 사용하는 MJPEG stream."""
     if not LIVE_VIEW_ENABLED:
         return jsonify({"enabled": False, "error": "TANK_LIVE_VIEW is false"}), 404
     return live_view.video_response(web_fps=LIVE_VIEW_FPS, jpeg_quality=LIVE_VIEW_JPEG_QUALITY)
@@ -1839,7 +1822,7 @@ def route_video_feed():
 
 @app.route("/debug/live_view", methods=["GET"])
 def route_debug_live_view():
-    """Return current live-view and async YOLO state."""
+    """현재 live-view와 async YOLO 상태를 반환한다."""
     state = live_view.debug_state() if LIVE_VIEW_ENABLED else {"enabled": False}
     state["asyncYoloEnabled"] = YOLO_ASYNC_ENABLED
     if YOLO_ASYNC_ENABLED and _ASYNC_YOLO_SERVICE is not None:
@@ -1852,7 +1835,7 @@ def route_debug_live_view():
 
 @app.route("/debug_state", methods=["GET"])
 def route_debug_state_alias():
-    """Compatibility alias for team live-view debug endpoint."""
+    """팀 live-view debug endpoint에 대한 호환용 alias."""
     return route_debug_live_view()
 
 
@@ -1998,14 +1981,13 @@ def route_update_bullet():
         return jsonify({"status": "ERROR", "message": "Invalid request data"}), 400
 
     # 터미널에 탄착 좌표와 hit 대상을 출력한다.
-    if REQUEST_LOG_ENABLED:
-        print(
-            f"💥 /update_bullet "
-            f"x={data.get('x')} "
-            f"y={data.get('y')} "
-            f"z={data.get('z')} "
-            f"hit={data.get('hit')}"
-        )
+    print(
+        f"💥 /update_bullet "
+        f"x={data.get('x')} "
+        f"y={data.get('y')} "
+        f"z={data.get('z')} "
+        f"hit={data.get('hit')}"
+    )
 
     # bridge가 준비되어 있으면 탄착 정보를 ROS2 topic으로 publish한다.
     bridge = get_bridge()
@@ -2062,8 +2044,7 @@ def route_set_destination():
     pose_raw = bridge.handle_destination(x, y, z) if bridge else {"x": x, "y": y, "z": z}
 
     # 터미널에 원본 목적지 좌표를 출력한다.
-    if REQUEST_LOG_ENABLED:
-        print(f"🎯 /set_destination raw=({x}, {y}, {z})")
+    print(f"🎯 /set_destination raw=({x}, {y}, {z})")
 
     # 시뮬레이터에 목적지 수신 성공 응답을 반환한다.
     return jsonify({
@@ -2111,8 +2092,7 @@ def route_update_obstacle():
 
     # 터미널에는 장애물 데이터가 들어왔다는 이벤트만 출력한다.
     # 장애물 전체를 출력하면 로그가 길어질 수 있다.
-    if REQUEST_LOG_ENABLED:
-        print("🪨 /update_obstacle received")
+    print("🪨 /update_obstacle received")
 
     # bridge가 있으면 obstacle raw/list topic으로 publish한다.
     bridge = get_bridge()
@@ -2162,8 +2142,7 @@ def route_collision():
         return jsonify({"status": "error", "message": "No collision data received"}), 400
 
     # 터미널에 충돌 객체 이름과 위치를 출력한다.
-    if REQUEST_LOG_ENABLED:
-        print(f"💥 /collision object={data.get('objectName')} position={data.get('position')}")
+    print(f"💥 /collision object={data.get('objectName')} position={data.get('position')}")
 
     # bridge가 있으면 collision raw/point topic으로 publish한다.
     bridge = get_bridge()

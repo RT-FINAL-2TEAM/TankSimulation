@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Terrain/obstacle separation utilities for LiDAR hit points.
+"""LiDAR hit point의 지형/장애물 분리 유틸리티.
 
 팀원이 예전 src에서 개발한 지형/장애물 분리 로직을 현재 통합 src의 lidar 패키지로
 이식한 모듈이다. 다른 패키지는 raw lidarPoints 스키마를 직접 만지지 않고 이 함수의
@@ -49,7 +49,7 @@ def _position(point: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _raw_xzy(point: Dict[str, Any]) -> Tuple[float, float, float]:
-    """Return simulator raw x, y(height), z values."""
+    """시뮬레이터 raw x, y(높이), z 값을 반환한다."""
     pos = _position(point)
     return (
         to_float(pos.get("x")),
@@ -65,7 +65,7 @@ def grid_key_for_point(point: Dict[str, Any], grid_resolution: float) -> GridKey
 
 
 def create_grid_map(points: Sequence[Dict[str, Any]], grid_resolution: float) -> Dict[GridKey, List[int]]:
-    """Map each x-z grid cell to point indices."""
+    """각 x-z grid cell을 point index 목록에 매핑한다."""
     grid: Dict[GridKey, List[int]] = {}
     for idx, point in enumerate(points):
         key = grid_key_for_point(point, grid_resolution)
@@ -74,7 +74,7 @@ def create_grid_map(points: Sequence[Dict[str, Any]], grid_resolution: float) ->
 
 
 def get_cell_ground_levels(points: Sequence[Dict[str, Any]], grid_map: Dict[GridKey, List[int]]) -> Dict[GridKey, float]:
-    """Use the lowest point in each cell as local ground height."""
+    """각 cell의 최저점을 local ground height로 사용한다."""
     levels: Dict[GridKey, float] = {}
     for key, indices in grid_map.items():
         levels[key] = min(_raw_xzy(points[i])[1] for i in indices)
@@ -87,7 +87,7 @@ def find_steep_cells(
     cell_ground: Dict[GridKey, float],
     climb_limit: float,
 ) -> Tuple[Set[GridKey], float, float, float]:
-    """Detect cells likely to contain vertical obstacles or abrupt terrain discontinuities."""
+    """수직 장애물이나 급격한 지형 불연속을 포함할 가능성이 큰 cell을 검출한다."""
     steep_cells: Set[GridKey] = set()
     spans: List[float] = []
     max_neighbor_gap = 0.0
@@ -99,12 +99,12 @@ def find_steep_cells(
         span = max_y - min_y
         spans.append(span)
 
-        # 1) Cell internal height span: rock/wall often produces tall vertical returns in one cell.
+        # 1) cell 내부 높이차: rock/wall은 한 cell에서 높은 수직 반사를 자주 만든다.
         if span > climb_limit:
             steep_cells.add(key)
             continue
 
-        # 2) Neighbor ground height gradient: abrupt step between adjacent cells.
+        # 2) 인접 cell ground height 기울기: 인접 cell 사이의 급격한 단차.
         gx, gz = key
         for neighbor in ((gx + 1, gz), (gx - 1, gz), (gx, gz + 1), (gx, gz - 1)):
             if neighbor not in cell_ground:
@@ -126,7 +126,7 @@ def split_terrain_obstacle_points(
     climb_limit: float = 0.4,
     obstacle_min_height: float = 0.2,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], TerrainSeparationStats]:
-    """Split detected LiDAR hit points into obstacle and terrain lists.
+    """검출된 LiDAR hit point를 obstacle과 terrain 리스트로 분리한다.
 
     Returns:
         obstacle_points, terrain_points, stats
@@ -168,7 +168,7 @@ def split_terrain_obstacle_points(
             else:
                 terrain_indices.add(idx)
 
-    # Every point should be assigned. Conservative fallback: unassigned points are terrain.
+    # 모든 point는 분류되어야 한다. 보수적 fallback: 미분류 point는 terrain으로 둔다.
     all_indices = set(range(len(source)))
     terrain_indices.update(all_indices - obstacle_indices - terrain_indices)
 
@@ -182,7 +182,7 @@ def split_terrain_obstacle_points(
     stats.max_cell_height_span = float(max_span)
     stats.mean_cell_height_span = float(mean_span)
     stats.max_neighbor_ground_gap = float(max_neighbor_gap)
-    # Simple normalized roughness score for monitoring/debug; 1.0 roughly means climb_limit-sized roughness.
+    # 모니터링/디버그용 단순 정규화 거칠기 점수. 1.0은 대략 climb_limit 크기의 거칠기를 뜻한다.
     denom = max(float(climb_limit), 1e-6)
     stats.roughness_score = float(max(mean_span, max_neighbor_gap) / denom)
     return obstacle_points, terrain_points, stats
@@ -195,9 +195,9 @@ def filter_ground_points(
     climb_limit: float = 0.4,
     obstacle_min_height: float = 0.2,
 ) -> List[Dict[str, Any]]:
-    """Backward-compatible helper: return only obstacle points.
+    """하위 호환 헬퍼: obstacle point만 반환한다.
 
-    origin_y is kept for compatibility with the previous function signature.
+    origin_y는 이전 함수 시그니처와의 호환을 위해 남겨둔 것이다.
     """
     obstacles, _, _ = split_terrain_obstacle_points(
         points,

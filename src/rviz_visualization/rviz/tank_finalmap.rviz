@@ -25,21 +25,9 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
-      Name: Recon Map Markers
+      Name: Static Map (finalmap)
       Topic:
         Value: /tank/rviz/recon_map_markers
-      Value: true
-    - Class: rviz_default_plugins/MarkerArray
-      Enabled: true
-      Name: Mission Actual Map Markers
-      Topic:
-        Value: /tank/rviz/mission_map_markers
-      Value: true
-    - Class: rviz_default_plugins/MarkerArray
-      Enabled: true
-      Name: Recon / Mission Difference Markers
-      Topic:
-        Value: /tank/rviz/map_diff_markers
       Value: true
     - Class: rviz_default_plugins/Map
       Enabled: false

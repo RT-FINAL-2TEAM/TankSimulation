@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""LiDAR payload parsing and obstacle preprocessing.
+"""LiDAR 페이로드 파싱과 장애물 전처리.
 
 다른 패키지(path_planning, potential 등)는 LiDAR JSON schema를 직접 파싱하지 않고
 여기 함수만 import해서 사용한다. 이렇게 해야 LiDAR schema가 바뀌어도 수정 지점이
@@ -12,10 +12,7 @@ import math
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
-try:
-    from sklearn.cluster import DBSCAN as SklearnDBSCAN
-except Exception:  # pragma: no cover - optional acceleration dependency.
-    SklearnDBSCAN = None
+from sklearn.cluster import DBSCAN
 
 from .config import (
     BBOX_MIN_THICKNESS,
@@ -25,6 +22,7 @@ from .config import (
 )
 from .coordinate_utils import lidar_point_with_map_position, to_float
 from .terrain_utils import split_terrain_obstacle_points
+from .path_blocking import distance
 
 Point2D = Tuple[float, float]
 BBox2D = Dict[str, float]
@@ -104,7 +102,7 @@ def build_classified_lidar_payloads(
     climb_limit: float = TERRAIN_CLIMB_LIMIT,
     obstacle_min_height: float = TERRAIN_OBSTACLE_MIN_HEIGHT,
 ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
-    """Build four map-frame payloads from raw simulator lidarPoints.
+    """시뮬레이터 raw lidarPoints에서 map 프레임 페이로드 4개를 만든다.
 
     Returns:
         detected_obstacle_payload, terrain_payload, all_detected_payload, terrain_info_payload
@@ -194,9 +192,9 @@ def build_detected_map_payload(
     ground_filter_enabled: bool = False,
     origin_y: float = 8.0,
 ) -> Dict[str, Any]:
-    """Backward-compatible helper used by older callers.
+    """과거 호출부가 쓰는 하위호환 헬퍼.
 
-    It now returns the obstacle-only payload when ground_filter_enabled=True.
+    이제 ground_filter_enabled=True일 때 obstacle-only 페이로드를 반환한다.
     """
     detected_payload, _, _, _ = build_classified_lidar_payloads(
         lidar_points,
@@ -208,7 +206,7 @@ def build_detected_map_payload(
 
 
 def parse_lidar_points_payload(payload: Any) -> List[Point2D]:
-    """Parse /tank/sensor/lidar/detected_points_map into map-plane (x, y)."""
+    """/tank/sensor/lidar/detected_points_map를 map 평면 (x, y)로 파싱한다."""
     points: List[Point2D] = []
     for item in extract_payload_list(payload, "points"):
         if not isinstance(item, dict):
@@ -225,9 +223,6 @@ def parse_lidar_points_payload(payload: Any) -> List[Point2D]:
             continue
     return points
 
-
-def distance(a: Point2D, b: Point2D) -> float:
-    return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
 def filter_lidar_points_by_distance(
@@ -248,10 +243,7 @@ def cluster_lidar_points(points: Sequence[Point2D], eps: float = 2.0, min_sample
     if not points:
         return []
     coords = np.asarray([(p[0], p[1]) for p in points], dtype=np.float32)
-    if SklearnDBSCAN is not None:
-        labels = SklearnDBSCAN(eps=eps, min_samples=min_samples, algorithm="kd_tree").fit_predict(coords)
-    else:
-        labels = _fallback_dbscan_labels(coords, eps=eps, min_samples=min_samples)
+    labels = DBSCAN(eps=eps, min_samples=min_samples, algorithm='kd_tree').fit_predict(coords)
     
     clusters: List[List[Point2D]] = []
     unique_labels = set(labels)
@@ -262,60 +254,6 @@ def cluster_lidar_points(points: Sequence[Point2D], eps: float = 2.0, min_sample
         cluster = [pts[idx] for idx, lbl in enumerate(labels) if lbl == label]
         clusters.append(cluster)
     return clusters
-
-
-def _fallback_dbscan_labels(points_2d: np.ndarray, eps: float, min_samples: int) -> np.ndarray:
-    n = int(points_2d.shape[0])
-    if n == 0:
-        return np.empty((0,), dtype=np.int32)
-
-    eps2 = float(eps) * float(eps)
-    labels = np.full(n, -99, dtype=np.int32)
-    neighbors_cache: Dict[int, np.ndarray] = {}
-
-    def neighbors(i: int) -> np.ndarray:
-        cached = neighbors_cache.get(i)
-        if cached is not None:
-            return cached
-        diff = points_2d - points_2d[i]
-        dist2 = np.einsum("ij,ij->i", diff, diff)
-        out = np.flatnonzero(dist2 <= eps2)
-        neighbors_cache[i] = out
-        return out
-
-    cluster_id = 0
-    min_pts = max(int(min_samples), 1)
-    for i in range(n):
-        if labels[i] != -99:
-            continue
-        neigh = neighbors(i)
-        if len(neigh) < min_pts:
-            labels[i] = -1
-            continue
-
-        labels[i] = cluster_id
-        seeds = list(int(v) for v in neigh)
-        seed_seen = set(seeds)
-        k = 0
-        while k < len(seeds):
-            j = seeds[k]
-            if labels[j] == -1:
-                labels[j] = cluster_id
-            if labels[j] != -99:
-                k += 1
-                continue
-            labels[j] = cluster_id
-            neigh_j = neighbors(j)
-            if len(neigh_j) >= min_pts:
-                for candidate in neigh_j:
-                    candidate = int(candidate)
-                    if candidate not in seed_seen:
-                        seeds.append(candidate)
-                        seed_seen.add(candidate)
-            k += 1
-        cluster_id += 1
-    labels[labels == -99] = -1
-    return labels
 
 
 def lidar_clusters_to_bboxes(clusters: Sequence[Sequence[Point2D]], min_thickness: float = BBOX_MIN_THICKNESS) -> List[BBox2D]:
