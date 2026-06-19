@@ -37,6 +37,7 @@ _skipped_live_decode_count = 0
 _LIVE_VIEW_DECODE_FPS = float(os.getenv("TANK_LIVE_VIEW_DECODE_FPS", "6"))
 _LIVE_VIEW_DECODE_INTERVAL = 1.0 / max(0.1, _LIVE_VIEW_DECODE_FPS)
 _LIVE_VIEW_MAX_SIDE = int(os.getenv("TANK_LIVE_VIEW_MAX_SIDE", "960"))
+_LIVE_VIEW_BROWSER_OVERLAY = os.getenv("TANK_LIVE_VIEW_BROWSER_OVERLAY", "true").strip().lower() in ("1", "true", "yes", "y")
 
 _CLASS_COLORS_BGR = {
     "tank": (0, 0, 255),
@@ -120,6 +121,70 @@ def _class_color(class_name: str, class_id: int = 0) -> Tuple[int, int, int]:
     return _COLOR_PALETTE_BGR[int(class_id) % len(_COLOR_PALETTE_BGR)]
 
 
+def _blend_rect(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int, color: Tuple[int, int, int], alpha: float) -> None:
+    height, width = frame.shape[:2]
+    left = max(0, min(width, x1))
+    right = max(0, min(width, x2))
+    top = max(0, min(height, y1))
+    bottom = max(0, min(height, y2))
+    if right <= left or bottom <= top:
+        return
+    roi = frame[top:bottom, left:right]
+    fill = np.full_like(roi, color, dtype=np.uint8)
+    cv2.addWeighted(fill, alpha, roi, 1.0 - alpha, 0, roi)
+
+
+def _draw_refined_box(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int, color: Tuple[int, int, int]) -> None:
+    height, width = frame.shape[:2]
+    x1 = max(0, min(width - 1, x1))
+    x2 = max(0, min(width - 1, x2))
+    y1 = max(0, min(height - 1, y1))
+    y2 = max(0, min(height - 1, y2))
+    if x2 <= x1 or y2 <= y1:
+        return
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 1, cv2.LINE_AA)
+    corner = max(10, min(24, int(min(x2 - x1, y2 - y1) * 0.22)))
+    for start, end in (
+        ((x1, y1), (x1 + corner, y1)),
+        ((x1, y1), (x1, y1 + corner)),
+        ((x2, y1), (x2 - corner, y1)),
+        ((x2, y1), (x2, y1 + corner)),
+        ((x1, y2), (x1 + corner, y2)),
+        ((x1, y2), (x1, y2 - corner)),
+        ((x2, y2), (x2 - corner, y2)),
+        ((x2, y2), (x2, y2 - corner)),
+    ):
+        cv2.line(frame, start, end, color, 1, cv2.LINE_AA)
+
+
+def _draw_refined_label(frame: np.ndarray, label: str, x: int, y: int, color: Tuple[int, int, int]) -> None:
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.45
+    thickness = 1
+    padding_x = 6
+    padding_y = 4
+    text_size, baseline = cv2.getTextSize(label, font, font_scale, thickness)
+    text_w, text_h = text_size
+    height, width = frame.shape[:2]
+
+    label_x = max(4, min(width - text_w - padding_x * 2 - 4, x))
+    label_y = y - text_h - baseline - padding_y * 2 - 4
+    if label_y < 4:
+        label_y = min(height - text_h - baseline - padding_y * 2 - 4, y + 6)
+    label_y = max(4, label_y)
+
+    bg_left = label_x
+    bg_top = label_y
+    bg_right = label_x + text_w + padding_x * 2
+    bg_bottom = label_y + text_h + baseline + padding_y * 2
+    _blend_rect(frame, bg_left, bg_top, bg_right, bg_bottom, (4, 8, 6), 0.72)
+    cv2.rectangle(frame, (bg_left, bg_top), (bg_right, bg_bottom), color, 1, cv2.LINE_AA)
+    text_origin = (label_x + padding_x, label_y + padding_y + text_h)
+    shadow_origin = (text_origin[0] + 1, text_origin[1] + 1)
+    cv2.putText(frame, label, shadow_origin, font, font_scale, (12, 18, 14), thickness, cv2.LINE_AA)
+    cv2.putText(frame, label, text_origin, font, font_scale, color, thickness, cv2.LINE_AA)
+
+
 def _draw_detections(frame: np.ndarray, detections: List[Dict[str, Any]], metadata: Dict[str, Any]) -> np.ndarray:
     if cv2 is None:
         return frame
@@ -156,27 +221,8 @@ def _draw_detections(frame: np.ndarray, detections: List[Dict[str, Any]], metada
         if track_id is not None:
             id_text += f" T:{track_id}"
         label = f"{class_name}{id_text} {conf:.2f}"
-        cv2.putText(
-            drawn,
-            label,
-            (x1, max(20, y1 - 8)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            color,
-            2,
-            cv2.LINE_AA,
-        )
-
-    frame_seq = metadata.get("frameSeq")
-    processed_seq = metadata.get("processedFrameSeq")
-    age_ms = metadata.get("resultAgeMs")
-    async_flag = metadata.get("asyncYolo")
-    status = f"det={len(detections)}"
-    if async_flag:
-        status += f" async frame={frame_seq} yolo={processed_seq} age={age_ms:.0f}ms" if isinstance(age_ms, (int, float)) else f" async frame={frame_seq} yolo={processed_seq}"
-    else:
-        status += " sync"
-    cv2.putText(drawn, status, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 255), 2, cv2.LINE_AA)
+        _draw_refined_box(drawn, x1, y1, x2, y2, color)
+        _draw_refined_label(drawn, label, x1, y1, color)
     return drawn
 
 
@@ -305,6 +351,15 @@ def render_view_page() -> str:
                 font-size: 12px;
                 font-weight: 800;
             }
+            .feed-status-text {
+                min-width: 0;
+                max-width: 72%;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                color: var(--cyan);
+                font-weight: 800;
+            }
             .left-tabs {
                 height: 42px;
                 display: grid;
@@ -356,6 +411,13 @@ def render_view_page() -> str:
                 display: block;
                 background: #000;
             }
+            #driveOverlay {
+                position: absolute;
+                inset: 0;
+                width: 100%;
+                height: 100%;
+                pointer-events: none;
+            }
             #mapCanvas {
                 width: 100%;
                 height: 100%;
@@ -363,75 +425,92 @@ def render_view_page() -> str:
                 background: #050806;
             }
             .readout-list { display: grid; gap: 8px; }
-            .route-compare { display: grid; gap: 10px; }
+            .route-compare {
+                display: grid;
+                gap: 8px;
+            }
             .route-decision {
-                border: 1px solid var(--line);
-                background: rgba(8, 24, 14, 0.74);
-                padding: 9px;
-                color: var(--text);
-                font-size: 12px;
-                line-height: 1.45;
+                border: 1px solid var(--line-dim);
+                background: rgba(4, 12, 8, 0.84);
+                padding: 8px;
+                font-size: 11px;
+                color: var(--muted);
             }
             .route-decision strong {
                 display: block;
                 color: var(--green);
-                margin-bottom: 4px;
+                font-size: 12px;
+                margin-bottom: 3px;
             }
             .route-card {
                 border: 1px solid var(--line-dim);
-                background: rgba(4, 12, 8, 0.76);
-                padding: 9px;
-                display: grid;
-                gap: 8px;
+                background: rgba(7, 18, 12, 0.82);
+                padding: 8px;
+                min-width: 0;
             }
             .route-card.selected {
                 border-color: var(--green);
-                box-shadow: inset 0 0 0 1px rgba(57, 255, 136, 0.24);
+                box-shadow: inset 0 0 0 1px rgba(57, 255, 136, 0.12);
             }
             .route-head {
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
                 gap: 8px;
-                min-width: 0;
+                margin-bottom: 6px;
             }
-            .route-name { font-weight: 900; font-size: 13px; }
+            .route-name {
+                min-width: 0;
+                color: var(--text);
+                font-size: 12px;
+                font-weight: 800;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
             .route-chip {
+                flex: 0 0 auto;
                 border: 1px solid currentColor;
                 padding: 2px 5px;
                 font-size: 10px;
-                font-weight: 900;
+                font-weight: 800;
             }
             .route-summary {
-                color: var(--text);
-                font-size: 12px;
-                line-height: 1.4;
-                overflow-wrap: anywhere;
+                color: var(--muted);
+                font-size: 11px;
+                line-height: 1.35;
+                margin-bottom: 8px;
             }
             .route-factor {
                 display: grid;
-                grid-template-columns: 44px minmax(0, 1fr) 48px;
+                grid-template-columns: 46px minmax(0, 1fr) 42px;
                 align-items: center;
-                gap: 7px;
+                gap: 6px;
+                min-height: 18px;
                 color: var(--muted);
-                font-size: 11px;
-                font-weight: 800;
+                font-size: 10px;
             }
             .route-meter {
                 height: 4px;
-                background: rgba(57, 255, 136, 0.13);
+                background: rgba(216, 255, 233, 0.12);
                 overflow: hidden;
             }
             .route-meter span {
                 display: block;
                 height: 100%;
                 width: var(--score);
-                background: var(--green);
+                background: var(--factor-color);
             }
-            .route-factor.factor-mid .route-meter span { background: #ffd34d; }
-            .route-factor.factor-high .route-meter span { background: #ff5b64; }
-            .route-factor.factor-pending .route-meter span { background: rgba(151, 255, 184, 0.22); }
-            .route-value { color: var(--text); text-align: right; }
+            .factor-low { --factor-color: var(--green); }
+            .factor-mid { --factor-color: var(--amber); }
+            .factor-high { --factor-color: var(--red); }
+            .factor-critical { --factor-color: var(--red); }
+            .factor-pending { --factor-color: var(--muted); }
+            .route-value {
+                text-align: right;
+                color: var(--text);
+                font-weight: 800;
+            }
             .readout {
                 border-left: 2px solid var(--line);
                 background: rgba(14, 30, 20, 0.58);
@@ -447,6 +526,28 @@ def render_view_page() -> str:
                 color: var(--text);
                 font-size: 12px;
                 overflow-wrap: anywhere;
+            }
+            .recon-actions {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 6px;
+                margin-bottom: 8px;
+            }
+            .action-button {
+                min-width: 0;
+                border: 1px solid var(--line-dim);
+                background: rgba(8, 19, 13, 0.92);
+                color: var(--muted);
+                font: inherit;
+                font-size: 11px;
+                font-weight: 800;
+                padding: 7px 6px;
+                cursor: pointer;
+            }
+            .action-button:hover {
+                border-color: var(--green);
+                color: var(--green);
+                background: rgba(13, 33, 21, 0.92);
             }
             .empty {
                 color: var(--muted);
@@ -506,9 +607,10 @@ def render_view_page() -> str:
                     <div id="leftContent" class="scroll"></div>
                 </section>
                 <section class="panel center-panel">
-                    <div class="panel-title"><span>CENTER PANEL</span><span>DRIVE FEED / YOLO BBOX</span></div>
+                    <div class="panel-title"><span>CENTER PANEL</span><span id="feedStatusText" class="feed-status-text">det=0 sync</span></div>
                     <div class="feed-wrap">
                         <img id="driveFeed" src="/video_feed" alt="drive feed">
+                        <canvas id="driveOverlay"></canvas>
                     </div>
                 </section>
                 <section class="panel right-panel">
@@ -544,12 +646,22 @@ def render_view_page() -> str:
             let overviewImage = null;
             let overviewImageLoaded = false;
             let overviewImageError = null;
+            let lastWindowsReconAction = null;
 
             function byId(id) { return document.getElementById(id); }
             function safe(value, fallback = "-") { return value === undefined || value === null || value === "" ? fallback : value; }
             function numberText(value, digits = 1) {
                 const n = Number(value);
                 return Number.isFinite(n) ? n.toFixed(digits) : "-";
+            }
+            function escapeHtml(value) {
+                return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+                    "&": "&amp;",
+                    "<": "&lt;",
+                    ">": "&gt;",
+                    '"': "&quot;",
+                    "'": "&#39;"
+                }[char]));
             }
             function setStatusClass(element, status) {
                 element.classList.remove("status-ok", "status-warn", "status-error");
@@ -1071,10 +1183,166 @@ def render_view_page() -> str:
                 if (Array.isArray(detect?.detections)) return detect.detections;
                 return [];
             }
+            function overlayClassColor(className) {
+                const key = String(className || "").toLowerCase();
+                const colors = { person: "#39ff88", car: "#ff8c00", tank: "#ff5b64", rock: "#ffca4f", house: "#b084ff" };
+                return colors[key] || "#d8ffe9";
+            }
+            function driveImageBox(canvas, sourceW, sourceH) {
+                const w = canvas.clientWidth || 1;
+                const h = canvas.clientHeight || 1;
+                const imageAspect = sourceW / Math.max(1, sourceH);
+                const boxAspect = w / Math.max(1, h);
+                if (boxAspect > imageAspect) {
+                    const drawH = h;
+                    const drawW = h * imageAspect;
+                    return { x: (w - drawW) * 0.5, y: 0, w: drawW, h: drawH };
+                }
+                const drawW = w;
+                const drawH = w / Math.max(0.001, imageAspect);
+                return { x: 0, y: (h - drawH) * 0.5, w: drawW, h: drawH };
+            }
+            function drawOverlayBox(ctx, box, color) {
+                ctx.save();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.rect(box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1);
+                ctx.stroke();
+                const corner = Math.max(10, Math.min(24, Math.min(box.x2 - box.x1, box.y2 - box.y1) * 0.22));
+                const segments = [
+                    [box.x1, box.y1, box.x1 + corner, box.y1],
+                    [box.x1, box.y1, box.x1, box.y1 + corner],
+                    [box.x2, box.y1, box.x2 - corner, box.y1],
+                    [box.x2, box.y1, box.x2, box.y1 + corner],
+                    [box.x1, box.y2, box.x1 + corner, box.y2],
+                    [box.x1, box.y2, box.x1, box.y2 - corner],
+                    [box.x2, box.y2, box.x2 - corner, box.y2],
+                    [box.x2, box.y2, box.x2, box.y2 - corner],
+                ];
+                for (const [x1, y1, x2, y2] of segments) {
+                    ctx.beginPath();
+                    ctx.moveTo(x1, y1);
+                    ctx.lineTo(x2, y2);
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+            function drawOverlayLabel(ctx, text, x, y, color, canvasW, canvasH) {
+                ctx.save();
+                ctx.font = "11px Consolas, monospace";
+                ctx.textBaseline = "top";
+                const padX = 6;
+                const padY = 4;
+                const metrics = ctx.measureText(text);
+                const textW = metrics.width;
+                const textH = 12;
+                let left = Math.max(4, Math.min(canvasW - textW - padX * 2 - 4, x));
+                let top = y - textH - padY * 2 - 7;
+                if (top < 4) top = Math.min(canvasH - textH - padY * 2 - 4, y + 6);
+                top = Math.max(4, top);
+                ctx.fillStyle = "rgba(4, 8, 6, 0.72)";
+                ctx.fillRect(left, top, textW + padX * 2, textH + padY * 2);
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1;
+                ctx.strokeRect(left, top, textW + padX * 2, textH + padY * 2);
+                ctx.fillStyle = color;
+                ctx.fillText(text, left + padX, top + padY);
+                ctx.restore();
+            }
+            function drawFeedOverlay(state) {
+                const canvas = byId("driveOverlay");
+                if (!canvas) return;
+                const rect = canvas.getBoundingClientRect();
+                const dpr = window.devicePixelRatio || 1;
+                const width = Math.max(1, Math.floor(rect.width * dpr));
+                const height = Math.max(1, Math.floor(rect.height * dpr));
+                if (canvas.width !== width || canvas.height !== height) {
+                    canvas.width = width;
+                    canvas.height = height;
+                }
+                const ctx = canvas.getContext("2d");
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                ctx.clearRect(0, 0, rect.width, rect.height);
+                const metadata = state?.liveView?.latestDetectionMetadata || latestBridge(state)?.detect_result || {};
+                const shape = metadata.image_shape || state?.liveView?.latestSourceFrameShape || state?.yolo?.latestFrameShape || [];
+                const sourceW = Number(metadata.image?.width || shape[1] || byId("driveFeed")?.naturalWidth || 1920);
+                const sourceH = Number(metadata.image?.height || shape[0] || byId("driveFeed")?.naturalHeight || 1080);
+                if (!Number.isFinite(sourceW) || !Number.isFinite(sourceH) || sourceW <= 0 || sourceH <= 0) return;
+                const imageBox = driveImageBox(canvas, sourceW, sourceH);
+                const detections = getDetections(state);
+                for (const det of detections) {
+                    const bbox = det?.bbox;
+                    if (!Array.isArray(bbox) || bbox.length < 4) continue;
+                    const x1 = Number(bbox[0]);
+                    const y1 = Number(bbox[1]);
+                    const x2 = Number(bbox[2]);
+                    const y2 = Number(bbox[3]);
+                    if (![x1, y1, x2, y2].every(Number.isFinite)) continue;
+                    const mapped = {
+                        x1: imageBox.x + (x1 / sourceW) * imageBox.w,
+                        y1: imageBox.y + (y1 / sourceH) * imageBox.h,
+                        x2: imageBox.x + (x2 / sourceW) * imageBox.w,
+                        y2: imageBox.y + (y2 / sourceH) * imageBox.h,
+                    };
+                    const className = safe(det.className || det.class_name || det.modelClassName, "object");
+                    const color = overlayClassColor(className);
+                    drawOverlayBox(ctx, mapped, color);
+                    drawOverlayLabel(ctx, `${className} ${numberText(det.confidence, 2)}`, mapped.x1, mapped.y1, color, rect.width, rect.height);
+                }
+            }
+            function feedStatusText(state) {
+                const liveView = state?.liveView || {};
+                const metadata = liveView.latestDetectionMetadata || latestBridge(state)?.detect_result || {};
+                const detections = getDetections(state);
+                const count = Number.isFinite(Number(liveView.latestDetectionCount))
+                    ? Number(liveView.latestDetectionCount)
+                    : detections.length;
+                let text = `det=${count}`;
+                if (metadata.asyncYolo) {
+                    const frameSeq = safe(metadata.frameSeq, "-");
+                    const processedSeq = safe(metadata.processedFrameSeq, "-");
+                    const age = Number(metadata.resultAgeMs);
+                    text += Number.isFinite(age)
+                        ? ` async frame=${frameSeq} yolo=${processedSeq} age=${age.toFixed(0)}ms`
+                        : ` async frame=${frameSeq} yolo=${processedSeq}`;
+                } else {
+                    text += liveView.asyncYoloEnabled ? " async waiting" : " sync";
+                }
+                const sourceFps = Number(liveView.liveViewSourceFps);
+                if (Number.isFinite(sourceFps) && sourceFps > 0) text += ` src=${sourceFps.toFixed(1)}fps`;
+                return text;
+            }
+            function updateFeedStatus(state) {
+                const element = byId("feedStatusText");
+                if (element) element.textContent = feedStatusText(state);
+            }
+            async function runWindowsRecon(runLlm = false) {
+                lastWindowsReconAction = {
+                    running: true,
+                    message: runLlm ? "Starting Windows LLM pipeline..." : "Building Windows recon files..."
+                };
+                updateLeftPanel(latestState || {});
+                const url = runLlm ? "/api/recon/windows/run?llm=true&force=true" : "/api/recon/windows/run";
+                try {
+                    const response = await fetch(url, { method: "POST", cache: "no-store" });
+                    const data = await response.json().catch(() => ({ ok: false, error: `HTTP ${response.status}` }));
+                    const errors = Array.isArray(data.errors) ? data.errors.filter(Boolean) : [];
+                    lastWindowsReconAction = {
+                        running: false,
+                        ok: data.ok === true && response.ok,
+                        message: errors.length ? errors.join(" / ") : data.error || (data.ok ? "Windows recon pipeline updated." : `HTTP ${response.status}`)
+                    };
+                    await fetchDashboardState();
+                } catch (err) {
+                    lastWindowsReconAction = { running: false, ok: false, message: err.message };
+                    updateLeftPanel(latestState || {});
+                }
+            }
             function renderReadouts(items) {
                 if (!items.length) return '<div class="empty">No data</div>';
                 return `<div class="readout-list">${items.map((item) => `
-                    <div class="readout"><div class="label">${item.label}</div><div class="value">${item.value}</div></div>
+                    <div class="readout"><div class="label">${escapeHtml(item.label)}</div><div class="value">${escapeHtml(item.value)}</div></div>
                 `).join("")}</div>`;
             }
             function routeCandidateData(state) {
@@ -1085,25 +1353,41 @@ def render_view_page() -> str:
                 if (!payload?.selected) return null;
                 return payload?.candidates?.find((candidate) => candidate.selected || candidate.id === payload.selected) || null;
             }
+            function riskColorForScore(scoreValue, fallback = "#39ff88") {
+                const score = Number(scoreValue);
+                if (!Number.isFinite(score)) return fallback;
+                if (score >= 85) return "#ff3448";
+                if (score >= 65) return "#ff8a3d";
+                if (score >= 35) return "#ffd34d";
+                return "#39ff88";
+            }
+            function riskLevelForScore(scoreValue, fallback = "pending") {
+                const score = Number(scoreValue);
+                if (!Number.isFinite(score)) return fallback;
+                if (score >= 85) return "critical";
+                if (score >= 65) return "high";
+                if (score >= 35) return "mid";
+                return "low";
+            }
             function renderRouteComparison(state) {
                 const payload = routeCandidateData(state);
                 const selected = selectedRouteCandidate(payload);
                 const metricHtml = (label, scoreValue, displayValue, levelValue = "pending") => {
                     const hasScore = scoreValue !== null && scoreValue !== undefined && Number.isFinite(Number(scoreValue));
                     const score = hasScore ? Math.max(0, Math.min(100, Number(scoreValue))) : 0;
-                    const level = ["low", "mid", "high", "pending"].includes(levelValue) ? levelValue : "pending";
+                    const level = ["low", "mid", "high", "critical", "pending"].includes(levelValue) ? levelValue : "pending";
                     const value = displayValue ?? (hasScore ? numberText(score, 0) : "AI");
                     return `
                         <div class="route-factor factor-${level}">
-                            <span>${label}</span>
+                            <span>${escapeHtml(label)}</span>
                             <div class="route-meter"><span style="--score:${score}%"></span></div>
-                            <span class="route-value">${value}</span>
+                            <span class="route-value">${escapeHtml(value)}</span>
                         </div>
                     `;
                 };
                 const cards = (payload.candidates || []).map((candidate) => {
                     const isSelected = candidate.selected || (payload.selected && candidate.id === payload.selected);
-                    const color = candidate.color || "#39ff88";
+                    const color = escapeHtml(candidate.riskColor || riskColorForScore(candidate.riskScore, candidate.color || "#39ff88"));
                     const factors = Array.isArray(candidate.factors) ? candidate.factors : [];
                     const factorHtml = factors.map((factor) => {
                         return metricHtml(factor.label, factor.score, factor.value, factor.level);
@@ -1111,20 +1395,23 @@ def render_view_page() -> str:
                     return `
                         <div class="route-card ${isSelected ? "selected" : ""}">
                             <div class="route-head">
-                                <div class="route-name" style="color:${color}">${candidate.name || candidate.id}</div>
-                                <div class="route-chip" style="color:${color}">${candidate.role || candidate.id}</div>
+                                <div class="route-name" style="color:${color}">${escapeHtml(candidate.name || candidate.id)}</div>
+                                <div class="route-chip" style="color:${color}">${escapeHtml(candidate.role || candidate.id)}</div>
                             </div>
-                            <div class="route-summary">${candidate.summary || "-"}</div>
+                            <div class="route-summary">${escapeHtml(candidate.summary || "-")}</div>
                             ${metricHtml("SCORE", candidate.riskScore, candidate.riskLabel || null, candidate.scoreLevel || (isSelected ? "low" : "pending"))}
                             ${factorHtml}
                         </div>
                     `;
                 }).join("");
+                const title = selected
+                    ? `${selected.side || selected.id} ROUTE SELECTED`
+                    : (payload.candidates || []).length ? "ROUTE RISK ASSESSMENT" : "AI DECISION PENDING";
                 return `
                     <div class="route-compare">
                         <div class="route-decision">
-                            <strong>${selected ? `${selected.side || selected.id} ROUTE SELECTED` : "AI DECISION PENDING"}</strong>
-                            ${payload.decisionNote || "Route comparison is waiting for candidate data."}
+                            <strong>${escapeHtml(title)}</strong>
+                            ${escapeHtml(payload.decisionNote || "Route comparison is waiting for candidate data.")}
                         </div>
                         ${cards || '<div class="empty">No route candidates</div>'}
                     </div>
@@ -1136,9 +1423,10 @@ def render_view_page() -> str:
                 const liveView = state?.liveView || {};
                 byId("modeValue").textContent = safe(state?.mode, "monitor").toString().toUpperCase();
                 const yoloValue = byId("yoloValue");
-                const yoloLoaded = yolo.loaded === true;
-                yoloValue.textContent = yolo.error ? "ERROR" : yoloLoaded ? "READY" : "WAIT";
-                setStatusClass(yoloValue, yolo.error ? "status-error" : yoloLoaded ? "status-ok" : "status-warn");
+                const yoloError = yolo.error || yolo.importError || yolo.loadError;
+                const yoloLoaded = yolo.ready === true || yolo.loaded === true;
+                yoloValue.textContent = yoloError ? "ERROR" : yoloLoaded ? "READY" : "WAIT";
+                setStatusClass(yoloValue, yoloError ? "status-error" : yoloLoaded ? "status-ok" : "status-warn");
                 const rosValue = byId("rosValue");
                 const rosReady = !bridge.error && !!bridge.latest;
                 rosValue.textContent = bridge.error ? "ERROR" : rosReady ? "CONNECTED" : "WAITING";
@@ -1148,6 +1436,7 @@ def render_view_page() -> str:
                 const hasFrame = Number(liveView.latestFrameSeq || 0) > 0;
                 statusValue.textContent = lastFetchOk ? (hasFrame ? "LIVE" : "NO FRAME") : "API ERROR";
                 setStatusClass(statusValue, lastFetchOk ? (hasFrame ? "status-ok" : "status-warn") : "status-error");
+                updateFeedStatus(state);
             }
             function updateLeftPanel(state) {
                 const latest = latestBridge(state);
@@ -1160,6 +1449,15 @@ def render_view_page() -> str:
                 }
                 if (activeTab === "ai") {
                     const ai = state?.aiLog || latest.ai_log || latest.llm_log || latest.decision;
+                    const values = Array.isArray(ai) ? ai : ai ? [ai] : [];
+                    byId("leftContent").innerHTML = values.length
+                        ? renderReadouts(values.slice(-8).map((entry, index) => ({
+                            label: `AI ${index + 1}`,
+                            value: typeof entry === "string" ? entry : JSON.stringify(entry)
+                        })))
+                        : '<div class="empty">AI explanation is not connected yet.</div>';
+                    return;
+                    /*
                     const entry = Array.isArray(ai) ? ai[ai.length - 1] : ai;
                     if (!entry) {
                         byId("leftContent").innerHTML = '<div class="empty">AI explanation is not connected yet.</div>';
@@ -1187,6 +1485,7 @@ def render_view_page() -> str:
                         { label: "B 위험요인", value: arr(kr.B) },
                     ]);
                     return;
+                    */
                 }
                 if (activeTab === "recon") {
                     const detections = getDetections(state);
@@ -1203,10 +1502,31 @@ def render_view_page() -> str:
                 const mapSummary = state?.staticMap || {};
                 const heightSummary = mapSummary.heightSummary || staticMap?.heightSummary || {};
                 const surfaceSummary = mapSummary.surfaceSummary || staticMap?.surfaceSummary || {};
-                byId("leftContent").innerHTML = renderReadouts([
+                const windowsRecon = state?.windowsRecon || {};
+                const reconFiles = windowsRecon.files || {};
+                const fileOk = (key) => reconFiles?.[key]?.exists ? "OK" : "MISS";
+                const reconMessages = Array.isArray(windowsRecon.messages) && windowsRecon.messages.length
+                    ? windowsRecon.messages.join(" / ")
+                    : "-";
+                const actionMessage = lastWindowsReconAction
+                    ? `${lastWindowsReconAction.running ? "RUNNING" : lastWindowsReconAction.ok ? "OK" : "CHECK"}: ${lastWindowsReconAction.message || "-"}`
+                    : "-";
+                const actionHtml = `
+                    <div class="recon-actions">
+                        <button class="action-button" type="button" onclick="runWindowsRecon(false)">WIN BUILD</button>
+                        <button class="action-button" type="button" onclick="runWindowsRecon(true)">WIN LLM</button>
+                    </div>
+                `;
+                byId("leftContent").innerHTML = actionHtml + renderReadouts([
+                    { label: "Windows recon", value: windowsRecon.mode ? `${windowsRecon.mode} comparison=${windowsRecon.readyForComparison ? "ready" : "wait"} llm=${windowsRecon.readyForLlm ? "ready" : "wait"}` : "-" },
+                    { label: "Recon files", value: `A=${fileOk("routeA")} B=${fileOk("routeB")} cmp=${fileOk("comparison")} llmIn=${fileOk("routeComparison")} risk=${fileOk("riskResult")} txt=${fileOk("txtReport")}` },
+                    { label: "Recon action", value: actionMessage },
+                    { label: "Recon message", value: reconMessages },
                     { label: "YOLO latest ms", value: `${numberText(yolo.latestYoloMs ?? yolo.latestDetectMs, 1)} ms` },
                     { label: "YOLO returned count", value: safe(yolo.latestReturnedDetectionCount ?? liveView.latestDetectionCount, 0) },
                     { label: "YOLO loaded", value: yolo.loaded === true ? "true" : "false" },
+                    { label: "YOLO status", value: safe(yolo.status, yolo.error || yolo.importError || yolo.loadError ? "error" : "wait") },
+                    { label: "YOLO error", value: safe(yolo.error || yolo.importError || yolo.loadError, "-") },
                     { label: "YOLO model", value: safe(yolo.modelPath, "-") },
                     { label: "Static map", value: mapSummary.loaded ? `${safe(mapSummary.objectCount, 0)} objects` : safe(mapSummary.error || staticMapLoadError, "loading") },
                     { label: "Elevation", value: heightSummary.sampleCount ? `y=${numberText(heightSummary.min, 1)}..${numberText(heightSummary.max, 1)} avg=${numberText(heightSummary.avg, 1)}` : "-" },
@@ -1250,13 +1570,77 @@ def render_view_page() -> str:
                     ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
                     ctx.fill();
                 }
-                ctx.font = "11px Consolas, monospace";
-                ctx.lineWidth = 3;
-                ctx.strokeStyle = "rgba(0, 0, 0, 0.62)";
-                ctx.strokeText(label, point.x + 9, point.y - 9);
-                ctx.fillStyle = color;
-                ctx.fillText(label, point.x + 9, point.y - 9);
+                if (label) {
+                    ctx.font = "10px Consolas, monospace";
+                    const labelX = point.x + 10;
+                    const labelY = point.y - 24;
+                    const labelW = Math.ceil(ctx.measureText(label).width) + 10;
+                    const labelH = 16;
+                    ctx.fillStyle = "rgba(3, 8, 5, 0.72)";
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 1;
+                    ctx.fillRect(labelX, labelY, labelW, labelH);
+                    ctx.strokeRect(labelX + 0.5, labelY + 0.5, labelW - 1, labelH - 1);
+                    ctx.fillStyle = color;
+                    ctx.fillText(label, labelX + 5, labelY + 11);
+                }
                 ctx.restore();
+            }
+            function drawMapTag(ctx, text, point, color, width, height) {
+                if (!point || !text) return;
+                ctx.save();
+                ctx.font = "10px Consolas, monospace";
+                const labelW = Math.ceil(ctx.measureText(text).width) + 10;
+                const labelH = 16;
+                const x = Math.max(4, Math.min(width - labelW - 4, point.x + 8));
+                const y = Math.max(4, Math.min(height - labelH - 4, point.y - 20));
+                ctx.fillStyle = "rgba(3, 8, 5, 0.74)";
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1;
+                ctx.fillRect(x, y, labelW, labelH);
+                ctx.strokeRect(x + 0.5, y + 0.5, labelW - 1, labelH - 1);
+                ctx.fillStyle = color;
+                ctx.fillText(text, x + 5, y + 11);
+                ctx.restore();
+            }
+            function drawRouteCandidateOverlay(ctx, mapper, state, width, height) {
+                const payload = routeCandidateData(state);
+                const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
+                if (!mapper || !candidates.length) return;
+                const ordered = [...candidates].sort((a, b) => Number(a.selected || a.id === payload.selected) - Number(b.selected || b.id === payload.selected));
+                for (const candidate of ordered) {
+                    const isSelected = candidate.selected || (payload.selected && candidate.id === payload.selected);
+                    const routePoints = Array.isArray(candidate.points)
+                        ? candidate.points.map(readPoint).filter(Boolean)
+                        : [];
+                    if (routePoints.length < 2) continue;
+                    const points = routePoints.map(mapper);
+                    const color = candidate.color || (isSelected ? "#39ff88" : "#44d9ff");
+                    ctx.save();
+                    ctx.lineJoin = "round";
+                    ctx.lineCap = "round";
+                    ctx.globalAlpha = isSelected ? 0.92 : 0.66;
+                    ctx.strokeStyle = "rgba(0, 0, 0, 0.78)";
+                    ctx.lineWidth = isSelected ? 6.5 : 5;
+                    ctx.beginPath();
+                    points.forEach((p, index) => index === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+                    ctx.stroke();
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = isSelected ? 3.2 : 2.2;
+                    ctx.setLineDash(isSelected ? [] : [7, 5]);
+                    ctx.beginPath();
+                    points.forEach((p, index) => index === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+                    ctx.stroke();
+                    ctx.restore();
+                    const labelPoint = points[Math.max(1, Math.floor(points.length * 0.45))];
+                    const label = isSelected ? `${candidate.side || candidate.id} SELECTED` : `${candidate.side || candidate.id} ${candidate.id || ""}`.trim();
+                    drawMapTag(ctx, label, labelPoint, color, width, height);
+                }
+                const selected = selectedRouteCandidate(payload);
+                const start = readPoint(payload.start || selected?.points?.[0]);
+                const destination = readPoint(payload.destination || selected?.points?.[selected?.points?.length - 1]);
+                drawSymbol(ctx, start ? mapper(start) : null, "#d8ffe9", "", "circle");
+                drawSymbol(ctx, destination ? mapper(destination) : null, "#ffca4f", "", "diamond");
             }
             function drawStaticObject(ctx, point, category) {
                 if (!point) return;
@@ -1403,13 +1787,9 @@ def render_view_page() -> str:
                     const obstacles = extractArray(latest.obstacles).map(readPoint).filter(Boolean);
                     const route = extractArray(latest.route || latest.path || latest.planned_route).map(readPoint).filter(Boolean);
                     const routeCandidates = Array.isArray(state?.routeCandidates?.candidates) ? state.routeCandidates.candidates : [];
-                    const candidateRoutes = routeCandidates.map((candidate) => ({
-                        id: candidate.id,
-                        selected: candidate.selected || (state?.routeCandidates?.selected && candidate.id === state.routeCandidates.selected),
-                        color: candidate.color || "#39ff88",
-                        name: candidate.name || candidate.id,
-                        points: Array.isArray(candidate.points) ? candidate.points.map(readPoint).filter(Boolean) : []
-                    })).filter((candidate) => candidate.points.length >= 2);
+                    const routeCandidatePoints = routeCandidates.flatMap((candidate) =>
+                        Array.isArray(candidate.points) ? candidate.points.map(readPoint).filter(Boolean) : []
+                    );
                     const detections = getDetections(state);
                     const imageInfo = state?.liveView?.latestDetectionMetadata?.image || {};
                     const frameShape = state?.liveView?.latestFrameShape || state?.yolo?.latestFrameShape || [];
@@ -1428,25 +1808,8 @@ def render_view_page() -> str:
                             confidence: Number(det.confidence || 0)
                         };
                     }).filter(Boolean);
-                    const candidatePoints = candidateRoutes.flatMap((candidate) => candidate.points);
-                    const mapPoint = staticPoint || canvasPointMapper([player, enemy, destination, ...obstacles, ...route, ...candidatePoints].filter(Boolean), w, h);
-                    for (const candidate of candidateRoutes) {
-                        ctx.save();
-                        ctx.strokeStyle = candidate.color;
-                        ctx.lineWidth = candidate.selected ? 3 : 1.6;
-                        ctx.setLineDash(candidate.selected ? [] : [6, 5]);
-                        ctx.beginPath();
-                        candidate.points.map(mapPoint).forEach((p, index) => index === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
-                        ctx.stroke();
-                        const labelPoint = mapPoint(candidate.points[Math.max(1, Math.floor(candidate.points.length * 0.55))]);
-                        ctx.setLineDash([]);
-                        ctx.fillStyle = "rgba(3, 8, 5, 0.86)";
-                        ctx.fillRect(labelPoint.x + 5, labelPoint.y - 14, candidate.selected ? 92 : 58, 18);
-                        ctx.fillStyle = candidate.color;
-                        ctx.font = "11px Consolas, monospace";
-                        ctx.fillText(candidate.selected ? `${candidate.id} SELECTED` : candidate.name, labelPoint.x + 9, labelPoint.y - 2);
-                        ctx.restore();
-                    }
+                    const mapPoint = staticPoint || canvasPointMapper([player, enemy, destination, ...obstacles, ...route, ...routeCandidatePoints].filter(Boolean), w, h);
+                    drawRouteCandidateOverlay(ctx, mapPoint, state, w, h);
                     if (activeMapTab === "ros" && route.length >= 2) {
                         ctx.strokeStyle = "#ffca4f";
                         ctx.lineWidth = 2;
@@ -1525,6 +1888,7 @@ def render_view_page() -> str:
                     updateLeftPanel(latestState);
                     drawMap(latestState);
                     updateBottomStatus(latestState);
+                    drawFeedOverlay(latestState);
                 } catch (err) {
                     lastFetchOk = false;
                     const fallback = latestState || {};
@@ -1534,6 +1898,7 @@ def render_view_page() -> str:
                     updateLeftPanel(fallback);
                     drawMap(fallback);
                     updateBottomStatus(fallback);
+                    drawFeedOverlay(fallback);
                 }
             }
             async function fetchStaticMap() {
@@ -1579,7 +1944,10 @@ def render_view_page() -> str:
                 };
                 img.src = `${info.url}?t=${Date.now()}`;
             }
-            window.addEventListener("resize", () => drawMap(latestState || {}));
+            window.addEventListener("resize", () => {
+                drawMap(latestState || {});
+                drawFeedOverlay(latestState || {});
+            });
             updateMapLegend();
             if (new URLSearchParams(window.location.search).get("map") === "ros") setMapTab("ros");
             fetchStaticMap();
@@ -1602,7 +1970,7 @@ def generate_video_stream(web_fps: float = 20.0, jpeg_quality: int = 80):
             metadata = deepcopy(_latest_detection_metadata)
         if frame is None:
             frame = _blank_frame()
-        else:
+        elif not _LIVE_VIEW_BROWSER_OVERLAY:
             frame = _draw_detections(frame, detections, metadata)
         if cv2 is not None:
             ok, buffer = cv2.imencode(".jpg", frame, encode_params)
@@ -1635,4 +2003,5 @@ def debug_state() -> Dict[str, Any]:
             "latestDetectionAgeMs": None if det_age is None else det_age * 1000.0,
             "latestDetectionMetadata": deepcopy(_latest_detection_metadata),
             "latestError": _latest_error,
+            "rawStream": _LIVE_VIEW_BROWSER_OVERLAY,
         }

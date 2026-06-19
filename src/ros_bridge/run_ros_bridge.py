@@ -24,7 +24,11 @@ def _set_direct_run_defaults() -> None:
     src_root = Path(__file__).resolve().parents[1]
     yolo_engine_path = src_root / "vision" / "models" / "best_final.engine"
     yolo_pt_path = src_root / "vision" / "models" / "best_final.pt"
-    yolo_model_path = yolo_engine_path if yolo_engine_path.exists() else yolo_pt_path
+    prefer_engine = os.environ.get("TANK_YOLO_PREFER_ENGINE", "false").strip().lower() in {"1", "true", "yes", "y", "on"}
+    if prefer_engine and yolo_engine_path.exists():
+        yolo_model_path = yolo_engine_path
+    else:
+        yolo_model_path = yolo_pt_path if yolo_pt_path.exists() else yolo_engine_path
     yolo_config_path = src_root / "vision" / "config" / "yolo_detection.yaml"
 
     if yolo_model_path.exists():

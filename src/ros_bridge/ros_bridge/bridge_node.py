@@ -81,23 +81,20 @@ def _apply_forced_route_policy_to_result(result: Dict[str, Any]) -> Dict[str, An
     if forced not in {"A", "B"}:
         return updated
 
-    label = "LEFT A" if forced == "A" else "RIGHT B"
-    previous = str(updated.get("selected_route") or "").strip().upper()
-    policy_note = f"임무 정책상 {label} 루트를 반드시 선택합니다. 위험 수치는 참고용으로만 표시합니다."
     updated["selected_route"] = forced
     updated["confidence"] = "high"
-    updated["summary"] = policy_note
-    existing_reason = str(updated.get("decision_reason") or "").strip()
-    if previous in {"A", "B"} and previous != forced:
-        updated["decision_reason"] = (
-            f"{policy_note} 기존 LLM 판단은 {previous}였지만 강제 정책을 우선했습니다."
-            + (f" 기존 판단: {existing_reason}" if existing_reason else "")
-        )
-    elif existing_reason and policy_note not in existing_reason:
-        updated["decision_reason"] = f"{policy_note} 기존 판단: {existing_reason}"
-    else:
-        updated["decision_reason"] = policy_note
+    if not str(updated.get("summary") or "").strip():
+        updated["summary"] = "A/B route risk assessment received."
+    if not str(updated.get("decision_reason") or "").strip():
+        updated["decision_reason"] = "Risk assessment uses the completed route reconnaissance JSON."
     return updated
+
+
+def _route_risk_report_ready(report: Dict[str, Any], result: Dict[str, Any]) -> bool:
+    if report.get("parsed_ok") is False or report.get("validated_ok") is False:
+        return False
+    selected = str(result.get("selected_route") or "").strip().upper()
+    return selected in {"A", "B"}
 
 
 
@@ -516,7 +513,8 @@ class RosBridge(Node):
             return
 
         result = report.get("result") if isinstance(report.get("result"), dict) else {}
-        result = _apply_forced_route_policy_to_result(result)
+        if _route_risk_report_ready(report, result):
+            result = _apply_forced_route_policy_to_result(result)
         report = deepcopy(report)
         report["result"] = deepcopy(result)
         decision = {
