@@ -24,6 +24,7 @@
 # - Flask 요청 body, ROS2로 넘길 payload, status 응답처럼 dict 구조를 명시할 때 사용한다.
 from typing import Any, Dict, Optional
 
+import ipaddress
 import json
 import os
 import sys
@@ -1504,40 +1505,70 @@ def _load_route_candidates_payload(route_risk_report: Optional[Dict[str, Any]] =
 ############################################################
 # 4-1. Client IP allowlist
 ############################################################
-# 시뮬레이터가 실행되는 Windows PC IP만 Flask endpoint 접근을 허용한다.
-# 기본 허용 IP:
-# - 127.0.0.1 / ::1     : Ubuntu 로컬 테스트용
-# - 192.168.0.82        : Windows Tank Simulator PC IP
+# 시뮬레이터(Windows PC)가 보내는 HTTP 요청의 출발 IP만 허용하는 화이트리스트다.
+# ★ 허용 IP는 여기(코드)가 아니라 .env의 TANK_ALLOWED_CLIENTS에서 설정한다(단일 출처).
+#   여기 DEFAULT는 .env가 비어있을 때의 localhost 폴백일 뿐이다.
 #
-# Windows PC IP가 바뀌면 아래 DEFAULT_ALLOWED_CLIENTS의 IP를 바꾸거나,
-# 실행 시 환경변수로 지정한다.
-#
-# 예:
-# TANK_ALLOWED_CLIENTS=127.0.0.1,192.168.0.82 \
-# TANK_MODE=auto ros2 run ros_bridge ros_bridge
+# 항목 형식(쉼표 구분):
+# - 정확 IP    : 192.168.0.30
+# - 서브넷 와일드카드 : 192.168.0.*    (그 대역 누구나 → 시뮬 IP가 DHCP로 바뀌어도 그대로)
+# - CIDR       : 192.168.0.0/24
+# loopback(127.0.0.1/::1)은 항상 허용된다(로컬 도구/health 체크용).
 ############################################################
 
-DEFAULT_ALLOWED_CLIENTS = {
-    "127.0.0.1",
-    "::1",
-    # "192.168.0.44",  # Windows / Tank Simulator PC IP
-    "192.168.0.18",  # Windows / Tank Simulator PC IP
-}
+# .env가 비어있을 때만 쓰는 폴백(로컬). 실제 시뮬 IP/서브넷은 .env에서.
+DEFAULT_ALLOWED_CLIENTS = "127.0.0.1,::1"
 
-_allowed_clients_env = os.environ.get("TANK_ALLOWED_CLIENTS", "").strip()
-if _allowed_clients_env:
-    ALLOWED_CLIENTS = {
-        ip.strip()
-        for ip in _allowed_clients_env.split(",")
-        if ip.strip()
-    }
-else:
-    ALLOWED_CLIENTS = DEFAULT_ALLOWED_CLIENTS
+
+def _parse_allowed(spec: str):
+    """TANK_ALLOWED_CLIENTS 문자열을 (정확 IP set, 와일드카드 prefix list, CIDR network list)로 파싱."""
+    exact = {"127.0.0.1", "::1"}  # loopback은 항상 허용
+    wildcards = []
+    cidrs = []
+    for raw in (spec or "").split(","):
+        entry = raw.strip()
+        if not entry:
+            continue
+        if "/" in entry:
+            try:
+                cidrs.append(ipaddress.ip_network(entry, strict=False))
+                continue
+            except ValueError:
+                pass
+        if "*" in entry:
+            wildcards.append(entry.split("*", 1)[0])  # '*' 앞 prefix로 매칭
+            continue
+        exact.add(entry)
+    return exact, wildcards, cidrs
+
+
+_allowed_spec = os.environ.get("TANK_ALLOWED_CLIENTS", "").strip() or DEFAULT_ALLOWED_CLIENTS
+_ALLOW_EXACT, _ALLOW_WILDCARDS, _ALLOW_CIDRS = _parse_allowed(_allowed_spec)
+
+
+def _client_allowed(client_ip: str) -> bool:
+    """요청 IP가 정확목록 ∪ 와일드카드 ∪ CIDR 중 하나라도 맞으면 허용."""
+    if not client_ip:
+        return False
+    if client_ip in _ALLOW_EXACT:
+        return True
+    for prefix in _ALLOW_WILDCARDS:
+        if client_ip.startswith(prefix):
+            return True
+    if _ALLOW_CIDRS:
+        try:
+            addr = ipaddress.ip_address(client_ip)
+            for net in _ALLOW_CIDRS:
+                if addr in net:
+                    return True
+        except ValueError:
+            pass
+    return False
 
 
 @app.before_request
 def block_other_clients():
-    """등록된 Windows 시뮬레이터 PC 또는 localhost 요청만 허용한다."""
+    """등록된 시뮬레이터 PC IP(.env TANK_ALLOWED_CLIENTS, 정확/와일드카드/CIDR) 또는 localhost만 허용."""
 
     client_ip = request.headers.get("X-Forwarded-For", request.remote_addr)
     if client_ip and "," in client_ip:
@@ -1546,8 +1577,8 @@ def block_other_clients():
     print(f"[REQ] {client_ip} {request.method} {request.path}")
     _fallback_count(request.path)
 
-    if client_ip not in ALLOWED_CLIENTS:
-        print(f"[BLOCKED OTHER CLIENT] {client_ip}; allowed={sorted(ALLOWED_CLIENTS)}")
+    if not _client_allowed(client_ip):
+        print(f"[BLOCKED OTHER CLIENT] {client_ip}; allowed_spec={_allowed_spec}")
         abort(403)
 
 
