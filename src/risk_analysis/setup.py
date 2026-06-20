@@ -17,7 +17,6 @@ setup(
     maintainer_email='ldfha@example.com',
     description='Route risk analysis with local LLM',
     license='TODO',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'route_risk_node = risk_analysis.route_risk_node:main',

@@ -132,7 +132,7 @@ HOST = os.environ.get("TANK_BRIDGE_HOST", "0.0.0.0")
 
 # PORT는 Tank Challenge 시뮬레이터가 접속할 Flask endpoint 포트다.
 # 시뮬레이터 메뉴의 Request Port 또는 Endpoint Port와 맞춰야 한다.
-PORT = int(os.environ.get("TANK_BRIDGE_PORT", "5000"))
+PORT = int(os.environ.get("TANK_BRIDGE_PORT", "5098"))
 
 
 ############################################################
