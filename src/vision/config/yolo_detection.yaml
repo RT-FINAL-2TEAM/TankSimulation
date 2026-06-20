@@ -6,8 +6,8 @@ model:
   iou: 0.70
   max_det: 20
   max_return: 5
-  model_confidence: 0.50
-  fallback_model_confidence: 0.50
+  model_confidence: 0.10
+  fallback_model_confidence: 0.05
   enable_low_conf_fallback: false
   enable_cache: true
   min_interval_sec: 0.12
@@ -24,35 +24,42 @@ tracking:
 classes:
   canonical:
     - car
-    - person
     - tank
     - rock
     - house
+    - tent
   fixed_ids:
     car: 0
-    person: 1
     tank: 2
     rock: 3
     house: 4
+    tent: 5
   aliases:
+    Tank: tank
     car: car
-    person: person
     tank: tank
     rock: rock
     house: house
+    tent: tent
+    wall: wall
   ignored:
+    - wall
     - person
   default_box_color: '#00FF00'
   colors:
     car: '#FF66CC'
-    person: '#00FFFF'
     tank: '#FF0000'
     rock: '#FFA500'
     house: '#AA66FF'
-  default_confidence: 0.50
+    wall: '#00FF00'
+    tent: '#FFFF00'
+  default_confidence: 0.20
   confidence_thresholds:
-    tank: 0.50
-    person: 0.50
+    tank: 0.25
+  close_wall:
+    confidence: 0.12
+    area_ratio: 0.08
+    min_height_ratio: 0.35
 
 bbox_distance:
   enabled: false

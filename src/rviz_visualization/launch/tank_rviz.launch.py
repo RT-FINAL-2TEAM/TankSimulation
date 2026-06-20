@@ -68,11 +68,21 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
-                        # gd 노드를 legacy 단일입력 모드로(기존 rviz copy와 동일 동작 보존).
-                        "use_preclassified_lidar": False,
+                        # lidar_processor_node가 이미 분리한 지면/장애물 결과를 그대로 사용한다.
+                        # 언덕 지면을 all_detected_points_map에서 다시 z-filter로 잘라내지 않도록 한다.
+                        "use_preclassified_lidar": True,
+                        "terrain_input_topic": "/tank/sensor/lidar/terrain_points_map",
+                        "obstacle_input_topic": "/tank/sensor/lidar/detected_points_map",
                         "input_topic": "/tank/sensor/lidar/all_detected_points_map",
                         "map_frame": "tank_map",
                         "auto_finalize_after_idle_sec": 0.0,
+                        "wireframe_max_height_gap": 3.0,
+                        "save_dir": "~/tankcc/tank_terrain_maps",
+                        "save_filename": "terrain_map_latest.npz",
+                        "save_csv": False,
+                        "save_legacy_split_files": False,
+                        "load_saved_map_on_start": True,
+                        "recording_enabled_on_start": True,
                     }
                 ],
             ),

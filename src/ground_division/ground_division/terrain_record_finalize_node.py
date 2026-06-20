@@ -32,6 +32,7 @@ ground_division/terrain_record_finalize_node.py
 - /tank/terrain/reset_map     (std_srvs/Trigger)
 """
 
+import json
 import math
 import os
 import time
@@ -55,7 +56,34 @@ except Exception:  # pragma: no cover - optional dependency
     CSF = None
 
 
-from tank_common.pointcloud import pointcloud2_to_xyz_array
+def pointcloud2_to_xyz_array(msg: PointCloud2) -> np.ndarray:
+    """Return PointCloud2 XYZ fields as a contiguous float32 (N, 3) array.
+
+    ROS2 Humble/newer sensor_msgs_py provides read_points_numpy(), which avoids
+    building Python dict/list objects for every LiDAR hit.  The fallback keeps the
+    node usable on older sensor_msgs_py versions.
+    """
+    try:
+        arr = point_cloud2.read_points_numpy(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+    except Exception:
+        pts = point_cloud2.read_points(
+            msg, field_names=("x", "y", "z"), skip_nans=True
+        )
+        if isinstance(pts, np.ndarray):
+            arr = pts
+        else:
+            arr = np.asarray(list(pts), dtype=np.float32)
+    if arr is None:
+        return np.empty((0, 3), dtype=np.float32)
+    arr = np.asarray(arr)
+    if arr.dtype.fields:
+        arr = np.column_stack((arr["x"], arr["y"], arr["z"]))
+    arr = np.asarray(arr, dtype=np.float32)
+    if arr.size == 0:
+        return np.empty((0, 3), dtype=np.float32)
+    return np.ascontiguousarray(arr.reshape(-1, 3), dtype=np.float32)
 
 
 class TerrainRecordFinalizeNode(Node):
@@ -65,7 +93,7 @@ class TerrainRecordFinalizeNode(Node):
         super().__init__("terrain_record_finalize_node")
 
         # -----------------------------
-        # 파라미터
+        # Parameters
         # -----------------------------
         # 기본은 lidar_processor_node가 이미 분리한 결과를 그대로 사용한다.
         # use_preclassified_lidar=False로 두면 예전처럼 all_detected_points_map을 다시 분리한다.
@@ -81,9 +109,16 @@ class TerrainRecordFinalizeNode(Node):
         self.declare_parameter("min_points_to_finalize", 30)
         self.declare_parameter("max_points_before_random_crop", 300000)
         self.declare_parameter("publish_period_sec", 1.0)
-        # 저장 기본 경로를 프로젝트 안으로(launch 없이 ros2 run으로 직접 띄워도 여기로).
-        self.declare_parameter("save_dir", "~/tank_project/recon_reports/terrain_maps")
+        self.declare_parameter("save_dir", "~/tankcc/tank_terrain_maps")
+        # finalize 시 기본 저장물은 아래 단일 NPZ 파일 하나뿐이다.
+        # NPZ 내부에 accumulated/ground/non_ground/metadata_json을 모두 넣어
+        # timestamp별 NPY/CSV/metadata 파일이 계속 쌓이지 않게 한다.
+        self.declare_parameter("save_filename", "terrain_map_latest.npz")
+        self.declare_parameter("saved_map_file", "")
         self.declare_parameter("save_csv", False)
+        self.declare_parameter("save_legacy_split_files", False)
+        self.declare_parameter("load_saved_map_on_start", False)
+        self.declare_parameter("recording_enabled_on_start", True)
         self.declare_parameter("auto_finalize_after_idle_sec", 0.0)  # 0이면 자동 finalize 끔
         self.declare_parameter("grid_cell_size", 0.5)
         self.declare_parameter("max_elevation_cells", 20000)
@@ -113,7 +148,14 @@ class TerrainRecordFinalizeNode(Node):
         self.max_points_before_random_crop = int(self.get_parameter("max_points_before_random_crop").value)
         self.publish_period_sec = float(self.get_parameter("publish_period_sec").value)
         self.save_dir = Path(os.path.expanduser(str(self.get_parameter("save_dir").value)))
+        self.save_filename = str(self.get_parameter("save_filename").value).strip() or "terrain_map_latest.npz"
+        if not self.save_filename.endswith(".npz"):
+            self.save_filename += ".npz"
+        self.saved_map_file = str(self.get_parameter("saved_map_file").value).strip()
         self.save_csv = bool(self.get_parameter("save_csv").value)
+        self.save_legacy_split_files = bool(self.get_parameter("save_legacy_split_files").value)
+        self.load_saved_map_on_start = bool(self.get_parameter("load_saved_map_on_start").value)
+        self.recording_enabled_on_start = bool(self.get_parameter("recording_enabled_on_start").value)
         self.auto_finalize_after_idle_sec = float(self.get_parameter("auto_finalize_after_idle_sec").value)
         self.grid_cell_size = float(self.get_parameter("grid_cell_size").value)
         self.max_elevation_cells = int(self.get_parameter("max_elevation_cells").value)
@@ -131,7 +173,7 @@ class TerrainRecordFinalizeNode(Node):
         self.save_dir.mkdir(parents=True, exist_ok=True)
 
         # -----------------------------
-        # 내부 상태
+        # Internal state
         # -----------------------------
         # _recording_points는 최종 ground 후보, 즉 terrain_points_map 누적분이다.
         # _recording_obstacle_points는 detected_points_map 누적분이며 final_non_ground_points로 저장한다.
@@ -148,11 +190,11 @@ class TerrainRecordFinalizeNode(Node):
         self._final_non_ground: Optional[np.ndarray] = None
         self._final_markers: Optional[MarkerArray] = None
         self._final_wireframe_markers: Optional[MarkerArray] = None
-        self._recording_enable = True
+        self._recording_enable = self.recording_enabled_on_start
         self._last_summary = "아직 finalize되지 않았습니다."
 
         # -----------------------------
-        # ROS 인터페이스
+        # ROS interfaces
         # -----------------------------
         # JSON(String) 대신 PointCloud2로 직접 구독.
         # 기본 모드: lidar_processor_node의 분리 결과를 그대로 기록한다.
@@ -184,6 +226,15 @@ class TerrainRecordFinalizeNode(Node):
         self.create_timer(self.publish_period_sec, self.on_publish_timer)
         self.create_timer(1.0, self.on_watchdog_timer)
 
+        if self.load_saved_map_on_start:
+            ok, msg = self.load_saved_outputs(self.current_map_file())
+            if ok:
+                self.get_logger().info(msg)
+                self.publish_final_outputs()
+            else:
+                self.get_logger().warn(msg)
+
+        mode_text = "recording enabled" if self._recording_enable else "recording disabled"
         self.get_logger().info(
             "terrain_record_finalize_node started. "
             + (
@@ -191,11 +242,12 @@ class TerrainRecordFinalizeNode(Node):
                 if self.use_preclassified_lidar
                 else f"Recording legacy all-hit input={self.input_topic}. "
             )
+            + f"Mode={mode_text}, save_file={self.current_map_file()}. "
             + "Call /tank/terrain/finalize_map when driving is finished."
         )
 
     # ------------------------------------------------------------------
-    # 입력 파싱 (PointCloud2에 최적화)
+    # Input parsing (Optimized for PointCloud2)
     # ------------------------------------------------------------------
     def _record_pc2_points(self, msg: PointCloud2, target: str) -> None:
         """바이너리 PointCloud2를 NumPy로 변환해 terrain 또는 obstacle 누적 버퍼에 기록한다."""
@@ -238,11 +290,11 @@ class TerrainRecordFinalizeNode(Node):
         self._record_pc2_points(msg, "obstacle")
 
     def on_lidar_pc2(self, msg: PointCloud2) -> None:
-        """레거시 모드: all_detected_points_map을 기록한 뒤 finalize 시 다시 분리한다."""
+        """Legacy mode: all_detected_points_map을 기록한 뒤 finalize 시 다시 분리한다."""
         self._record_pc2_points(msg, "terrain")
 
     # ------------------------------------------------------------------
-    # 서비스
+    # Services
     # ------------------------------------------------------------------
     def on_finalize_service(self, request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
         ok, summary = self.finalize_map()
@@ -287,7 +339,7 @@ class TerrainRecordFinalizeNode(Node):
             self.finalize_map()
 
     # ------------------------------------------------------------------
-    # 최종 지도 생성
+    # Final map generation
     # ------------------------------------------------------------------
     def finalize_map(self) -> Tuple[bool, str]:
         if len(self._recording_points) < self.min_points_to_finalize:
@@ -352,9 +404,8 @@ class TerrainRecordFinalizeNode(Node):
         self._finalized = True
         self._recording_enable = False
 
-        stamp = time.strftime("%Y%m%d_%H%M%S")
-        out_prefix = self.save_dir / f"terrain_map_{stamp}"
-        self.save_outputs(out_prefix, accumulated, ground, non_ground, method)
+        out_file = self.current_map_file()
+        self.save_outputs(out_file, accumulated, ground, non_ground, method)
 
         summary = (
             f"finalize 완료: frames={self._received_frames}, "
@@ -364,7 +415,7 @@ class TerrainRecordFinalizeNode(Node):
             f"stored_obstacle={len(self._recording_obstacle_points)}, "
             f"voxel_points={accumulated.shape[0]}, "
             f"ground={ground.shape[0]}, non_ground={non_ground.shape[0]}, "
-            f"method={method}, save_prefix={out_prefix}"
+            f"method={method}, save_file={out_file}"
         )
         self._last_summary = summary
         self.get_logger().info(summary)
@@ -446,7 +497,7 @@ class TerrainRecordFinalizeNode(Node):
         return points[mask], points[~mask], "fallback_z_filter"
 
     # ------------------------------------------------------------------
-    # 발행 / 시각화
+    # Publishing / visualization
     # ------------------------------------------------------------------
     def on_publish_timer(self) -> None:
         if self._finalized:
@@ -628,30 +679,36 @@ class TerrainRecordFinalizeNode(Node):
         return marker
 
     # ------------------------------------------------------------------
-    # 저장
+    # Saving
     # ------------------------------------------------------------------
+    def current_map_file(self) -> Path:
+        """저장/로드에 사용할 단일 terrain map 파일 경로를 반환한다."""
+        if self.saved_map_file:
+            path = Path(os.path.expanduser(self.saved_map_file))
+        else:
+            path = self.save_dir / self.save_filename
+        if path.suffix != ".npz":
+            path = path.with_suffix(".npz")
+        return path
+
     def save_outputs(
         self,
-        out_prefix: Path,
+        out_file: Path,
         accumulated: np.ndarray,
         ground: np.ndarray,
         non_ground: np.ndarray,
         method: str,
     ) -> None:
-        import json # 메타 저장용 지역 import
+        """최종 지형 결과를 단일 NPZ 파일 하나로 저장한다.
 
-        np.save(str(out_prefix) + "_accumulated.npy", accumulated)
-        np.save(str(out_prefix) + "_ground.npy", ground)
-        np.save(str(out_prefix) + "_non_ground.npy", non_ground)
+        기본 설정에서는 finalize를 여러 번 호출해도
+        ~/tankcc/tank_terrain_maps/terrain_map_latest.npz 하나만 계속 덮어쓴다.
+        """
+        out_file.parent.mkdir(parents=True, exist_ok=True)
 
-        if self.save_csv:
-            np.savetxt(str(out_prefix) + "_accumulated.csv", accumulated, delimiter=",", header="x,y,z", comments="")
-            np.savetxt(str(out_prefix) + "_ground.csv", ground, delimiter=",", header="x,y,z", comments="")
-            np.savetxt(str(out_prefix) + "_non_ground.csv", non_ground, delimiter=",", header="x,y,z", comments="")
-
-        import time # 지역 import
         meta = {
             "created_wall_time": time.time(),
+            "created_local_time": time.strftime("%Y-%m-%d %H:%M:%S"),
             "map_frame": self.map_frame,
             "use_preclassified_lidar": self.use_preclassified_lidar,
             "input_topic": self.input_topic,
@@ -669,9 +726,83 @@ class TerrainRecordFinalizeNode(Node):
             "non_ground_points": int(non_ground.shape[0]),
             "ground_filter_method": method,
             "grid_cell_size": self.grid_cell_size,
+            "file_format": "tank_terrain_map_npz_v1",
         }
-        with open(str(out_prefix) + "_metadata.json", "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
+        metadata_json = json.dumps(meta, ensure_ascii=False)
+
+        # 단일 핵심 파일. arrays + metadata_json을 모두 내부에 저장한다.
+        np.savez_compressed(
+            str(out_file),
+            accumulated=accumulated.astype(np.float32),
+            ground=ground.astype(np.float32),
+            non_ground=non_ground.astype(np.float32),
+            metadata_json=np.asarray(metadata_json),
+        )
+
+        # 디버그/외부 분석이 필요할 때만 켜는 선택 기능. 기본 False라 파일이 늘어나지 않는다.
+        if self.save_legacy_split_files:
+            out_prefix = out_file.with_suffix("")
+            np.save(str(out_prefix) + "_accumulated.npy", accumulated)
+            np.save(str(out_prefix) + "_ground.npy", ground)
+            np.save(str(out_prefix) + "_non_ground.npy", non_ground)
+            with open(str(out_prefix) + "_metadata.json", "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+
+        if self.save_csv:
+            out_prefix = out_file.with_suffix("")
+            np.savetxt(str(out_prefix) + "_accumulated.csv", accumulated, delimiter=",", header="x,y,z", comments="")
+            np.savetxt(str(out_prefix) + "_ground.csv", ground, delimiter=",", header="x,y,z", comments="")
+            np.savetxt(str(out_prefix) + "_non_ground.csv", non_ground, delimiter=",", header="x,y,z", comments="")
+
+    def load_saved_outputs(self, in_file: Path) -> Tuple[bool, str]:
+        """단일 NPZ terrain map을 읽어 RViz publish용 내부 상태로 복원한다."""
+        if not in_file.exists():
+            return False, f"저장된 terrain map 파일이 없습니다: {in_file}"
+
+        try:
+            with np.load(str(in_file), allow_pickle=False) as data:
+                if "ground" not in data.files:
+                    return False, f"terrain map에 ground 배열이 없습니다: {in_file}"
+                ground = np.asarray(data["ground"], dtype=np.float32).reshape(-1, 3)
+                non_ground = (
+                    np.asarray(data["non_ground"], dtype=np.float32).reshape(-1, 3)
+                    if "non_ground" in data.files
+                    else np.empty((0, 3), dtype=np.float32)
+                )
+                if "accumulated" in data.files:
+                    accumulated = np.asarray(data["accumulated"], dtype=np.float32).reshape(-1, 3)
+                elif non_ground.shape[0] > 0:
+                    accumulated = np.vstack([ground, non_ground]).astype(np.float32)
+                else:
+                    accumulated = ground.astype(np.float32)
+
+                meta: Dict[str, Any] = {}
+                if "metadata_json" in data.files:
+                    meta_value = data["metadata_json"]
+                    meta_text = str(meta_value.item() if meta_value.shape == () else meta_value[0])
+                    try:
+                        meta = json.loads(meta_text)
+                    except Exception:
+                        meta = {"metadata_json_parse_error": meta_text[:200]}
+        except Exception as exc:
+            return False, f"terrain map 로드 실패: {in_file} ({exc})"
+
+        saved_frame = str(meta.get("map_frame", self.map_frame)) if meta else self.map_frame
+        if saved_frame:
+            self.map_frame = saved_frame
+
+        self._final_accumulated = accumulated
+        self._final_ground = ground
+        self._final_non_ground = non_ground
+        self._final_markers = self.make_elevation_markers(ground)
+        self._final_wireframe_markers = self.make_wireframe_markers(ground)
+        self._finalized = True
+        self._last_summary = (
+            f"저장 terrain map 로드 완료: file={in_file}, "
+            f"accumulated={accumulated.shape[0]}, ground={ground.shape[0]}, "
+            f"non_ground={non_ground.shape[0]}, frame={self.map_frame}"
+        )
+        return True, self._last_summary
 
 
 def main(args: Optional[List[str]] = None) -> None:

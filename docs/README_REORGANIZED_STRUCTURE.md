@@ -115,7 +115,7 @@ control/tank_controller_node
 ### 4. RViz 실행
 
 ```bash
-ros2 launch rviz_visualization tank_recon_map_rviz.launch.py
+ros2 launch rviz_visualization tank_rviz.launch.py   # (구 tank_recon_map_rviz.launch.py는 존재하지 않음)
 ```
 
 ## LiDAR 책임 정리

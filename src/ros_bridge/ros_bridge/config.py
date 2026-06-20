@@ -168,6 +168,18 @@ AUTO_FALLBACK = os.environ.get("TANK_AUTO_FALLBACK", "stop").strip().lower()
 if AUTO_FALLBACK not in ("neutral", "stop"):
     AUTO_FALLBACK = "stop"
 
+# EPISODE_CONTROL_ENABLED는 ROS가 시뮬 에피소드 제어(reset/pause/start)를 /info 응답의
+# control 필드로 하달하도록 허용할지 결정한다. 강화학습 학습 루프(에피소드 리셋)의 전제다.
+#
+# false:
+# - 기본값. /info 응답 control은 항상 ""(기존 동작 그대로, 시뮬에 아무 제어도 안 보냄).
+#
+# true:
+# - /tank/episode/control 토픽으로 받은 1회성 제어값(reset/pause/start)을 다음 /info 응답
+#   control 필드에 실어 시뮬로 보낸다. (공식 API: /info 응답 control 범위 = pause/reset)
+# - 주의: 실제 Unity 빌드가 control:reset을 honor하는지는 라이브 검증 필요(Step 0).
+EPISODE_CONTROL_ENABLED = os.environ.get("TANK_EPISODE_CONTROL", "false").strip().lower() in ("1", "true", "yes", "y")
+
 
 ############################################################
 # 5. 선택적 로컬 JSON/이미지 로깅
@@ -226,8 +238,10 @@ LIVE_VIEW_ENABLED = os.environ.get("TANK_LIVE_VIEW", "true").strip().lower() in 
 LIVE_VIEW_FPS = float(os.environ.get("TANK_LIVE_VIEW_FPS", "8"))
 LIVE_VIEW_JPEG_QUALITY = int(os.environ.get("TANK_LIVE_VIEW_JPEG_QUALITY", "65"))
 
-# TANK_YOLO_ASYNC=true이면 /detect 요청에서 YOLO 완료를 기다리지 않고,
-# 백그라운드 worker가 최신 프레임만 처리한다. 기본값은 기존 동기식 안전 동작이다.
+# TANK_YOLO_ASYNC=true이면 /detect에서 YOLO 완료를 안 기다리고 직전 완료 검출을 반환한다.
+# 기본은 동기(false) — 항상 동작하고 발견객체(discovered) 기록이 확실하다.
+# ★ async(true)는 GPU+engine 빠른 머신 전용. 느린 머신(GPU 없음 등)은 검출이 stale로 처리돼
+#   융합이 drop(local_path_node drop_stale) → discovered 기록이 조용히 안 된다.
 YOLO_ASYNC_ENABLED = os.environ.get("TANK_YOLO_ASYNC", "false").strip().lower() in ("1", "true", "yes", "y")
 YOLO_ASYNC_MIN_INTERVAL_SEC = float(os.environ.get("TANK_YOLO_ASYNC_MIN_INTERVAL_SEC", "0.0"))
 YOLO_ASYNC_MAX_RESULT_AGE_MS = float(os.environ.get("TANK_YOLO_ASYNC_MAX_RESULT_AGE_MS", "300"))

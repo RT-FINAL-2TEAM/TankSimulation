@@ -26,10 +26,15 @@ DEFAULT_PROJECTION_PARAMS: Dict[str, float] = {
     "ty": 0.02,
     "tz": 11.80,
     "yaw_offset": -0.9,
-    "pitch_offset": -0.9,
+    # simulator tank pitch가 흔들릴 때 playerBodyY 보정을 더해서 쓸 기준 offset.
+    "pitch_offset": 1.5,
     "roll_offset": -0.3,
     "hfov": 86.0,
     "vfov": 60.2,
+    # playerBodyY/Z를 카메라 pitch/roll에 반영하는 gain.
+    # 0.0으로 두면 기존 동작과 동일하고, 1.0이면 body 자세를 그대로 보정한다.
+    "body_pitch_gain": 1.0,
+    "body_roll_gain": 1.0,
 }
 
 
@@ -44,6 +49,11 @@ def to_float(value: Any, default: float = 0.0) -> float:
 
 def deg2rad(deg: float) -> float:
     return float(deg) * math.pi / 180.0
+
+
+def normalize_deg_180(deg: float) -> float:
+    """0~360 또는 -180~180 입력을 -180~180 범위로 정규화한다."""
+    return (float(deg) + 180.0) % 360.0 - 180.0
 
 
 def vec3_from_dict(d: Dict[str, Any]) -> np.ndarray:
@@ -115,9 +125,16 @@ def compute_camera_pose(info: Dict[str, Any], params: Dict[str, float]) -> Tuple
     lidar_origin = vec3_from_dict(info["lidarOrigin"])
     turret_yaw, turret_pitch = get_turret_angle(info)
 
+    # playerBodyY/Z는 simulator에서 0~360 범위로 들어올 수 있다.
+    # 예: 357.9도는 실제로 -2.1도 roll에 가까우므로 반드시 정규화한다.
+    body_pitch = normalize_deg_180(to_float(info.get("playerBodyY"), 0.0))
+    body_roll = normalize_deg_180(to_float(info.get("playerBodyZ"), 0.0))
+    body_pitch_gain = to_float(params.get("body_pitch_gain"), 0.0)
+    body_roll_gain = to_float(params.get("body_roll_gain"), 0.0)
+
     camera_yaw = turret_yaw + to_float(params.get("yaw_offset"))
-    camera_pitch = turret_pitch + to_float(params.get("pitch_offset"))
-    camera_roll = to_float(params.get("roll_offset"))
+    camera_pitch = turret_pitch + to_float(params.get("pitch_offset")) + body_pitch_gain * body_pitch
+    camera_roll = to_float(params.get("roll_offset")) + body_roll_gain * body_roll
 
     r_cam_to_world = rotation_matrix_yaw_pitch_roll(camera_yaw, camera_pitch, camera_roll)
     offset = np.array(
