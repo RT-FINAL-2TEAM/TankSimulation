@@ -49,6 +49,20 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
+def _class_name_set(values: Any) -> set:
+    if isinstance(values, str):
+        values = values.split(",")
+    return {str(value).strip().lower() for value in (values or []) if str(value).strip()}
+
+
+def _env_class_name_set(*names: str) -> Optional[set]:
+    for name in names:
+        value = os.getenv(name)
+        if value is not None:
+            return _class_name_set(value)
+    return None
+
+
 def _load_yaml(path: Optional[Path]) -> Dict[str, Any]:
     if path is None or not path.exists():
         return {}
@@ -112,6 +126,22 @@ def normalize_model_names(names: Any) -> Dict[int, str]:
     return {class_id: str(name) for class_id, name in enumerate(names)}
 
 
+CURRENT_YOLO_CLASS_IDS = {
+    "car": 0,
+    "person": 1,
+    "tank": 2,
+    "rock": 3,
+    "house": 4,
+}
+CURRENT_YOLO_CLASSES = tuple(CURRENT_YOLO_CLASS_IDS.keys())
+CURRENT_YOLO_ALIASES = {name: name for name in CURRENT_YOLO_CLASSES}
+DEFAULT_IGNORED_CLASSES = {"person"}
+DEFAULT_MODEL_CONFIDENCE = 0.50
+DEFAULT_FALLBACK_MODEL_CONFIDENCE = 0.50
+DEFAULT_RETURN_CONFIDENCE = 0.50
+DEFAULT_CLASS_CONFIDENCE_THRESHOLDS = {"tank": 0.50, "person": 0.50}
+
+
 @dataclass
 class YoloRuntimeConfig:
     model_path: Path
@@ -123,8 +153,8 @@ class YoloRuntimeConfig:
     iou: float = 0.70
     max_det: int = 20
     max_return: int = 5
-    model_conf: float = 0.10
-    fallback_model_conf: float = 0.05
+    model_conf: float = DEFAULT_MODEL_CONFIDENCE
+    fallback_model_conf: float = DEFAULT_FALLBACK_MODEL_CONFIDENCE
     low_conf_fallback: bool = False
     return_fallback_detections: bool = True
     tracking_enabled: bool = True
@@ -133,17 +163,14 @@ class YoloRuntimeConfig:
     enable_cache: bool = True
     min_interval_sec: float = 0.12
     warmup_runs: int = 2
-    aliases: Dict[str, str] = field(default_factory=lambda: {"blue": "person", "red": "person", "tank": "tank", "Tank": "tank"})
-    canonical_classes: set = field(default_factory=lambda: {"car", "person", "tank", "rock", "house", "tent"})
-    ignored_classes: set = field(default_factory=lambda: {"wall"})
-    class_fixed_ids: Dict[str, int] = field(default_factory=lambda: {"car": 0, "person": 1, "tank": 2, "rock": 3, "house": 4, "tent": 5})
+    aliases: Dict[str, str] = field(default_factory=lambda: dict(CURRENT_YOLO_ALIASES))
+    canonical_classes: set = field(default_factory=lambda: set(CURRENT_YOLO_CLASSES))
+    ignored_classes: set = field(default_factory=lambda: set(DEFAULT_IGNORED_CLASSES))
+    class_fixed_ids: Dict[str, int] = field(default_factory=lambda: dict(CURRENT_YOLO_CLASS_IDS))
     class_colors: Dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CLASS_COLORS))
     default_box_color: str = "#00FF00"
-    default_confidence: float = 0.20
-    class_confidence_thresholds: Dict[str, float] = field(default_factory=lambda: {"wall": 0.15})
-    close_wall_confidence: float = 0.12
-    close_wall_area_ratio: float = 0.08
-    close_wall_min_height_ratio: float = 0.35
+    default_confidence: float = DEFAULT_RETURN_CONFIDENCE
+    class_confidence_thresholds: Dict[str, float] = field(default_factory=lambda: dict(DEFAULT_CLASS_CONFIDENCE_THRESHOLDS))
     shadow_filter_enabled: bool = False
     shadow_sigma: float = 35.0
     shadow_strength: float = 0.75
@@ -170,15 +197,16 @@ class YoloRuntimeConfig:
 
         colors = dict(DEFAULT_CLASS_COLORS)
         colors.update(dict(_deep_get(raw, ["classes", "colors"], {}) or {}))
-        aliases = dict(_deep_get(raw, ["classes", "aliases"], {}) or {"blue": "person", "red": "person", "tank": "tank", "Tank": "tank"})
-        canonical = set(str(x).strip().lower() for x in (_deep_get(raw, ["classes", "canonical"], ["car", "person", "tank", "rock", "house", "tent"]) or []))
-        ignored = set(str(x).strip().lower() for x in (_deep_get(raw, ["classes", "ignored"], ["wall"]) or []))
-        fixed_ids_raw = dict(_deep_get(raw, ["classes", "fixed_ids"], {}) or {"car": 0, "person": 1, "tank": 2, "rock": 3, "house": 4, "tent": 5})
+        aliases = dict(_deep_get(raw, ["classes", "aliases"], {}) or CURRENT_YOLO_ALIASES)
+        canonical = _class_name_set(_deep_get(raw, ["classes", "canonical"], CURRENT_YOLO_CLASSES) or [])
+        ignored_from_env = _env_class_name_set("TANK_YOLO_IGNORE_CLASSES", "YOLO_IGNORE_CLASSES")
+        ignored = ignored_from_env if ignored_from_env is not None else _class_name_set(
+            _deep_get(raw, ["classes", "ignored"], DEFAULT_IGNORED_CLASSES) or []
+        )
+        fixed_ids_raw = dict(_deep_get(raw, ["classes", "fixed_ids"], {}) or CURRENT_YOLO_CLASS_IDS)
         fixed_ids = {str(k).strip().lower(): int(v) for k, v in fixed_ids_raw.items()}
 
-        thresholds = dict(_deep_get(raw, ["classes", "confidence_thresholds"], {}) or {})
-        if "wall" not in thresholds:
-            thresholds["wall"] = 0.15
+        thresholds = dict(_deep_get(raw, ["classes", "confidence_thresholds"], DEFAULT_CLASS_CONFIDENCE_THRESHOLDS) or {})
 
         return cls(
             model_path=model_path,
@@ -190,8 +218,8 @@ class YoloRuntimeConfig:
             iou=float(os.getenv("YOLO_IOU", _deep_get(raw, ["model", "iou"], 0.70))),
             max_det=int(os.getenv("YOLO_MAX_DET", _deep_get(raw, ["model", "max_det"], 20))),
             max_return=int(os.getenv("YOLO_MAX_RETURN", _deep_get(raw, ["model", "max_return"], 5))),
-            model_conf=float(os.getenv("YOLO_MODEL_CONF", _deep_get(raw, ["model", "model_confidence"], 0.10))),
-            fallback_model_conf=float(os.getenv("YOLO_FALLBACK_MODEL_CONF", _deep_get(raw, ["model", "fallback_model_confidence"], 0.05))),
+            model_conf=float(os.getenv("YOLO_MODEL_CONF", _deep_get(raw, ["model", "model_confidence"], DEFAULT_MODEL_CONFIDENCE))),
+            fallback_model_conf=float(os.getenv("YOLO_FALLBACK_MODEL_CONF", _deep_get(raw, ["model", "fallback_model_confidence"], DEFAULT_FALLBACK_MODEL_CONFIDENCE))),
             low_conf_fallback=_env_flag("YOLO_LOW_CONF_FALLBACK", bool(_deep_get(raw, ["model", "enable_low_conf_fallback"], False))),
             return_fallback_detections=_env_flag("YOLO_RETURN_FALLBACK_DETECTIONS", True),
             tracking_enabled=_env_flag("YOLO_TRACKING", bool(_deep_get(raw, ["tracking", "enabled"], True))),
@@ -206,11 +234,8 @@ class YoloRuntimeConfig:
             class_fixed_ids=fixed_ids,
             class_colors=colors,
             default_box_color=str(_deep_get(raw, ["classes", "default_box_color"], "#00FF00")),
-            default_confidence=float(os.getenv("YOLO_DEFAULT_CONF", _deep_get(raw, ["classes", "default_confidence"], 0.20))),
+            default_confidence=float(os.getenv("YOLO_DEFAULT_CONF", _deep_get(raw, ["classes", "default_confidence"], DEFAULT_RETURN_CONFIDENCE))),
             class_confidence_thresholds={k: float(v) for k, v in thresholds.items()},
-            close_wall_confidence=float(os.getenv("YOLO_CLOSE_WALL_CONF", _deep_get(raw, ["classes", "close_wall", "confidence"], 0.12))),
-            close_wall_area_ratio=float(os.getenv("YOLO_CLOSE_WALL_AREA_RATIO", _deep_get(raw, ["classes", "close_wall", "area_ratio"], 0.08))),
-            close_wall_min_height_ratio=float(os.getenv("YOLO_CLOSE_WALL_MIN_HEIGHT_RATIO", _deep_get(raw, ["classes", "close_wall", "min_height_ratio"], 0.35))),
             shadow_filter_enabled=_env_flag("YOLO_SHADOW_FILTER", bool(_deep_get(raw, ["preprocess", "shadow_filter_enabled"], False))),
             shadow_sigma=float(os.getenv("YOLO_SHADOW_SIGMA", _deep_get(raw, ["preprocess", "shadow_sigma"], 35.0))),
             shadow_strength=float(os.getenv("YOLO_SHADOW_STRENGTH", _deep_get(raw, ["preprocess", "shadow_strength"], 0.75))),
@@ -417,20 +442,6 @@ class TankYoloDetector:
         x1, y1, x2, y2 = (float(value) for value in box[:4])
         return x2 > x1 and y2 > y1
 
-    def get_box_size_ratios(self, box: Any, frame_shape: Tuple[int, ...]) -> Tuple[float, float]:
-        frame_height, frame_width = frame_shape[:2]
-        x1, y1, x2, y2 = box[:4]
-        box_width = max(0.0, float(x2 - x1))
-        box_height = max(0.0, float(y2 - y1))
-        frame_area = max(1.0, float(frame_width * frame_height))
-        return (box_width * box_height) / frame_area, box_height / max(1.0, float(frame_height))
-
-    def is_close_wall_candidate(self, class_name: str, confidence: float, box: Any, frame_shape: Tuple[int, ...]) -> bool:
-        if class_name != "wall" or confidence < self.config.close_wall_confidence:
-            return False
-        area_ratio, height_ratio = self.get_box_size_ratios(box, frame_shape)
-        return area_ratio >= self.config.close_wall_area_ratio or height_ratio >= self.config.close_wall_min_height_ratio
-
     def evaluate_detection_for_return(self, class_name: Optional[str], confidence: float, box: Any, frame_shape: Tuple[int, ...], bypass: bool) -> Tuple[bool, Optional[str], Optional[float]]:
         if class_name is None:
             return False, "class_name_none", None
@@ -442,8 +453,6 @@ class TankYoloDetector:
             return False, "non_canonical_class", None
         if bypass:
             return True, None, None
-        if self.is_close_wall_candidate(class_name, confidence, box, frame_shape):
-            return True, None, self.config.close_wall_confidence
         threshold = self.config.class_confidence_thresholds.get(class_name, self.config.default_confidence)
         if confidence >= threshold:
             return True, None, threshold

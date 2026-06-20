@@ -28,13 +28,11 @@ def env_float(name: str, default: float) -> float:
 
 
 DEFAULT_CLASS_COLORS = {
-    "person": "#00FFFF",
-    "rock": "#FFA500",
-    "tank": "#FF0000",
     "car": "#FF66CC",
+    "person": "#00FFFF",
+    "tank": "#FF0000",
+    "rock": "#FFA500",
     "house": "#AA66FF",
-    "wall": "#00FF00",
-    "tent": "#FFFF00",
 }
 
 DEFAULT_CONFIG_ENV_KEYS = ("TANK_YOLO_CONFIG", "YOLO_CONFIG")
@@ -45,5 +43,5 @@ DEFAULT_IMGSZ = env_int("TANK_YOLO_IMGSZ", 416)
 DEFAULT_IOU = env_float("TANK_YOLO_IOU", 0.70)
 DEFAULT_MAX_DET = env_int("TANK_YOLO_MAX_DET", 20)
 DEFAULT_MAX_RETURN = env_int("TANK_YOLO_MAX_RETURN", 5)
-DEFAULT_MODEL_CONFIDENCE = env_float("TANK_YOLO_CONF", 0.10)
-DEFAULT_FALLBACK_CONFIDENCE = env_float("TANK_YOLO_FALLBACK_CONF", 0.05)
+DEFAULT_MODEL_CONFIDENCE = env_float("TANK_YOLO_CONF", 0.50)
+DEFAULT_FALLBACK_CONFIDENCE = env_float("TANK_YOLO_FALLBACK_CONF", 0.50)

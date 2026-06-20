@@ -70,7 +70,7 @@ def round_float(value: Any, ndigits: int = 3, default: float = 0.0) -> float:
 def get_yolo_enemy_count(route_data: Dict[str, Any]) -> int:
     """
     YOLO counts 기준 적/위협 수.
-    person + tank + house만 위협으로 사용.
+    tank + house only. person is ignored due false positives.
     rock은 장애물이므로 제외.
     """
     vision_yolo = route_data.get("vision_yolo", {})
@@ -81,11 +81,10 @@ def get_yolo_enemy_count(route_data: Dict[str, Any]) -> int:
     if not isinstance(counts, dict):
         return 0
 
-    person = safe_int(counts.get("person"), 0)
     tank = safe_int(counts.get("tank"), 0)
     house = safe_int(counts.get("house"), 0)
 
-    return person + tank + house
+    return tank + house
 
 
 def get_closest_enemy_distance(route_data: Dict[str, Any]) -> Optional[float]:
@@ -150,7 +149,7 @@ def summarize_route(route_data: Dict[str, Any]) -> Dict[str, Any]:
         # result.collisions -> collision_count로 이름 통일
         "collision_count": safe_int(result.get("collisions"), 0),
 
-        # YOLO 기준 위협 개수: person + tank + house
+        # YOLO threat count: tank + house. person is ignored due false positives.
         "enemy_count": get_yolo_enemy_count(route_data),
 
         # 현재 comparison.json에 없으면 0.0

@@ -45,6 +45,7 @@ def _set_direct_run_defaults() -> None:
     os.environ.setdefault("TANK_LIVE_VIEW_DECODE_FPS", "6")
     os.environ.setdefault("TANK_LIVE_VIEW_MAX_SIDE", "960")
     os.environ.setdefault("YOLO_TRACKING", "false")
+    os.environ.setdefault("YOLO_IGNORE_CLASSES", "person")
     os.environ.setdefault("YOLO_IMGSZ", "416")
     os.environ.setdefault("YOLO_MIN_INTERVAL", "0.05" if yolo_engine_path.exists() else "0.10")
     os.environ.setdefault("YOLO_CUDNN_BENCHMARK", "true")
