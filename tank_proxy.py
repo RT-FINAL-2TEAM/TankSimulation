@@ -37,9 +37,9 @@ def load_env_file():
 
 load_env_file()
 
-UBUNTU_SERVER = os.environ.get("UBUNTU_SERVER", "http://192.168.0.89:5000")
+UBUNTU_SERVER = os.environ.get("UBUNTU_SERVER", "http://192.168.0.15:5030")
 PROXY_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
-PROXY_PORT = int(os.environ.get("PROXY_PORT", "5000"))
+PROXY_PORT = int(os.environ.get("PROXY_PORT", "5030"))
 
 # UBUNTU_SERVER = "http://172.27.119.129:5005"  # Ubuntu PC IP로 수정
 

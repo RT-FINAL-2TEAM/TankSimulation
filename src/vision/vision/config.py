@@ -28,11 +28,10 @@ def env_float(name: str, default: float) -> float:
 
 
 DEFAULT_CLASS_COLORS = {
-    "car": "#FF66CC",
-    "person": "#00FFFF",
     "tank": "#FF0000",
     "rock": "#FFA500",
     "house": "#AA66FF",
+    "car": "#FF66CC",
 }
 
 DEFAULT_CONFIG_ENV_KEYS = ("TANK_YOLO_CONFIG", "YOLO_CONFIG")

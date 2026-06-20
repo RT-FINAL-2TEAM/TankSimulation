@@ -21,10 +21,7 @@ fusion:
   cluster_match_ambiguity_delta: 0.35
   cluster_match_distance_weight: 0.025
   cluster_match_bbox_area_weight: 0.45
-  cluster_match_person_anchor_y: 0.9
   cluster_match_default_anchor_y: 0.5
-  cluster_match_person_x_limit: 1.8
-  cluster_match_person_y_limit: 2.8
   max_sync_diff_sec: 0.45
   drop_on_sync_mismatch: false
 projection:
@@ -58,11 +55,10 @@ mapping:
   merge_radius_m: 3.0
   position_ema_alpha: 0.35
   add_classes:
-  - rock
   - tank
-  - tent
-  - car
+  - rock
   - house
+  - car
   save_directory: ~/tankcc/tank_discovered_maps
   save_latest_filename: discovered_objects_latest.map
   save_timestamped_copy: true
@@ -79,7 +75,6 @@ mapping:
     car: 2.5
     tank: 3.0
     house: 4.0
-    tent: 3.0
 rviz:
   current_object_lifetime_sec: 1.2
   discovered_marker_z_offset: 1.5
@@ -91,8 +86,6 @@ rviz:
   colors:
     rock: '#FFA500'
     tank: '#FF0000'
-    wall: '#00FF00'
-    tent: '#FFFF00'
     car: '#FF66CC'
     house: '#AA66FF'
     unknown: '#FFFFFF'

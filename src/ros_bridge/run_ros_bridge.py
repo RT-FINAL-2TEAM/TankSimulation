@@ -20,6 +20,19 @@ def _add_source_package_paths() -> None:
 _add_source_package_paths()
 
 
+def _load_project_env() -> None:
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        return
+    with env_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
 def _set_direct_run_defaults() -> None:
     src_root = Path(__file__).resolve().parents[1]
     yolo_engine_path = src_root / "vision" / "models" / "best_final.engine"
@@ -52,6 +65,7 @@ def _set_direct_run_defaults() -> None:
     os.environ.setdefault("YOLO_RECOGNITION_LOG", "false")
 
 
+_load_project_env()
 _set_direct_run_defaults()
 
 from ros_bridge.main import main

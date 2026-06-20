@@ -169,10 +169,7 @@ class LocalPathNode(Node):
         self.cluster_match_ambiguity_delta = float(self._cfg(["fusion", "cluster_match_ambiguity_delta"], 0.10))
         self.cluster_match_distance_weight = float(self._cfg(["fusion", "cluster_match_distance_weight"], 0.0015))
         self.cluster_match_bbox_area_weight = float(self._cfg(["fusion", "cluster_match_bbox_area_weight"], 0.45))
-        self.cluster_match_person_anchor_y = float(self._cfg(["fusion", "cluster_match_person_anchor_y"], 0.90))
         self.cluster_match_default_anchor_y = float(self._cfg(["fusion", "cluster_match_default_anchor_y"], 0.50))
-        self.cluster_match_person_x_limit = float(self._cfg(["fusion", "cluster_match_person_x_limit"], 1.80))
-        self.cluster_match_person_y_limit = float(self._cfg(["fusion", "cluster_match_person_y_limit"], 2.80))
 
         self.use_projection_fusion = bool(self._cfg(["projection", "enabled"], True))
         self.projection_params = dict(CAMERA_LIDAR_PROJECTION_PARAMS)
@@ -191,7 +188,7 @@ class LocalPathNode(Node):
         self.mapping_enabled = bool(self._cfg(["mapping", "enabled"], True))
         self.merge_radius_m = float(self._cfg(["mapping", "merge_radius_m"], 5.0))
         self.ema_alpha = float(self._cfg(["mapping", "position_ema_alpha"], 0.35))
-        self.add_classes = set(str(x).lower() for x in self._cfg(["mapping", "add_classes"], ["person", "rock", "tank", "car", "house", "tent"]))
+        self.add_classes = set(str(x).lower() for x in self._cfg(["mapping", "add_classes"], ["tank", "rock", "house", "car"]))
         self.merge_radius_by_class = dict(self._cfg(["mapping", "merge_radius_by_class"], {}) or {})
         self.save_directory = Path(str(self._cfg(["mapping", "save_directory"], "~/tankcc/tank_discovered_maps"))).expanduser()
         self.save_latest_filename = str(self._cfg(["mapping", "save_latest_filename"], "discovered_objects_latest.map"))
@@ -1090,7 +1087,7 @@ class LocalPathNode(Node):
         x1, y1, x2, y2 = [float(v) for v in bbox[:4]]
         bw = max(1.0, x2 - x1)
         bh = max(1.0, y2 - y1)
-        anchor_y_ratio = self.cluster_match_person_anchor_y if class_name == "person" else self.cluster_match_default_anchor_y
+        anchor_y_ratio = self.cluster_match_default_anchor_y
         anchor_y_ratio = max(0.0, min(1.15, float(anchor_y_ratio)))
         return x1 + 0.5 * bw, y1 + anchor_y_ratio * bh, bw, bh
 

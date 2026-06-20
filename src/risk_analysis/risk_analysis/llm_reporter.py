@@ -18,7 +18,7 @@ class LLMReporter:
         self.timeout_sec = timeout_sec
 
     def forced_route(self):
-        raw = os.environ.get("TANK_FORCE_ROUTE", "A").strip().upper()
+        raw = os.environ.get("TANK_FORCE_ROUTE", "AUTO").strip().upper()
         if raw in {"", "0", "FALSE", "NO", "NONE", "OFF", "AUTO"}:
             return None
         if raw in {"A", "B"}:

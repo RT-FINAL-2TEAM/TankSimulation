@@ -10,10 +10,10 @@ Tank Challenge용 YOLO detector 래퍼.
 detector는 공식 Tank Challenge /detect 응답 포맷을 반환한다:
 [
   {
-    "className": "person",
+    "className": "tank",
     "bbox": [x1, y1, x2, y2],
     "confidence": 0.85,
-    "color": "#00FFFF",
+    "color": "#FF0000",
     "filled": false,
     "updateBoxWhileMoving": false
   }
@@ -127,11 +127,10 @@ def normalize_model_names(names: Any) -> Dict[int, str]:
 
 
 CURRENT_YOLO_CLASS_IDS = {
-    "car": 0,
-    "person": 1,
     "tank": 2,
     "rock": 3,
     "house": 4,
+    "car": 0,
 }
 CURRENT_YOLO_CLASSES = tuple(CURRENT_YOLO_CLASS_IDS.keys())
 CURRENT_YOLO_ALIASES = {name: name for name in CURRENT_YOLO_CLASSES}
@@ -139,7 +138,7 @@ DEFAULT_IGNORED_CLASSES = {"person"}
 DEFAULT_MODEL_CONFIDENCE = 0.50
 DEFAULT_FALLBACK_MODEL_CONFIDENCE = 0.50
 DEFAULT_RETURN_CONFIDENCE = 0.50
-DEFAULT_CLASS_CONFIDENCE_THRESHOLDS = {"tank": 0.50, "person": 0.50}
+DEFAULT_CLASS_CONFIDENCE_THRESHOLDS = {"tank": 0.50}
 
 
 @dataclass
