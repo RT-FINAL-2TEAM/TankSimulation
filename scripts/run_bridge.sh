@@ -27,5 +27,5 @@ source install/setup.bash 2>/dev/null || { echo "[run_bridge] install/ 없음 �
 
 PORT="$(grep -E '^TANK_BRIDGE_PORT=' .env 2>/dev/null | tail -1 | cut -d= -f2 | tr -d ' ')"; PORT="${PORT:-5000}"
 echo "[run_bridge] mode=${TANK_MODE:-.env}  episode_control=${TANK_EPISODE_CONTROL:-.env}"
-echo "[run_bridge] 시뮬 UI 엔드포인트에 입력 → $(hostname -I | awk '{print $1}'):${PORT}"
+echo "[run_bridge] 윈도우 tank_proxy.py의 UBUNTU_SERVER에 입력 → http://$(hostname -I | awk '{print $1}'):${PORT}"
 exec ros2 run ros_bridge ros_bridge
