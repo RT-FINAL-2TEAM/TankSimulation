@@ -661,6 +661,8 @@ class LocalPathNode(Node):
             "prefer_clusters": self.prefer_clusters,
             "allow_angle_fallback": self.allow_angle_fallback,
         })
+        if self.debug_fusion_enabled and projection_context is not None:
+            debug.update(self._make_projection_tuning_debug(parsed_detections, int(image_w), int(image_h), px, py))
 
         # 우선 경로: 전역 일대일(global one-to-one) YOLO bbox <-> DBSCAN cluster 할당.
         if self.prefer_clusters and projected_clusters:
@@ -812,11 +814,19 @@ class LocalPathNode(Node):
             center=parsed_center,
         )
 
-    def _build_projection_context(self, image_w: int, image_h: int) -> Optional[Dict[str, Any]]:
+    def _build_projection_context(
+        self,
+        image_w: int,
+        image_h: int,
+        projection_params: Optional[Dict[str, float]] = None,
+    ) -> Optional[Dict[str, Any]]:
         if self.latest_info is None:
             return None
+        params = dict(self.projection_params)
+        if isinstance(projection_params, dict):
+            params.update(projection_params)
         try:
-            cam_pos, cam_yaw, cam_pitch, cam_roll = compute_camera_pose(self.latest_info, self.projection_params)
+            cam_pos, cam_yaw, cam_pitch, cam_roll = compute_camera_pose(self.latest_info, params)
             return {
                 "camera_pos": cam_pos,
                 "camera_yaw": cam_yaw,
@@ -824,6 +834,7 @@ class LocalPathNode(Node):
                 "camera_roll": cam_roll,
                 "image_w": image_w,
                 "image_h": image_h,
+                "projection_params": params,
             }
         except Exception as exc:
             self.get_logger().debug(f"projection context failed: {exc}")
@@ -852,7 +863,7 @@ class LocalPathNode(Node):
                 ctx["camera_roll"],
                 image_w,
                 image_h,
-                self.projection_params,
+                ctx.get("projection_params", self.projection_params),
             )
             if projected is None:
                 continue
@@ -889,7 +900,7 @@ class LocalPathNode(Node):
                 ctx["camera_roll"],
                 image_w,
                 image_h,
-                self.projection_params,
+                ctx.get("projection_params", self.projection_params),
             )
             if projected is None:
                 continue
@@ -901,6 +912,179 @@ class LocalPathNode(Node):
                 continue
             out.append({"id": int(self._as_float(c.get("id"), -1)), "count": count, "centroid": map_pos, "bbox": c.get("bbox"), "u": u, "v": v, "depth": depth, "distance_m": distance, "raw": c})
         return out
+
+    def _normalize_deg_180(self, deg: float) -> float:
+        return (float(deg) + 180.0) % 360.0 - 180.0
+
+    def _body_angle_from_info(self, key: str) -> float:
+        if not isinstance(self.latest_info, dict):
+            return 0.0
+        return self._normalize_deg_180(self._as_float(self.latest_info.get(key), 0.0))
+
+    def _make_projection_tuning_debug(
+        self,
+        parsed_detections: List[ParsedDetection],
+        image_w: int,
+        image_h: int,
+        px: float,
+        py: float,
+    ) -> Dict[str, Any]:
+        """Return compact debug values for pitch/roll gain sign tuning.
+
+        This does not affect fusion results. It re-projects the current DBSCAN
+        clusters with body_pitch_gain/body_roll_gain set to +1 and -1, then
+        compares the nearest projected cluster to the YOLO bbox anchor.
+        Smaller center_norm/dist_px means better projection alignment.
+        """
+        if not parsed_detections or self.latest_info is None:
+            return {}
+
+        current_params = dict(self.projection_params)
+        current_pitch_gain = self._as_float(current_params.get("body_pitch_gain"), 0.0)
+        current_roll_gain = self._as_float(current_params.get("body_roll_gain"), 0.0)
+        body_pitch_deg = self._body_angle_from_info("playerBodyY")
+        body_roll_deg = self._body_angle_from_info("playerBodyZ")
+
+        def project_with(overrides: Dict[str, float]) -> List[Dict[str, Any]]:
+            params = dict(current_params)
+            params.update(overrides)
+            ctx = self._build_projection_context(image_w, image_h, params)
+            if ctx is None:
+                return []
+            return self._project_clusters(ctx, px, py, image_w, image_h)
+
+        current_clusters = project_with({})
+        pitch_plus_clusters = project_with({"body_pitch_gain": 1.0})
+        pitch_minus_clusters = project_with({"body_pitch_gain": -1.0})
+        roll_plus_clusters = project_with({"body_roll_gain": 1.0})
+        roll_minus_clusters = project_with({"body_roll_gain": -1.0})
+
+        current_best = self._best_projection_alignment(parsed_detections, current_clusters, image_w, image_h)
+        pitch_plus_best = self._best_projection_alignment(parsed_detections, pitch_plus_clusters, image_w, image_h)
+        pitch_minus_best = self._best_projection_alignment(parsed_detections, pitch_minus_clusters, image_w, image_h)
+        roll_plus_best = self._best_projection_alignment(parsed_detections, roll_plus_clusters, image_w, image_h)
+        roll_minus_best = self._best_projection_alignment(parsed_detections, roll_minus_clusters, image_w, image_h)
+
+        def score(best: Optional[Dict[str, Any]]) -> float:
+            if not isinstance(best, dict):
+                return float("inf")
+            return self._as_float(best.get("center_norm"), float("inf"))
+
+        pitch_score_plus = score(pitch_plus_best)
+        pitch_score_minus = score(pitch_minus_best)
+        roll_score_plus = score(roll_plus_best)
+        roll_score_minus = score(roll_minus_best)
+
+        pitch_recommended: Optional[float]
+        roll_recommended: Optional[float]
+        pitch_note = "ok"
+        roll_note = "ok"
+        angle_threshold_deg = 0.20
+        if abs(body_pitch_deg) < angle_threshold_deg:
+            pitch_recommended = None
+            pitch_note = "body_pitch_deg_too_small_for_reliable_sign_decision"
+        elif not math.isfinite(pitch_score_plus) and not math.isfinite(pitch_score_minus):
+            pitch_recommended = None
+            pitch_note = "no_projected_cluster_for_pitch_comparison"
+        else:
+            pitch_recommended = 1.0 if pitch_score_plus <= pitch_score_minus else -1.0
+
+        if abs(body_roll_deg) < angle_threshold_deg:
+            roll_recommended = None
+            roll_note = "body_roll_deg_too_small_for_reliable_sign_decision"
+        elif not math.isfinite(roll_score_plus) and not math.isfinite(roll_score_minus):
+            roll_recommended = None
+            roll_note = "no_projected_cluster_for_roll_comparison"
+        else:
+            roll_recommended = 1.0 if roll_score_plus <= roll_score_minus else -1.0
+
+        return {
+            "projection_tuning_debug": {
+                "body_pitch_deg": float(body_pitch_deg),
+                "body_roll_deg": float(body_roll_deg),
+                "current_body_pitch_gain": float(current_pitch_gain),
+                "current_body_roll_gain": float(current_roll_gain),
+                "cluster_bbox_margin_px": float(self.cluster_bbox_margin_px),
+                "current_best": current_best,
+                "pitch_debug": {
+                    "best_plus": pitch_plus_best,
+                    "best_minus": pitch_minus_best,
+                    "dist_px_plus": None if pitch_plus_best is None else pitch_plus_best.get("dist_px"),
+                    "dist_px_minus": None if pitch_minus_best is None else pitch_minus_best.get("dist_px"),
+                    "center_norm_plus": None if pitch_plus_best is None else pitch_plus_best.get("center_norm"),
+                    "center_norm_minus": None if pitch_minus_best is None else pitch_minus_best.get("center_norm"),
+                    "recommended_body_pitch_gain": pitch_recommended,
+                    "note": pitch_note,
+                },
+                "roll_debug": {
+                    "best_plus": roll_plus_best,
+                    "best_minus": roll_minus_best,
+                    "dist_px_plus": None if roll_plus_best is None else roll_plus_best.get("dist_px"),
+                    "dist_px_minus": None if roll_minus_best is None else roll_minus_best.get("dist_px"),
+                    "center_norm_plus": None if roll_plus_best is None else roll_plus_best.get("center_norm"),
+                    "center_norm_minus": None if roll_minus_best is None else roll_minus_best.get("center_norm"),
+                    "recommended_body_roll_gain": roll_recommended,
+                    "note": roll_note,
+                },
+            }
+        }
+
+    def _best_projection_alignment(
+        self,
+        parsed_detections: List[ParsedDetection],
+        projected_clusters: List[Dict[str, Any]],
+        image_w: int,
+        image_h: int,
+    ) -> Optional[Dict[str, Any]]:
+        if not parsed_detections or not projected_clusters:
+            return None
+        best: Optional[Dict[str, Any]] = None
+        best_score = float("inf")
+        for det_index, parsed in enumerate(parsed_detections):
+            ax, ay, bw, bh = self._bbox_anchor_uv(parsed.bbox, parsed.class_name)
+            half_w = max(1.0, 0.5 * bw)
+            half_h = max(1.0, 0.5 * bh)
+            for cluster in projected_clusters:
+                u = self._as_float(cluster.get("u"), 0.0)
+                v = self._as_float(cluster.get("v"), 0.0)
+                du = u - ax
+                dv = v - ay
+                dx_norm = abs(du) / half_w
+                dy_norm = abs(dv) / half_h
+                center_norm = math.sqrt(dx_norm * dx_norm + dy_norm * dy_norm)
+                dist_px = math.hypot(du, dv)
+                inside_margin = point_inside_bbox(
+                    u,
+                    v,
+                    parsed.bbox,
+                    self.cluster_bbox_margin_px,
+                    float(image_w),
+                    float(image_h),
+                )
+                # Match the actual candidate logic as closely as possible: normalized
+                # alignment is primary; pixel distance is only a tie breaker.
+                score = center_norm + 1e-6 * dist_px
+                if score < best_score:
+                    x1, y1, x2, y2 = [float(x) for x in parsed.bbox[:4]]
+                    best_score = score
+                    best = {
+                        "det_index": int(det_index),
+                        "class_name": parsed.class_name,
+                        "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                        "bbox_center": [float(0.5 * (x1 + x2)), float(0.5 * (y1 + y2))],
+                        "bbox_anchor": [float(ax), float(ay)],
+                        "cluster_id": int(cluster.get("id", -1)),
+                        "cluster_count": int(cluster.get("count", 0)),
+                        "projected_uv": [float(u), float(v)],
+                        "delta_uv_from_anchor": [float(du), float(dv)],
+                        "dist_px": float(dist_px),
+                        "center_norm": float(center_norm),
+                        "dx_norm": float(dx_norm),
+                        "dy_norm": float(dy_norm),
+                        "inside_bbox_with_margin": bool(inside_margin),
+                        "distance_m": float(cluster.get("distance_m", 0.0)),
+                    }
+        return best
 
     def _bbox_anchor_uv(self, bbox: List[float], class_name: str) -> Tuple[float, float, float, float]:
         x1, y1, x2, y2 = [float(v) for v in bbox[:4]]
