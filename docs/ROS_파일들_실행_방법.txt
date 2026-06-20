@@ -1,145 +1,98 @@
-========================================================================================================================
-[안내] 실행/연결 정본은 docs/RUN.md 다. 설정은 .env 하나로 통일, 실행은 scripts/run_*.sh.
-       이 파일은 모니터·YOLO 세부 변형 참고용. 주의: 아래 tank_recon_map_rviz / tank_recon_mission_map_rviz
-       launch는 존재하지 않는다(tank_rviz.launch.py 사용).
-========================================================================================================================
-0. 공통 준비
+========================================================================================
+ Tank Challenge — ROS2 실행 방법
+========================================================================================
+ 설정은 .env 하나가 단일 출처:  cp .env.example .env
+   - 워크스페이스 루트에서 ros2 run/launch 시 .env가 자동 로드된다.
+   - 그래서 아래 명령의 인라인 TANK_*=... 는 .env에 넣어두면 생략 가능(둘 다 동작).
 
-각 터미널에서 먼저 실행:
-cd ~/tankcc
-source install/setup.bash
+ [연결 구조]  시뮬(윈도우)은 "포트만" 설정 가능(IP 없음).
+   시뮬 ──127.0.0.1:5000──▶ tank_proxy.py(윈도우) ──http://<우분투IP>:5000──▶ ros_bridge(우분투)
+   - 윈도우: tank_proxy.py 실행 + UBUNTU_SERVER=http://<우분투IP>:5000  (우분투 IP는 우분투에서 `hostname -I`)
+   - 우분투: .env TANK_ALLOWED_CLIENTS = 허용할 "윈도우 PC IP" (서브넷 192.168.0.* 권장; IP 바뀌어도 그대로)
+            (윈도우 PC IP 확인: Windows CMD에서 ipconfig → IPv4)
+   - 포트는 시뮬·프록시·UBUNTU_SERVER·브릿지 전부 5000으로 일치.
 
-Windows 시뮬레이터 PC IP 확인:
-Windows CMD에서 ipconfig 실행
-IPv4 주소 예: 192.168.0.82
+----------------------------------------------------------------------------------------
+ 0. 공통 준비 (각 터미널에서 먼저)
+----------------------------------------------------------------------------------------
+   cd <본인 워크스페이스 루트>          # 예: ~/tankcc
+   source install/setup.bash
 
-웹 live view 접속 주소:
-http://Ubuntu_IP:5000/view
-예: http://192.168.0.16:5000/view
+   웹 live view / 디버그 (브라우저):
+     http://<우분투IP>:5000/view
+     http://<우분투IP>:5000/debug/live_view
+     http://<우분투IP>:5000/debug/yolo
 
-디버그 주소:
-http://Ubuntu_IP:5000/debug/live_view
-http://Ubuntu_IP:5000/debug/yolo
-========================================================================================================================
+========================================================================================
+ A. 수동 조작 + 센서/인지 모니터링   (개발 보조 — 센서값 확인용, 정식 시나리오 아님)
+========================================================================================
+ 목적: 시뮬에서 탱크를 직접 조작하며 ROS2에서 LiDAR/YOLO/clustering/fusion/RViz를 확인,
+       주행 중 새로 포착한 객체를 discovered map에 누적·저장.
 
-========================================================================================================================
-1. 수동 조작(mode=monitor) + 센서 모니터링 + 정찰 기록 테스트
+ T1) ros_bridge (monitor):
+     ros2 run ros_bridge ros_bridge
+     # 옵션은 .env에서. 기본값:  TANK_MODE=monitor / 라이브뷰 ON(TANK_LIVE_VIEW=true) / YOLO 동기(TANK_YOLO_ASYNC=false)
+     #   - 라이브뷰 끄기:  TANK_LIVE_VIEW=false
+     #   - YOLO 비동기(선택, 지연↓):  TANK_YOLO_ASYNC=true   (기본은 동기)
 
-목적
-- Windows 시뮬레이터 PC에서 탱크를 직접 조작
-- ROS2에서 LiDAR, YOLO detection, clustering, fusion, RViz 시각화 확인
-- 주행 중 새로 포착한 객체를 discovered map에 누적
-- 주행 후 map 파일로 저장
-- 웹 브라우저에서 YOLO bbox / trackId live view 확인
-========================================================================================================================
+ T2) LiDAR 처리 (raw LiDAR → map 좌표계 detected_points):
+     ros2 run lidar lidar_processor_node
 
-- Terminal 1: ros_bridge 실행 (주의 : 192.168.0.??에는 Windows 시뮬레이터 PC의 실제 IP 입력)
+ T3) LiDAR 클러스터링 (point 군집화 → 장애물 후보 cluster):
+     ros2 run tank_visual_perception lidar_dbscan_cluster_node
 
-1) 기본 실행 + 웹 live view ON + 기존 동기식 YOLO:
-TANK_ALLOWED_CLIENTS=127.0.0.1,::1,192.168.0.33 TANK_MODE=monitor TANK_LIVE_VIEW=true TANK_YOLO_ASYNC=false ros2 run ros_bridge ros_bridge
+ T4) RViz:
+     ros2 launch rviz_visualization tank_rviz.launch.py
+     # LiDAR 채널 바꾼 경우:  TANK_LIDAR_CHANNELS=16 ros2 launch rviz_visualization tank_rviz.launch.py
+     # 지형 변형:  tank_recon_collect_terrain.launch.py(수집) / tank_recon_apply_terrain.launch.py(저장지형 적용)
 
-2) 웹 live view ON + async YOLO production /detect 사용:
-TANK_ALLOWED_CLIENTS=127.0.0.1,::1,192.168.0.33 TANK_MODE=monitor TANK_LIVE_VIEW=true TANK_YOLO_ASYNC=true TANK_YOLO_ASYNC_MAX_RESULT_AGE_MS=300 ros2 run ros_bridge ros_bridge
+ T5) local_path (카메라+라이다 통합 & local path 생성 & discovered map 누적):
+     ros2 run path_planning local_path_node
 
-3) 웹 live view OFF:
-TANK_ALLOWED_CLIENTS=127.0.0.1,::1,192.168.0.82 TANK_MODE=monitor TANK_LIVE_VIEW=false TANK_YOLO_ASYNC=false ros2 run ros_bridge ros_bridge
+ 주행 후 discovered map 저장:
+     ros2 service call /tank/map/discovered/save std_srvs/srv/Trigger "{}"
+     # 저장 위치: ~/tankcc/tank_discovered_maps   (확인:  ls -lh ~/tankcc/tank_discovered_maps)
 
-웹 확인:
-http://Ubuntu_IP:5000/view
-------------------------------------------------------------------------------------------------------------------------
-- Terminal 2: LiDAR processor 실행(ros_bridge가 받은 raw LiDAR 정보를 map 좌표계의 detected_points로 변환) :
-ros2 run lidar lidar_processor_node
-------------------------------------------------------------------------------------------------------------------------
-- Terminal 3: LiDAR clustering 실행 :
-ros2 run tank_visual_perception lidar_dbscan_cluster_node
-------------------------------------------------------------------------------------------------------------------------
-- Terminal 4: RViz 실행
-1) 기본 RViz:
-ros2 launch rviz_visualization tank_rviz.launch.py
+========================================================================================
+ B. 자율주행 — 정찰 A→B   [= 프로젝트 "시나리오 1"]
+========================================================================================
+ 목적: ROS2 planner/control이 주행 명령 생성 → ros_bridge가 시뮬로 전달, RViz로 경로·상태 확인.
+       (정찰 A→B 자율주행이 프로젝트의 시나리오 1.)
 
-2) LiDAR 채널 수를 바꾼 경우, 예: channels=16:
-TANK_LIDAR_CHANNELS=16 ros2 launch rviz_visualization tank_rviz.launch.py
+ ★ 주의: 자율 스택 launch(tank_autonomous_control)가 lidar_processor · dbscan · overlay ·
+   astar · local_path · apf · controller 를 "전부 포함"한다.
+   → 위 "A. 수동/모니터링"의 개별 노드(T2/T3/T5)를 따로 띄우지 말 것 (노드 중복 기동).
 
-3) recon_map만 RViz에 표시:
-ros2 launch rviz_visualization tank_recon_map_rviz.launch.py
+ T1) ros_bridge (auto):
+     ros2 run ros_bridge ros_bridge          # .env에 TANK_MODE=auto (라이브뷰/YOLO 옵션은 위 A와 동일)
 
-4) mission_map 포함 RViz:
-ros2 launch rviz_visualization tank_recon_mission_map_rviz.launch.py
-------------------------------------------------------------------------------------------------------------------------
-- Terminal 5: local_path_node 실행("카메라+라이다 통합" & "local path 생성" & "discovered map 누적") :
-ros2 run path_planning local_path_node
-------------------------------------------------------------------------------------------------------------------------
-주행 후 discovered map 저장:
-ros2 service call /tank/map/discovered/save std_srvs/srv/Trigger "{}"
-------------------------------------------------------------------------------------------------------------------------
-저장 파일 확인:
-ls -lh ~/tank_discovered_maps
-========================================================================================================================
+ T2) 자율주행 스택 (7개 노드 한 번에):
+     ros2 launch control tank_autonomous_control.launch.py mission_type:=recon route_id:=A route_side:=west
+     # mission_type ∈ {recon, mission(기본), return},  route_id ∈ {A, B}
+     # route_side는 route_id로 자동 결정(A=west / B=east) — 안 줘도 보정되나 명시 권장
 
-========================================================================================================================
-2. 자율주행 테스트
+ T3) RViz (선택):
+     ros2 launch rviz_visualization tank_rviz.launch.py
 
-목적
-- ROS2 planner/control이 탱크 주행 명령을 생성
-- ros_bridge가 ROS2 제어 명령을 Tank Simulator로 전달
-- RViz에서 경로, 장애물, 주행 상태 확인
-- LiDAR/YOLO 기반 장애물 인식 결과를 local path 및 자율주행 제어에 반영
-- 웹 브라우저에서 YOLO bbox / trackId live view 확인
-========================================================================================================================
+ ── 정찰 A→B 자동 시퀀스로 돌리려면 ──
+   T1 브릿지를 자동 리셋 모드로:  TANK_EPISODE_CONTROL=true ros2 run ros_bridge ros_bridge
+   별도 터미널:                   python3 scripts/run_recon_scenario.py
+   (A 도착 → 시뮬 자동 리셋 → B 주행 → recon_reports/route_A.json·route_B.json·comparison.json)
 
-- Terminal 1: ros_bridge auto 모드 실행 (주의 : 192.168.0.??에는 Windows 시뮬레이터 PC의 실제 IP 입력)
+ ※ 프로젝트 "시나리오 2"(사격 + 복귀)는 아직 미완성(설계 단계) — 별도 실행 절차 없음.
 
-1) 기본 실행 + 웹 live view ON + 기존 동기식 YOLO:
-TANK_ALLOWED_CLIENTS=127.0.0.1,::1,192.168.0.82 TANK_MODE=auto TANK_LIVE_VIEW=true TANK_YOLO_ASYNC=false ros2 run ros_bridge ros_bridge
+========================================================================================
+ 서비스 (수동 호출) — "발견객체맵" 과 "지형맵" 은 서로 다른 두 시스템(따로 저장)
+========================================================================================
+ ▶ 발견객체맵 (discovered) : 주행 중 발견한 객체(YOLO/융합)의 "위치" 맵. local_path_node가 누적.
+   ros2 service call /tank/map/discovered/save  std_srvs/srv/Trigger "{}"
+       # 저장 → ~/tankcc/tank_discovered_maps/discovered_objects_latest.map
+   ros2 service call /tank/map/discovered/clear std_srvs/srv/Trigger "{}"
+       # 누적 메모리 초기화
 
-2) 웹 live view ON + async YOLO production /detect 사용:
-TANK_ALLOWED_CLIENTS=127.0.0.1,::1,192.168.0.82 TANK_MODE=auto TANK_LIVE_VIEW=true TANK_YOLO_ASYNC=true TANK_YOLO_ASYNC_MAX_RESULT_AGE_MS=300 ros2 run ros_bridge ros_bridge
-
-웹 확인:
-http://Ubuntu_IP:5000/view
-------------------------------------------------------------------------------------------------------------------------
-- Terminal 2: LiDAR processor 실행(ros_bridge가 받은 raw LiDAR 정보를 map 좌표계의 detected_points로 변환) :
-ros2 run lidar lidar_processor_node
-------------------------------------------------------------------------------------------------------------------------
-- Terminal 3: LiDAR clustering 실행(LiDAR point들을 군집화하여 장애물 후보 cluster 생성) :
-ros2 run tank_visual_perception lidar_dbscan_cluster_node
-------------------------------------------------------------------------------------------------------------------------
-- Terminal 4: RViz 실행
-1) 기본 RViz:
-ros2 launch rviz_visualization tank_rviz.launch.py
-
-2) LiDAR 채널 수를 바꾼 경우, 예: channels=16:
-TANK_LIDAR_CHANNELS=16 ros2 launch rviz_visualization tank_rviz.launch.py
-
-3) recon_map만 RViz에 표시:
-ros2 launch rviz_visualization tank_recon_map_rviz.launch.py
-
-4) mission_map 포함 RViz:
-ros2 launch rviz_visualization tank_recon_mission_map_rviz.launch.py
-------------------------------------------------------------------------------------------------------------------------
-- Terminal 5: local_path_node 실행("카메라+라이다 통합" & "local path 생성" & "discovered map 누적") :
-ros2 run path_planning local_path_node
-------------------------------------------------------------------------------------------------------------------------
-- Terminal 6: autonomous control 실행(자율주행 제어 명령 생성) :
-ros2 launch control tank_autonomous_control.launch.py
-------------------------------------------------------------------------------------------------------------------------
-주행 후 discovered map 저장:
-ros2 service call /tank/map/discovered/save std_srvs/srv/Trigger "{}"
-------------------------------------------------------------------------------------------------------------------------
-저장 파일 확인:
-ls -lh ~/tank_discovered_maps
-========================================================================================================================
-
-========================================================================================================================
-# discovered map 저장
-ros2 service call /tank/map/discovered/save std_srvs/srv/Trigger "{}"
-
-# discovered map 메모리 초기화
-ros2 service call /tank/map/discovered/clear std_srvs/srv/Trigger "{}"
-
-# terrain map 누적 데이터 초기화
-ros2 service call /tank/terrain/reset_map std_srvs/srv/Trigger "{}"
-
-# terrain map 최종 생성/저장
-ros2 service call /tank/terrain/finalize_map std_srvs/srv/Trigger "{}"
-========================================================================================================================
+ ▶ 지형맵 (terrain) : 라이다 누적 기반 "지면 고도/거칠기" 격자 맵. terrain_record_finalize_node가 생성.
+   ros2 service call /tank/terrain/reset_map    std_srvs/srv/Trigger "{}"
+       # 누적 초기화
+   ros2 service call /tank/terrain/finalize_map std_srvs/srv/Trigger "{}"
+       # 주행 종료 시점에 최종 저장 → ~/tankcc/tank_terrain_maps/terrain_map_latest.npz
+========================================================================================
