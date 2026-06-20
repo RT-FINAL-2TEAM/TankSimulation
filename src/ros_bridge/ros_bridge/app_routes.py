@@ -22,13 +22,20 @@
 # - image, JSON, detection 결과처럼 타입이 고정되지 않은 값을 표현할 때 사용한다.
 # Dict:
 # - Flask 요청 body, ROS2로 넘길 payload, status 응답처럼 dict 구조를 명시할 때 사용한다.
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import json
 import os
+import sys
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
+
+try:
+    import yaml
+except Exception:  # pragma: no cover - optional runtime dependency
+    yaml = None
 
 
 ############################################################
@@ -549,6 +556,951 @@ def _load_static_map_payload() -> Dict[str, Any]:
         }
     return payload
 
+
+def _resolve_route_config_path() -> Path:
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        share_path = Path(get_package_share_directory("path_planning")) / "config" / "routes.yaml"
+        if share_path.exists():
+            return share_path
+    except Exception:
+        pass
+    return Path(__file__).resolve().parents[2] / "path_planning" / "config" / "routes.yaml"
+
+
+def _route_point(raw: Any) -> Dict[str, float]:
+    return {"x": float(raw[0]), "y": float(raw[1])}
+
+
+def _route_length(points: list[Dict[str, float]]) -> float:
+    total = 0.0
+    for prev, cur in zip(points, points[1:]):
+        dx = cur["x"] - prev["x"]
+        dy = cur["y"] - prev["y"]
+        total += (dx * dx + dy * dy) ** 0.5
+    return total
+
+
+def _numeric_score(value: Any, high_value: float) -> Optional[int]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if high_value <= 0:
+        return None
+    return int(round(max(0.0, min(100.0, (number / high_value) * 100.0))))
+
+
+def _clamp_score(value: Any) -> Optional[int]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(round(max(0.0, min(100.0, number))))
+
+
+def _factor_level_from_score(score: Optional[int]) -> str:
+    if score is None:
+        return "pending"
+    if score >= 85:
+        return "critical"
+    if score >= 65:
+        return "high"
+    if score >= 35:
+        return "mid"
+    return "low"
+
+
+def _format_metric(value: Any, suffix: str = "") -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if number.is_integer():
+        return f"{int(number)}{suffix}"
+    return f"{number:.1f}{suffix}"
+
+
+def _route_estimated_time_s(route_length: Any) -> Optional[float]:
+    try:
+        length = float(route_length)
+    except (TypeError, ValueError):
+        return None
+    try:
+        speed_mps = float(os.environ.get("TANK_ROUTE_EST_SPEED_MPS", "8.0"))
+    except (TypeError, ValueError):
+        speed_mps = 8.0
+    if speed_mps <= 0:
+        return None
+    return length / speed_mps
+
+
+def _pending_route_factors(route_length: Any = None) -> list[Dict[str, Any]]:
+    distance_score = _numeric_score(route_length, 450.0)
+    estimated_time_s = _route_estimated_time_s(route_length)
+    eta_score = _numeric_score(estimated_time_s, 60.0)
+    return [
+        {
+            "label": "DIST",
+            "value": _format_metric(route_length, "m"),
+            "level": _factor_level_from_score(distance_score),
+            "score": distance_score,
+        },
+        {
+            "label": "ETA",
+            "value": _format_metric(estimated_time_s, "s"),
+            "level": _factor_level_from_score(eta_score),
+            "score": eta_score,
+        },
+        {"label": "EXPO", "value": "AI", "level": "pending", "score": None},
+        {"label": "OBS", "value": "AI", "level": "pending", "score": None},
+        {"label": "BLOCK", "value": "AI", "level": "pending", "score": None},
+    ]
+
+
+def _forced_route_id() -> Optional[str]:
+    raw = os.environ.get("TANK_FORCE_ROUTE", "A").strip().upper()
+    if raw in {"", "0", "FALSE", "NO", "NONE", "OFF", "AUTO"}:
+        return None
+    if raw in {"A", "B"}:
+        return raw
+    return None
+
+
+def _fallback_route_candidates() -> Dict[str, Any]:
+    start = [59.0, 27.0]
+    destination = [110.0, 276.5]
+    return _route_candidate_payload(
+        {
+            "start": start,
+            "destination": destination,
+            "routes": {
+                "A": [[50.0, 140.0], [51.0, 271.0]],
+                "B": [
+                    [120.0, 70.0],
+                    [160.0, 105.0],
+                    [188.0, 122.0],
+                    [198.0, 142.0],
+                    [190.0, 160.0],
+                    [160.0, 200.0],
+                    [130.0, 240.0],
+                ],
+            },
+        },
+        "built_in",
+        "finalmap",
+    )
+
+
+def _route_candidate_payload(route_map: Dict[str, Any], source: str, map_name: str = "finalmap") -> Dict[str, Any]:
+    start_raw = route_map.get("start") or [59.0, 27.0]
+    destination_raw = route_map.get("destination") or [110.0, 276.5]
+    routes = route_map.get("routes") if isinstance(route_map.get("routes"), dict) else {}
+    meta = {
+        "A": {
+            "name": "LEFT ROUGH",
+            "side": "LEFT",
+            "role": "CANDIDATE",
+            "color": "#39ff88",
+            "summary": "AI assessment pending.",
+            "riskScore": None,
+            "factors": _pending_route_factors(),
+        },
+        "B": {
+            "name": "RIGHT FLAT",
+            "side": "RIGHT",
+            "role": "CANDIDATE",
+            "color": "#44d9ff",
+            "summary": "AI assessment pending.",
+            "riskScore": None,
+            "factors": _pending_route_factors(),
+        },
+    }
+    start = _route_point(start_raw)
+    destination = _route_point(destination_raw)
+    candidates = []
+    for route_id in ("A", "B"):
+        raw_points = routes.get(route_id)
+        if not isinstance(raw_points, list):
+            continue
+        points = [start] + [_route_point(point) for point in raw_points] + [destination]
+        route_length = _route_length(points)
+        route_meta = deepcopy(meta[route_id])
+        route_meta.update(
+            {
+                "id": route_id,
+                "selected": False,
+                "points": points,
+                "length": route_length,
+                "factors": _pending_route_factors(route_length),
+            }
+        )
+        candidates.append(route_meta)
+    return {
+        "source": source,
+        "mapName": map_name,
+        "selected": None,
+        "start": start,
+        "destination": destination,
+        "decisionMode": "llm_pending",
+        "decisionNote": "Waiting for LLM route assessment.",
+        "candidates": candidates,
+    }
+
+
+def _risk_report_result(report: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(report, dict):
+        return {}
+    result = report.get("result")
+    if isinstance(result, dict):
+        return result
+    if "selected_route" in report or "risk_level" in report:
+        return report
+    return {}
+
+
+def _risk_score_for_level(level: Any) -> Optional[int]:
+    scores = {
+        "low": 16,
+        "medium": 46,
+        "high": 74,
+        "critical": 96,
+    }
+    return scores.get(str(level or "").strip().lower())
+
+
+def _risk_level_class(level: Any) -> str:
+    text = str(level or "").strip().lower()
+    if text == "low":
+        return "low"
+    if text == "medium":
+        return "mid"
+    if text == "high":
+        return "high"
+    if text == "critical":
+        return "critical"
+    return "pending"
+
+
+def _risk_level_class_from_score(score: Optional[int], fallback_level: Any = None) -> str:
+    clamped = _clamp_score(score)
+    if clamped is None:
+        return _risk_level_class(fallback_level)
+    if clamped >= 85:
+        return "critical"
+    if clamped >= 65:
+        return "high"
+    if clamped >= 35:
+        return "mid"
+    return "low"
+
+
+def _risk_label_from_score(score: Optional[int], fallback_level: Any = None) -> str:
+    score_class = _risk_level_class_from_score(score, fallback_level)
+    labels = {
+        "critical": "CRITICAL",
+        "high": "HIGH",
+        "mid": "MEDIUM",
+        "low": "LOW",
+    }
+    if score_class in labels:
+        return labels[score_class]
+    fallback = str(fallback_level or "").strip()
+    return fallback.upper() if fallback else "-"
+
+
+def _risk_color_for_score(score: Optional[int]) -> str:
+    score_class = _risk_level_class_from_score(score)
+    if score_class == "critical":
+        return "#ff3448"
+    if score_class == "high":
+        return "#ff8a3d"
+    if score_class == "mid":
+        return "#ffd34d"
+    if score_class == "low":
+        return "#39ff88"
+    return "#97ffb8"
+
+
+def _contains_forced_route_disclosure(value: Any) -> bool:
+    text = str(value or "")
+    needles = (
+        "임무 정책",
+        "강제",
+        "고정",
+        "반드시 선택",
+        "forced",
+        "fixed",
+        "mission policy",
+    )
+    lowered = text.lower()
+    return any(needle.lower() in lowered for needle in needles)
+
+
+def _route_display_note() -> str:
+    return "A/B route risk assessment received. Scores are shown for comparison."
+
+
+def _sanitize_result_for_route_display(result: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+    display = deepcopy(result)
+    display["selected_route"] = None
+    display["summary"] = _route_display_note()
+    display["decision_reason"] = _route_display_note()
+
+    recommended = display.get("recommended_behavior")
+    if isinstance(recommended, dict):
+        recommended = deepcopy(recommended)
+        caution_points = recommended.get("caution_points")
+        if isinstance(caution_points, list):
+            recommended["caution_points"] = [
+                point for point in caution_points if not _contains_forced_route_disclosure(point)
+            ]
+        if _contains_forced_route_disclosure(recommended.get("tactical_note")):
+            recommended["tactical_note"] = "Monitor exposure, obstacles, and blocked segments while following the active route."
+        display["recommended_behavior"] = recommended
+    return display
+
+
+def _sanitize_route_report_for_display(report: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(report, dict) or _forced_route_id() not in {"A", "B"}:
+        return report
+    display = deepcopy(report)
+    result = _risk_report_result(display)
+    if isinstance(result, dict):
+        sanitized = _sanitize_result_for_route_display(result)
+        if isinstance(display.get("result"), dict):
+            display["result"] = sanitized
+        else:
+            display.update(sanitized)
+    raw_text = display.get("raw_text")
+    if _contains_forced_route_disclosure(raw_text):
+        display["raw_text"] = _route_display_note()
+    return display
+
+
+def _sanitize_route_candidates_for_display(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict) or _forced_route_id() not in {"A", "B"}:
+        return payload
+    display = deepcopy(payload)
+    display["selected"] = None
+    display["decisionMode"] = "risk_assessment"
+    display["decisionNote"] = _route_display_note()
+    if isinstance(display.get("llmReport"), dict):
+        display["llmReport"] = _sanitize_route_report_for_display(display["llmReport"])
+    for candidate in display.get("candidates", []):
+        if not isinstance(candidate, dict):
+            continue
+        candidate["selected"] = False
+        if str(candidate.get("role") or "").strip().upper() in {"SELECTED", "FORCED"}:
+            candidate["role"] = "CANDIDATE"
+        if _contains_forced_route_disclosure(candidate.get("summary")):
+            candidate["summary"] = "Risk metrics received."
+    return display
+
+
+def _sanitize_ai_log_for_route_display(entries: Any) -> Any:
+    if _forced_route_id() not in {"A", "B"}:
+        return entries
+    if not isinstance(entries, list):
+        return entries
+    sanitized_entries = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            sanitized_entries.append(entry)
+            continue
+        clean = deepcopy(entry)
+        invalid_llm = clean.get("parsed_ok") is False or clean.get("validated_ok") is False
+        if invalid_llm:
+            clean["result"] = {
+                "selected_route": None,
+                "risk_level": {},
+                "confidence": "low",
+                "summary": "LLM route risk analysis is not available yet.",
+                "decision_reason": clean.get("raw_text") or clean.get("decision_reason") or "",
+                "key_risks": {"A": [], "B": []},
+                "recommended_behavior": {
+                    "speed_policy": "-",
+                    "caution_points": [],
+                    "tactical_note": "",
+                },
+            }
+            clean["summary"] = "LLM route risk analysis is not available yet."
+            clean["selected_route"] = None
+            sanitized_entries.append(clean)
+            continue
+        if isinstance(clean.get("result"), dict):
+            clean["result"] = _sanitize_result_for_route_display(clean["result"])
+        if _contains_forced_route_disclosure(clean.get("summary")):
+            clean["summary"] = _route_display_note()
+        if _contains_forced_route_disclosure(clean.get("decision_reason")):
+            clean["decision_reason"] = _route_display_note()
+        if "selected_route" in clean:
+            clean["selected_route"] = None
+        sanitized_entries.append(clean)
+    return sanitized_entries
+
+
+def _apply_forced_route_policy(result: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+    forced = _forced_route_id()
+    if forced not in {"A", "B"}:
+        return deepcopy(result)
+
+    updated = deepcopy(result)
+    updated["selected_route"] = forced
+    updated["confidence"] = "high"
+    if not str(updated.get("summary") or "").strip() or _contains_forced_route_disclosure(updated.get("summary")):
+        updated["summary"] = "A/B route risk assessment received. Scores are shown for comparison."
+    if not str(updated.get("decision_reason") or "").strip() or _contains_forced_route_disclosure(
+        updated.get("decision_reason")
+    ):
+        updated["decision_reason"] = "Risk assessment uses exposure time, obstacles, blocked segments, ETA, and terrain."
+
+    recommended = updated.get("recommended_behavior")
+    if not isinstance(recommended, dict):
+        recommended = {}
+    risk_level = updated.get("risk_level") if isinstance(updated.get("risk_level"), dict) else {}
+    forced_level = str(risk_level.get(forced) or "").lower()
+    recommended["speed_policy"] = "slow" if forced_level in {"high", "critical"} else "medium"
+    caution_points = recommended.get("caution_points")
+    if not isinstance(caution_points, list):
+        caution_points = []
+    recommended["caution_points"] = [
+        point for point in caution_points if not _contains_forced_route_disclosure(point)
+    ]
+    if not str(recommended.get("tactical_note") or "").strip() or _contains_forced_route_disclosure(
+        recommended.get("tactical_note")
+    ):
+        recommended["tactical_note"] = "Monitor exposure, obstacles, and blocked segments while following the active route."
+    updated["recommended_behavior"] = recommended
+    return updated
+
+
+def _route_risk_factors(level: Any, evidence: Dict[str, Any], route_length: Any = None) -> list[Dict[str, Any]]:
+    actual_distance = evidence.get("distance_m") if isinstance(evidence, dict) else None
+    distance_value = actual_distance if actual_distance is not None else route_length
+    distance_score = _numeric_score(distance_value, 450.0)
+    actual_time_s = evidence.get("sim_time_s") if isinstance(evidence, dict) else None
+    time_value = actual_time_s if actual_time_s is not None else _route_estimated_time_s(route_length)
+    time_score = _numeric_score(time_value, 300.0 if actual_time_s is not None else 60.0)
+    exposure_score = _numeric_score(evidence.get("enemy_visible_time_s"), 30.0)
+    obstacle_score = _numeric_score(evidence.get("obstacle_count"), 30.0)
+    blocked_score = _numeric_score(evidence.get("blocked_segment_count"), 3.0)
+    return [
+        {
+            "label": "DIST",
+            "value": _format_metric(distance_value, "m"),
+            "level": _factor_level_from_score(distance_score),
+            "score": distance_score,
+        },
+        {
+            "label": "TIME" if actual_time_s is not None else "ETA",
+            "value": _format_metric(time_value, "s"),
+            "level": _factor_level_from_score(time_score),
+            "score": time_score,
+        },
+        {
+            "label": "EXPO",
+            "value": _format_metric(evidence.get("enemy_visible_time_s"), "s"),
+            "level": _factor_level_from_score(exposure_score),
+            "score": exposure_score,
+        },
+        {
+            "label": "OBS",
+            "value": _format_metric(evidence.get("obstacle_count")),
+            "level": _factor_level_from_score(obstacle_score),
+            "score": obstacle_score,
+        },
+        {
+            "label": "BLOCK",
+            "value": _format_metric(evidence.get("blocked_segment_count")),
+            "level": _factor_level_from_score(blocked_score),
+            "score": blocked_score,
+        },
+    ]
+
+
+def _apply_route_risk_report(payload: Dict[str, Any], report: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    result = _apply_forced_route_policy(_risk_report_result(report))
+    if not result:
+        return payload
+
+    selected = str(result.get("selected_route") or "").strip().upper()
+    if selected not in {"A", "B"}:
+        selected = None
+
+    risk_levels = result.get("risk_level") if isinstance(result.get("risk_level"), dict) else {}
+    key_risks = result.get("key_risks") if isinstance(result.get("key_risks"), dict) else {}
+    used_evidence = result.get("used_evidence") if isinstance(result.get("used_evidence"), dict) else {}
+
+    merged = deepcopy(payload)
+    merged["selected"] = selected
+    merged["decisionMode"] = "mission_forced" if _forced_route_id() else "llm_ready" if selected else "llm_unresolved"
+    merged["decisionNote"] = (
+        result.get("decision_reason")
+        or result.get("summary")
+        or "LLM route assessment received."
+    )
+    merged["llmReport"] = deepcopy(report)
+
+    for candidate in merged.get("candidates", []):
+        if not isinstance(candidate, dict):
+            continue
+        route_id = str(candidate.get("id") or "").strip().upper()
+        if route_id not in {"A", "B"}:
+            continue
+        route_level = risk_levels.get(route_id)
+        route_evidence = used_evidence.get(route_id) if isinstance(used_evidence.get(route_id), dict) else {}
+        route_score = _risk_score_for_level(route_level)
+        route_risks = key_risks.get(route_id) if isinstance(key_risks.get(route_id), list) else []
+
+        candidate["selected"] = bool(selected and route_id == selected)
+        candidate["riskScore"] = route_score
+        candidate["riskLabel"] = _risk_label_from_score(route_score, route_level)
+        candidate["llmRiskLabel"] = str(route_level or "-").upper()
+        candidate["scoreLevel"] = _risk_level_class_from_score(route_score, route_level)
+        candidate["riskColor"] = _risk_color_for_score(route_score)
+        if route_risks:
+            candidate["summary"] = str(route_risks[0])
+        elif route_id == selected and result.get("summary"):
+            candidate["summary"] = str(result.get("summary"))
+        else:
+            candidate["summary"] = "LLM assessment received."
+        candidate["factors"] = _route_risk_factors(route_level, route_evidence, candidate.get("length"))
+
+    return merged
+
+
+def _resolve_route_risk_result_path() -> Path:
+    env_path = os.environ.get("TANK_ROUTE_RISK_RESULT_PATH", "").strip()
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+    return _resolve_recon_report_dir() / "route_risk_result.json"
+
+
+def _resolve_route_comparison_path() -> Path:
+    env_path = os.environ.get("TANK_ROUTE_COMPARISON_PATH", "").strip()
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+    return _resolve_recon_report_dir() / "route_comparison.json"
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _resolve_recon_report_dir() -> Path:
+    env_path = os.environ.get("TANK_RECON_REPORT_DIR", "").strip()
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+    return _project_root() / "recon_reports"
+
+
+def _resolve_recon_comparison_path() -> Path:
+    env_path = os.environ.get("TANK_RECON_COMPARISON_PATH", "").strip()
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+    return _resolve_recon_report_dir() / "comparison.json"
+
+
+def _ensure_scripts_source_path() -> None:
+    scripts_dir = _project_root() / "scripts"
+    scripts_path = str(scripts_dir)
+    if scripts_dir.exists() and scripts_path not in sys.path:
+        sys.path.insert(0, scripts_path)
+
+
+def _load_json_dict(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data if isinstance(data, dict) else None
+
+
+def _file_state(path: Path) -> Dict[str, Any]:
+    state: Dict[str, Any] = {
+        "path": str(path),
+        "exists": path.exists(),
+    }
+    if not path.exists():
+        return state
+    try:
+        stat = path.stat()
+        state.update({
+            "size": int(stat.st_size),
+            "mtime": stat.st_mtime,
+            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        })
+    except Exception as exc:
+        state["statError"] = str(exc)
+    if path.suffix.lower() == ".json":
+        try:
+            data = _load_json_dict(path)
+            state["jsonValid"] = isinstance(data, dict)
+            if isinstance(data, dict):
+                result = data.get("result") if isinstance(data.get("result"), dict) else {}
+                state["route"] = data.get("route")
+                if isinstance(result, dict):
+                    state["reached"] = result.get("reached")
+                    state["distanceM"] = result.get("distance_m")
+                    state["simTimeS"] = result.get("sim_time_s")
+                if path.name == "route_risk_result.json":
+                    state["riskValid"] = _is_valid_route_risk_report(data)
+                    state["selectedRoute"] = _route_risk_file_selected(path)
+                if path.name in {"comparison.json", "route_comparison.json"}:
+                    state["hasRouteA"] = isinstance(data.get("route_A"), dict)
+                    state["hasRouteB"] = isinstance(data.get("route_B"), dict)
+        except Exception as exc:
+            state["jsonValid"] = False
+            state["jsonError"] = str(exc)
+    return state
+
+
+def _recon_paths() -> Dict[str, Path]:
+    report_dir = _resolve_recon_report_dir()
+    return {
+        "reportDir": report_dir,
+        "routeA": report_dir / "route_A.json",
+        "routeB": report_dir / "route_B.json",
+        "comparison": _resolve_recon_comparison_path(),
+        "routeComparison": _resolve_route_comparison_path(),
+        "riskResult": _resolve_route_risk_result_path(),
+        "txtReport": report_dir / "route_analysis_report.txt",
+    }
+
+
+def _build_comparison_from_route_reports(report_dir: Path) -> Path:
+    route_a_path = report_dir / "route_A.json"
+    route_b_path = report_dir / "route_B.json"
+    missing = [str(path) for path in (route_a_path, route_b_path) if not path.exists()]
+    if missing:
+        raise FileNotFoundError("missing route report file(s): " + ", ".join(missing))
+    route_a = _load_json_dict(route_a_path)
+    route_b = _load_json_dict(route_b_path)
+    if not isinstance(route_a, dict) or not isinstance(route_b, dict):
+        raise ValueError("route_A.json and route_B.json must both be JSON objects")
+    comparison_path = _resolve_recon_comparison_path()
+    comparison_path.parent.mkdir(parents=True, exist_ok=True)
+    with comparison_path.open("w", encoding="utf-8") as f:
+        json.dump({"route_A": route_a, "route_B": route_b}, f, ensure_ascii=False, indent=2)
+    return comparison_path
+
+
+def _build_route_comparison_input(report_dir: Path) -> Path:
+    comparison_path = _resolve_recon_comparison_path()
+    comparison = _load_json_dict(comparison_path)
+    if not isinstance(comparison, dict):
+        comparison_path = _build_comparison_from_route_reports(report_dir)
+        comparison = _load_json_dict(comparison_path)
+    if not isinstance(comparison, dict):
+        raise ValueError(f"comparison JSON is unavailable: {comparison_path}")
+    _ensure_scripts_source_path()
+    from make_llm_input import build_llm_input
+
+    llm_input = build_llm_input(comparison)
+    output_path = _resolve_route_comparison_path()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as f:
+        json.dump(llm_input, f, ensure_ascii=False, indent=2)
+    return output_path
+
+
+def _windows_recon_status_payload() -> Dict[str, Any]:
+    paths = _recon_paths()
+    files = {key: _file_state(path) for key, path in paths.items() if key != "reportDir"}
+    route_a_exists = bool(files.get("routeA", {}).get("exists"))
+    route_b_exists = bool(files.get("routeB", {}).get("exists"))
+    route_comparison_exists = bool(files.get("routeComparison", {}).get("exists"))
+    risk_result = _load_route_risk_result_file(paths["riskResult"])
+    with _ROUTE_RISK_RUNTIME_LOCK:
+        runtime = deepcopy(_ROUTE_RISK_RUNTIME)
+        runtime["report"] = bool(runtime.get("report"))
+    messages = []
+    if not route_a_exists:
+        messages.append("route_A.json is missing")
+    if not route_b_exists:
+        messages.append("route_B.json is missing")
+    if route_a_exists and route_b_exists and not route_comparison_exists:
+        messages.append("route_comparison.json can be generated from route_A/B")
+    if isinstance(risk_result, dict) and not _is_valid_route_risk_report(risk_result):
+        messages.append("route_risk_result.json exists but is not a valid LLM route-risk result")
+    return {
+        "mode": "windows_only",
+        "reportDir": str(paths["reportDir"]),
+        "readyForComparison": route_a_exists and route_b_exists,
+        "readyForLlm": route_comparison_exists,
+        "resultValid": _is_valid_route_risk_report(risk_result),
+        "ollamaUrl": os.environ.get("TANK_OLLAMA_URL", "http://localhost:11434/api/generate"),
+        "model": os.environ.get("TANK_LLM_MODEL", os.environ.get("TANK_OLLAMA_MODEL", "qwen3:0.6b")),
+        "files": files,
+        "runtime": runtime,
+        "messages": messages,
+        "capabilities": {
+            "webDashboard": True,
+            "yoloOnIncomingImages": True,
+            "routeJsonPostprocess": True,
+            "directOllamaLlm": True,
+            "txtReport": True,
+            "rosAutonomousDrive": False,
+        },
+    }
+
+
+def _load_route_risk_result_file(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    result_path = path or _resolve_route_risk_result_path()
+    if not result_path.exists():
+        return None
+    try:
+        with result_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _route_risk_file_selected(path: Optional[Path] = None) -> Optional[str]:
+    data = _load_route_risk_result_file(path)
+    result = _risk_report_result(data)
+    selected = str(result.get("selected_route") or "").strip().upper() if result else ""
+    return selected if selected in {"A", "B"} else None
+
+
+def _is_valid_route_risk_report(report: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(report, dict):
+        return False
+    if report.get("parsed_ok") is False or report.get("validated_ok") is False:
+        return False
+    result = _risk_report_result(report)
+    selected = str(result.get("selected_route") or "").strip().upper() if result else ""
+    return selected in {"A", "B"}
+
+
+_ROUTE_RISK_RUNTIME_LOCK = Lock()
+_ROUTE_RISK_RUNTIME: Dict[str, Any] = {
+    "attempted": False,
+    "running": False,
+    "last_error": None,
+    "report": None,
+}
+
+
+def _load_route_comparison_data() -> Optional[Dict[str, Any]]:
+    path = _resolve_route_comparison_path()
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return None
+        if not isinstance(data.get("route_A"), dict) or not isinstance(data.get("route_B"), dict):
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def _ensure_risk_analysis_source_path() -> None:
+    package_root = Path(__file__).resolve().parents[2] / "risk_analysis"
+    package_path = str(package_root)
+    if package_root.exists() and package_path not in sys.path:
+        sys.path.insert(0, package_path)
+
+
+def _write_route_summary_txt(report_dir: Path, *, raise_errors: bool = False) -> Optional[Path]:
+    _ensure_scripts_source_path()
+    try:
+        from generate_route_summary_txt import build_report
+
+        output_path = report_dir / "route_analysis_report.txt"
+        output_path.write_text(build_report(report_dir), encoding="utf-8")
+        return output_path
+    except Exception:
+        if raise_errors:
+            raise
+        return None
+
+
+def _run_windows_recon_pipeline(*, run_llm: bool = False, force_llm: bool = False) -> Dict[str, Any]:
+    report_dir = _resolve_recon_report_dir()
+    report_dir.mkdir(parents=True, exist_ok=True)
+    steps = []
+    errors = []
+    route_input_ready = False
+
+    try:
+        comparison_path = _build_comparison_from_route_reports(report_dir)
+        steps.append({"step": "comparison_json", "ok": True, "path": str(comparison_path)})
+    except Exception as exc:
+        errors.append(str(exc))
+        steps.append({"step": "comparison_json", "ok": False, "error": str(exc)})
+
+    try:
+        route_comparison_path = _build_route_comparison_input(report_dir)
+        route_input_ready = True
+        steps.append({"step": "route_comparison_json", "ok": True, "path": str(route_comparison_path)})
+    except Exception as exc:
+        errors.append(str(exc))
+        steps.append({"step": "route_comparison_json", "ok": False, "error": str(exc)})
+
+    try:
+        txt_path = _write_route_summary_txt(report_dir, raise_errors=True)
+        steps.append({"step": "route_analysis_txt", "ok": True, "path": str(txt_path)})
+    except Exception as exc:
+        errors.append(str(exc))
+        steps.append({"step": "route_analysis_txt", "ok": False, "error": str(exc)})
+
+    if run_llm:
+        result_path = _resolve_route_risk_result_path()
+        existing_data = _load_route_risk_result_file(result_path)
+        existing_valid = _is_valid_route_risk_report(existing_data)
+        route_comparison_path = _resolve_route_comparison_path()
+        if not route_input_ready:
+            message = f"route comparison input is missing: {route_comparison_path}"
+            errors.append(message)
+            steps.append({"step": "llm_route_risk", "ok": False, "error": message})
+        else:
+            with _ROUTE_RISK_RUNTIME_LOCK:
+                if _ROUTE_RISK_RUNTIME["running"]:
+                    steps.append({"step": "llm_route_risk", "ok": True, "running": True, "message": "LLM analysis is already running"})
+                elif result_path.exists() and existing_valid and not force_llm:
+                    steps.append({
+                        "step": "llm_route_risk",
+                        "ok": True,
+                        "running": False,
+                        "message": "route_risk_result.json already exists",
+                        "path": str(result_path),
+                    })
+                else:
+                    _ROUTE_RISK_RUNTIME["attempted"] = True
+                    _ROUTE_RISK_RUNTIME["running"] = True
+                    _ROUTE_RISK_RUNTIME["last_error"] = None
+                    Thread(target=_run_route_risk_llm_once, daemon=True, name="RouteRiskLLMWindowsRecon").start()
+                    steps.append({"step": "llm_route_risk", "ok": True, "running": True, "path": str(result_path)})
+
+    payload = _windows_recon_status_payload()
+    payload.update({
+        "ok": not errors,
+        "steps": steps,
+        "errors": errors,
+    })
+    return payload
+
+
+def _run_route_risk_llm_once() -> None:
+    result_path = _resolve_route_risk_result_path()
+    comparison = _load_route_comparison_data()
+    if not isinstance(comparison, dict):
+        with _ROUTE_RISK_RUNTIME_LOCK:
+            _ROUTE_RISK_RUNTIME["last_error"] = f"comparison file not found: {_resolve_route_comparison_path()}"
+            _ROUTE_RISK_RUNTIME["running"] = False
+        return
+    try:
+        _ensure_risk_analysis_source_path()
+        from risk_analysis.llm_reporter import LLMReporter
+
+        reporter = LLMReporter(
+            ollama_url=os.environ.get("TANK_OLLAMA_URL", "http://localhost:11434/api/generate"),
+            model_name=os.environ.get("TANK_LLM_MODEL", os.environ.get("TANK_OLLAMA_MODEL", "qwen3:0.6b")),
+            timeout_sec=int(os.environ.get("TANK_LLM_TIMEOUT_SEC", "1800")),
+        )
+        report = reporter.generate_route_decision(comparison)
+        report["source"] = "windows_direct_ollama"
+        report["input_file"] = str(_resolve_route_comparison_path())
+        report["output_file"] = str(result_path)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        with result_path.open("w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+        _write_route_summary_txt(result_path.parent)
+        with _ROUTE_RISK_RUNTIME_LOCK:
+            _ROUTE_RISK_RUNTIME["report"] = deepcopy(report)
+            _ROUTE_RISK_RUNTIME["last_error"] = None
+    except Exception as exc:
+        with _ROUTE_RISK_RUNTIME_LOCK:
+            _ROUTE_RISK_RUNTIME["last_error"] = str(exc)
+    finally:
+        with _ROUTE_RISK_RUNTIME_LOCK:
+            _ROUTE_RISK_RUNTIME["running"] = False
+
+
+def _maybe_start_route_risk_llm() -> None:
+    auto_run = os.environ.get("TANK_LLM_AUTO_RUN", "true").strip().lower() in ("1", "true", "yes", "y")
+    if not auto_run:
+        return
+    with _ROUTE_RISK_RUNTIME_LOCK:
+        if _ROUTE_RISK_RUNTIME["attempted"] or _ROUTE_RISK_RUNTIME["running"]:
+            return
+        _ROUTE_RISK_RUNTIME["attempted"] = True
+        _ROUTE_RISK_RUNTIME["running"] = True
+    Thread(target=_run_route_risk_llm_once, daemon=True, name="RouteRiskLLM").start()
+
+
+def _load_saved_route_risk_report(*, allow_auto_run: bool = True) -> Optional[Dict[str, Any]]:
+    path = _resolve_route_risk_result_path()
+    if not path.exists():
+        with _ROUTE_RISK_RUNTIME_LOCK:
+            memory_report = deepcopy(_ROUTE_RISK_RUNTIME.get("report"))
+        if _is_valid_route_risk_report(memory_report):
+            return memory_report
+        if allow_auto_run:
+            _maybe_start_route_risk_llm()
+        return None
+    try:
+        data = _load_route_risk_result_file(path)
+        if not isinstance(data, dict):
+            return None
+        if not _is_valid_route_risk_report(data):
+            if allow_auto_run:
+                _maybe_start_route_risk_llm()
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def _route_risk_ai_entry(report: Dict[str, Any]) -> Dict[str, Any]:
+    result = _apply_forced_route_policy(_risk_report_result(report))
+    return {
+        "timestamp_wall": now_wall(),
+        "source": report.get("source") or "route_risk_result_file",
+        "model": report.get("model"),
+        "selected_route": result.get("selected_route"),
+        "confidence": result.get("confidence"),
+        "summary": result.get("summary"),
+        "decision_reason": result.get("decision_reason"),
+        "validated_ok": report.get("validated_ok"),
+        "result": result,
+    }
+
+
+def _load_route_candidates_payload(route_risk_report: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    path = _resolve_route_config_path()
+    report = route_risk_report if isinstance(route_risk_report, dict) else _load_saved_route_risk_report()
+    if yaml is None or not path.exists():
+        return _apply_route_risk_report(_fallback_route_candidates(), report)
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        preferred_map = os.environ.get("TANK_ROUTE_CANDIDATE_MAP", "finalmap").strip() or "finalmap"
+        route_map = data.get(preferred_map)
+        map_name = preferred_map
+        if not isinstance(route_map, dict):
+            for key, value in data.items():
+                if isinstance(value, dict) and isinstance(value.get("routes"), dict):
+                    route_map = value
+                    map_name = str(key)
+                    break
+        if not isinstance(route_map, dict):
+            return _apply_route_risk_report(_fallback_route_candidates(), report)
+        return _apply_route_risk_report(_route_candidate_payload(route_map, str(path), map_name), report)
+    except Exception:
+        return _apply_route_risk_report(_fallback_route_candidates(), report)
+
 ############################################################
 # 4-1. Client IP allowlist
 ############################################################
@@ -988,6 +1940,37 @@ def route_static_map_overview():
         return jsonify({"available": False, "error": str(exc)}), 500
 
 
+@app.route("/api/recon/windows/status", methods=["GET"])
+def route_windows_recon_status():
+    """Windows-only reconnaissance postprocess status."""
+    try:
+        return jsonify(_windows_recon_status_payload())
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/recon/windows/run", methods=["GET", "POST"])
+def route_windows_recon_run():
+    """Build comparison/LLM-input/TXT files and optionally start direct Ollama analysis."""
+    run_llm = str(request.args.get("llm", request.args.get("run_llm", ""))).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
+    force_llm = str(request.args.get("force", request.args.get("force_llm", ""))).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
+    try:
+        status = _run_windows_recon_pipeline(run_llm=run_llm, force_llm=force_llm)
+        return jsonify(status), 200 if status.get("ok") else 409
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc), "status": _windows_recon_status_payload()}), 500
+
+
 @app.route("/api/dashboard/state", methods=["GET"])
 def route_dashboard_state():
     """browser MFD dashboard용으로 합쳐진 state payload."""
@@ -1001,6 +1984,8 @@ def route_dashboard_state():
         "reconLog": [],
         "sensor": {},
         "staticMap": {},
+        "routeCandidates": {},
+        "windowsRecon": {},
     }
 
     try:
@@ -1016,8 +2001,17 @@ def route_dashboard_state():
             payload["yolo"] = {"loaded": False, "importError": str(_YOLO_IMPORT_ERROR)}
         else:
             payload["yolo"] = get_detector().debug_state()
+        yolo_error = (
+            payload["yolo"].get("error")
+            or payload["yolo"].get("importError")
+            or payload["yolo"].get("loadError")
+        )
+        payload["yolo"]["ready"] = bool(payload["yolo"].get("loaded")) and not bool(yolo_error)
+        payload["yolo"]["status"] = "error" if yolo_error else "ready" if payload["yolo"].get("loaded") else "wait"
+        if yolo_error:
+            payload["yolo"]["error"] = str(yolo_error)
     except Exception as exc:  # noqa: BLE001
-        payload["yolo"] = {"loaded": False, "error": str(exc)}
+        payload["yolo"] = {"loaded": False, "ready": False, "status": "error", "error": str(exc)}
 
     bridge = None
     try:
@@ -1042,6 +2036,23 @@ def route_dashboard_state():
     latest = payload.get("bridge", {}).get("latest", {})
     if not isinstance(latest, dict):
         latest = {}
+    route_risk_report = latest.get("route_risk_report")
+    if not _is_valid_route_risk_report(route_risk_report):
+        route_risk_report = _load_saved_route_risk_report()
+    if _forced_route_id() in {"A", "B"} and isinstance(payload.get("bridge"), dict) and isinstance(latest, dict):
+        display_latest = deepcopy(latest)
+        if isinstance(display_latest.get("route_risk_report"), dict):
+            display_latest["route_risk_report"] = _sanitize_route_report_for_display(
+                display_latest["route_risk_report"]
+            )
+        for log_key in ("ai_log", "llm_log", "decision"):
+            value = display_latest.get(log_key)
+            if isinstance(value, list):
+                display_latest[log_key] = _sanitize_ai_log_for_route_display(value)
+            elif isinstance(value, dict):
+                sanitized = _sanitize_ai_log_for_route_display([value])
+                display_latest[log_key] = sanitized[0] if sanitized else value
+        payload["bridge"]["latest"] = display_latest
 
     detect_result = latest.get("detect_result") if isinstance(latest.get("detect_result"), dict) else {}
     detections = detect_result.get("detections") if isinstance(detect_result, dict) else []
@@ -1065,6 +2076,9 @@ def route_dashboard_state():
         if value:
             payload["aiLog"] = [value]
             break
+    if not payload["aiLog"] and isinstance(route_risk_report, dict):
+        payload["aiLog"] = [_route_risk_ai_entry(route_risk_report)]
+    payload["aiLog"] = _sanitize_ai_log_for_route_display(payload["aiLog"])
 
     timestamp = detect_result.get("timestamp_wall") if isinstance(detect_result, dict) else None
     payload["reconLog"] = [
@@ -1088,6 +2102,11 @@ def route_dashboard_state():
     }
 
     try:
+        payload["windowsRecon"] = _windows_recon_status_payload()
+    except Exception as exc:  # noqa: BLE001
+        payload["windowsRecon"] = {"mode": "windows_only", "ok": False, "error": str(exc)}
+
+    try:
         static_map = _load_static_map_payload()
         payload["staticMap"] = {
             "loaded": True,
@@ -1102,7 +2121,63 @@ def route_dashboard_state():
     except Exception as exc:  # noqa: BLE001
         payload["staticMap"] = {"loaded": False, "error": str(exc)}
 
+    payload["routeCandidates"] = _sanitize_route_candidates_for_display(
+        _load_route_candidates_payload(route_risk_report)
+    )
+
     return jsonify(payload)
+
+
+@app.route("/api/llm/route-risk/status", methods=["GET"])
+def route_llm_route_risk_status():
+    """Debug state for Windows/direct route risk LLM integration."""
+    result_path = _resolve_route_risk_result_path()
+    comparison_path = _resolve_route_comparison_path()
+    result_data = _load_route_risk_result_file(result_path)
+    result_selected = _route_risk_file_selected(result_path)
+    result_valid = _is_valid_route_risk_report(result_data)
+    with _ROUTE_RISK_RUNTIME_LOCK:
+        runtime = deepcopy(_ROUTE_RISK_RUNTIME)
+        runtime["report"] = bool(runtime.get("report"))
+    return jsonify({
+        "resultPath": str(result_path),
+        "resultExists": result_path.exists(),
+        "resultSelectedRoute": result_selected,
+        "resultValid": result_valid,
+        "comparisonPath": str(comparison_path),
+        "comparisonExists": comparison_path.exists(),
+        "ollamaUrl": os.environ.get("TANK_OLLAMA_URL", "http://localhost:11434/api/generate"),
+        "model": os.environ.get("TANK_LLM_MODEL", os.environ.get("TANK_OLLAMA_MODEL", "qwen3:0.6b")),
+        "forcedRoute": _forced_route_id(),
+        "autoRun": os.environ.get("TANK_LLM_AUTO_RUN", "true").strip().lower() in ("1", "true", "yes", "y"),
+        "runtime": runtime,
+    })
+
+
+@app.route("/api/llm/route-risk/run", methods=["GET", "POST"])
+def route_llm_route_risk_run():
+    """Start a Windows/direct Ollama route risk analysis without ROS."""
+    force = str(request.args.get("force", "")).strip().lower() in ("1", "true", "yes", "y")
+    result_path = _resolve_route_risk_result_path()
+    existing_data = _load_route_risk_result_file(result_path)
+    existing_selected = _route_risk_file_selected(result_path)
+    existing_valid = _is_valid_route_risk_report(existing_data)
+    with _ROUTE_RISK_RUNTIME_LOCK:
+        if _ROUTE_RISK_RUNTIME["running"]:
+            return jsonify({"started": False, "running": True, "message": "LLM analysis is already running"})
+        if result_path.exists() and not force and existing_valid:
+            return jsonify({
+                "started": False,
+                "running": False,
+                "message": "route_risk_result.json already exists; use ?force=true to regenerate",
+                "resultPath": str(result_path),
+                "selectedRoute": existing_selected,
+            })
+        _ROUTE_RISK_RUNTIME["attempted"] = True
+        _ROUTE_RISK_RUNTIME["running"] = True
+        _ROUTE_RISK_RUNTIME["last_error"] = None
+    Thread(target=_run_route_risk_llm_once, daemon=True, name="RouteRiskLLMManual").start()
+    return jsonify({"started": True, "running": True, "resultPath": str(result_path)})
 
 
 @app.route("/view", methods=["GET"])

@@ -60,18 +60,6 @@ categories:
       type: constant
       value: 0.35
 
-  wall:
-    prefixes: ["Wall"]
-    marker_type: CUBE
-    scale: [4.0, 1.2, 3.0]
-    color_recon: [0.25, 0.25, 0.25, 0.55]
-    color_mission: [0.35, 0.35, 0.35, 0.90]
-    impassable: true
-    inflation_radius_m: 4.0
-    risk:
-      type: constant
-      value: 0.45
-
   house:
     prefixes: ["House"]
     marker_type: CUBE
@@ -115,18 +103,6 @@ categories:
       radius_m: 30.0
       sigma_m: 10.0
       max_value: 1.0
-
-  tent:
-    prefixes: ["Tent"]
-    marker_type: CUBE
-    scale: [5.0, 5.0, 2.0]
-    color_recon: [0.20, 0.50, 0.90, 0.50]
-    color_mission: [0.20, 0.60, 1.00, 0.85]
-    impassable: true
-    inflation_radius_m: 3.0
-    risk:
-      type: constant
-      value: 0.25
 
   unknown:
     prefixes: []

@@ -142,7 +142,10 @@ def summarize_route(route_data: Dict[str, Any]) -> Dict[str, Any]:
         terrain = {}
 
     return {
+        "route_id": route_data.get("route"),
         "reached": bool(result.get("reached", False)),
+        "distance_m": round_float(result.get("distance_m"), 3, 0.0),
+        "sim_time_s": round_float(result.get("sim_time_s"), 3, 0.0),
 
         # result.collisions -> collision_count로 이름 통일
         "collision_count": safe_int(result.get("collisions"), 0),
@@ -167,6 +170,11 @@ def summarize_route(route_data: Dict[str, Any]) -> Dict[str, Any]:
 
         # 장애물
         "obstacle_count": safe_int(obstacle.get("count"), 0),
+        "obstacle_density_per_100m": round_float(
+            obstacle.get("density_per_100m"),
+            3,
+            0.0,
+        ),
 
         # 현재 comparison.json에 없으면 0
         "blocked_segment_count": safe_int(
@@ -185,6 +193,12 @@ def summarize_route(route_data: Dict[str, Any]) -> Dict[str, Any]:
             3,
             0.0,
         ),
+        "yolo_counts": route_data.get("vision_yolo", {}).get("counts", {})
+        if isinstance(route_data.get("vision_yolo"), dict)
+        else {},
+        "asset_spotted_gt": route_data.get("asset_spotted_gt", {})
+        if isinstance(route_data.get("asset_spotted_gt"), dict)
+        else {},
     }
 
 

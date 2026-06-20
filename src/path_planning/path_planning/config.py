@@ -42,6 +42,11 @@ def env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def env_route_id(name: str, default: str = "A") -> str:
+    value = os.environ.get(name, default).strip().upper()
+    return value if value in {"A", "B"} else default
+
+
 MAP_FRAME = os.environ.get("TANK_MAP_FRAME", "tank_map")
 
 TOPIC_PLAYER_POSE = os.environ.get("TANK_TOPIC_PLAYER_POSE", "/tank/player/pose")
@@ -151,10 +156,10 @@ TOPIC_LIDAR_CLUSTERS = os.environ.get("TANK_TOPIC_LIDAR_CLUSTERS", "/tank/visual
 
 
 # TankSimulation route A/B 전략 통합.
-USE_ROUTE_WAYPOINTS = env_bool("TANK_PLANNER_USE_ROUTE_WAYPOINTS", False)
+USE_ROUTE_WAYPOINTS = env_bool("TANK_PLANNER_USE_ROUTE_WAYPOINTS", True)
 ROUTE_MAP_NAME = os.environ.get("TANK_PLANNER_ROUTE_MAP_NAME", "finalmap")
-ROUTE_ID = os.environ.get("TANK_PLANNER_ROUTE_ID", "B")
-ROUTE_SIDE = os.environ.get("TANK_PLANNER_ROUTE_SIDE", "east")
+ROUTE_ID = env_route_id("TANK_PLANNER_ROUTE_ID", env_route_id("TANK_FORCE_ROUTE", "A"))
+ROUTE_SIDE = os.environ.get("TANK_PLANNER_ROUTE_SIDE", "west" if ROUTE_ID == "A" else "east")
 ROUTE_CLEARANCE_WEIGHT = env_float("TANK_PLANNER_ROUTE_CLEARANCE_WEIGHT", 0.4)
 ROUTE_CONFIG_FILE = os.environ.get("TANK_PLANNER_ROUTE_CONFIG_FILE", "")
 # 정적 맵(finalmap.map) 나무/바위를 A* 코스트맵에 넣어 전역 경로가 회피·중앙정렬하게 한다.

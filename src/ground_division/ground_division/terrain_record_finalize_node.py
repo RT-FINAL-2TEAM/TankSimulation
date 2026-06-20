@@ -266,7 +266,7 @@ class TerrainRecordFinalizeNode(Node):
         self._final_markers = self.make_delete_all_markers("final_elevation_grid")
         self._final_wireframe_markers = self.make_delete_all_markers("final_terrain_wireframe")
         self._last_summary = "reset 완료"
-        
+
         self.publish_final_outputs()
         response.success = True
         response.message = "기록된 LiDAR와 최종 지도 결과를 초기화했습니다."
@@ -577,7 +577,7 @@ class TerrainRecordFinalizeNode(Node):
         marker.action = Marker.ADD
         marker.pose.orientation.w = 1.0
         marker.scale.x = max(self.wireframe_line_width, 0.001)
-        marker.color.a = 1.0 
+        marker.color.a = 1.0
 
         neighbor_offsets = [(1, 0), (0, 1)]
         if self.wireframe_connect_diagonal:
@@ -639,7 +639,7 @@ class TerrainRecordFinalizeNode(Node):
         method: str,
     ) -> None:
         import json # 메타 저장용 지역 import
-        
+
         np.save(str(out_prefix) + "_accumulated.npy", accumulated)
         np.save(str(out_prefix) + "_ground.npy", ground)
         np.save(str(out_prefix) + "_non_ground.npy", non_ground)

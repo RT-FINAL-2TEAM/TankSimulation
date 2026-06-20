@@ -121,8 +121,8 @@ class LidarDbscanClusterNode(Node):
         
         # Scikit-learn DBSCAN 인스턴스 초기화 (KD-Tree 알고리즘 사용)
         self.dbscan_algo = DBSCAN(
-            eps=max(self.eps, 0.001), 
-            min_samples=max(self.min_samples, 1), 
+            eps=max(self.eps, 0.001),
+            min_samples=max(self.min_samples, 1),
             algorithm='kd_tree'
         )
 

@@ -12,7 +12,10 @@ setup(
         ("share/" + package_name, ["package.xml"]),
         ("share/" + package_name + "/launch", glob("launch/*.launch.py")),
         ("share/" + package_name + "/rviz", glob("rviz/*.rviz")),
-        ("share/" + package_name + "/map", glob("map/*.map")),
+        (
+            "share/" + package_name + "/map",
+            glob("map/*.map") + glob("map/*.png") + glob("map/*.jpg") + glob("map/*.jpeg"),
+        ),
         ("share/" + package_name + "/config", glob("config/*.yaml")),
     ],
     install_requires=["setuptools"],
@@ -25,6 +28,7 @@ setup(
         "console_scripts": [
             "rviz_visualizer_node = rviz_visualization.rviz_visualizer_node:main",
             "static_map_loader_node = rviz_visualization.static_map_loader_node:main",
+            "terrain_record_finalize_node = rviz_visualization.terrain_record_finalize_node:main",
         ],
     },
 )

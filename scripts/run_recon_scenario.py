@@ -285,7 +285,8 @@ def main() -> int:
                 )
 
             # LLM 전술 분석 자동 실행(graceful) → /tank/risk/route_report 발행 → 브릿지 MFD 표시.
-            # comparison.json → make_llm_input(route_comparison.json) → route_risk_node(ollama).
+            # comparison.json → make_llm_input(route_comparison.json) → route_risk_node(ollama)
+            # → generate_route_summary_txt(route_analysis_report.txt).
             # ollama 미가동/타임아웃이어도 정찰 완료엔 영향 없음(예외 흡수).
             scripts_dir = os.path.dirname(os.path.abspath(__file__))
             print("\n--- LLM 전술 분석 자동 실행 ---")
@@ -302,6 +303,15 @@ def main() -> int:
                 print(f"  ✅ LLM 결과: {os.path.join(REPORT_DIR, 'route_risk_result.json')} (+ MFD AI LOG 표시)")
             except Exception as e:
                 print(f"  [LLM] 자동 분석 생략: {e} (ollama 미가동/타임아웃 — 수동 실행 가능)")
+            finally:
+                try:
+                    subprocess.run(
+                        ["python3", os.path.join(scripts_dir, "generate_route_summary_txt.py")],
+                        cwd=PROJECT_ROOT, check=True, timeout=60,
+                    )
+                    print(f"  📝 TXT 보고서: {os.path.join(REPORT_DIR, 'route_analysis_report.txt')}")
+                except Exception as e:
+                    print(f"  [TXT] 루트 분석 보고서 생성 실패: {e}")
         else:
             print("\n[경고] route_A.json / route_B.json 일부 누락 — comparison 생략")
         return 0

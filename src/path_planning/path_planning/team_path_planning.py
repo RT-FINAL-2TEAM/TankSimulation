@@ -294,7 +294,7 @@ def load_static_obstacles_from_map(map_path: str) -> list[dict]:
         elif 'Wall' in prefab:
             radius = 2.0
             obs_type = 'Wall'
-            
+
         obstacles.append({
             'type': obs_type,
             'x_min': x - radius,

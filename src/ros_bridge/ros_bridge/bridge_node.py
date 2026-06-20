@@ -64,6 +64,39 @@ from .utils import (
 )
 
 
+def _forced_route_id() -> Optional[str]:
+    raw = os.environ.get("TANK_FORCE_ROUTE", "A").strip().upper()
+    if raw in {"", "0", "FALSE", "NO", "NONE", "OFF", "AUTO"}:
+        return None
+    if raw in {"A", "B"}:
+        return raw
+    return None
+
+
+def _apply_forced_route_policy_to_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(result, dict):
+        result = {}
+    updated = deepcopy(result)
+    forced = _forced_route_id()
+    if forced not in {"A", "B"}:
+        return updated
+
+    updated["selected_route"] = forced
+    updated["confidence"] = "high"
+    if not str(updated.get("summary") or "").strip():
+        updated["summary"] = "A/B route risk assessment received."
+    if not str(updated.get("decision_reason") or "").strip():
+        updated["decision_reason"] = "Risk assessment uses the completed route reconnaissance JSON."
+    return updated
+
+
+def _route_risk_report_ready(report: Dict[str, Any], result: Dict[str, Any]) -> bool:
+    if report.get("parsed_ok") is False or report.get("validated_ok") is False:
+        return False
+    selected = str(result.get("selected_route") or "").strip().upper()
+    return selected in {"A", "B"}
+
+
 
 ############################################################
 # 2. RosBridge 노드 클래스
@@ -240,6 +273,14 @@ class RosBridge(Node):
             10,
             callback_group=self.control_callback_group,
         )
+        # Subscriber 생성: '/tank/risk/route_report' topic의 String 메시지를 받아 self.on_route_risk_report callback으로 처리한다. (jin)
+        self.sub_route_risk_report = self.create_subscription(
+            String,
+            "/tank/risk/route_report",
+            self.on_route_risk_report,
+            10,
+            callback_group=self.control_callback_group,
+        )
 
         # ----------------------------------------------------
         # 센서 융합 데이터 로깅 subscription
@@ -324,6 +365,12 @@ class RosBridge(Node):
             "obstacles": None,
             # latest['collision'] 초기값. 해당 endpoint 데이터가 들어오기 전까지는 None이다.
             "collision": None,
+            # latest['route_risk_report'] 초기값. risk_analysis LLM 결과가 들어오기 전까지는 None이다.
+            "route_risk_report": None,
+            # Web dashboard AI tab compatibility fields.
+            "ai_log": None,
+            "llm_log": None,
+            "decision": None,
         }
 
         # ROS2 timer를 등록한다. 현재는 0.1초마다 latest state를 publish하므로 10Hz 주기다.
@@ -437,7 +484,7 @@ class RosBridge(Node):
             self._latest[key] = value
 
     def get_latest_snapshot(self) -> Dict[str, Any]:
-        """대시보드 view용으로 bridge 상태를 JSON 친화적인 복사본으로 반환한다."""
+        """Return a JSON-friendly copy of the bridge state for dashboard views."""
         now = now_wall()
         with self._lock:
             latest_command_age = None
@@ -466,6 +513,65 @@ class RosBridge(Node):
     ########################################################
     # 5. ROS2 -> 시뮬레이터 명령 callback들
     ########################################################
+    def on_route_risk_report(self, msg: String) -> None:
+        """Store risk_analysis LLM output for the browser dashboard."""
+        timestamp_wall = now_wall()
+        try:
+            report = json.loads(msg.data)
+            if not isinstance(report, dict):
+                raise ValueError("route risk report is not a JSON object")
+        except Exception as exc:
+            self.get_logger().error(f"Invalid /tank/risk/route_report: {exc}")
+            return
+
+        result = report.get("result") if isinstance(report.get("result"), dict) else {}
+        if _route_risk_report_ready(report, result):
+            result = _apply_forced_route_policy_to_result(result)
+        report = deepcopy(report)
+        report["result"] = deepcopy(result)
+        decision = {
+            "route": "/tank/risk/route_report",
+            "timestamp_wall": timestamp_wall,
+            "model": report.get("model"),
+            "ok": report.get("ok"),
+            "parsed_ok": report.get("parsed_ok"),
+            "validated_ok": report.get("validated_ok"),
+            "selected_route": result.get("selected_route"),
+            "risk_level": deepcopy(result.get("risk_level")),
+            "confidence": result.get("confidence"),
+            "summary": result.get("summary"),
+            "decision_reason": result.get("decision_reason"),
+            "key_risks": deepcopy(result.get("key_risks")),
+            "recommended_behavior": deepcopy(result.get("recommended_behavior")),
+            "used_evidence": deepcopy(result.get("used_evidence")),
+        }
+        ai_entry = {
+            "timestamp_wall": timestamp_wall,
+            "source": "/tank/risk/route_report",
+            "model": report.get("model"),
+            "selected_route": result.get("selected_route"),
+            "confidence": result.get("confidence"),
+            "summary": result.get("summary"),
+            "decision_reason": result.get("decision_reason"),
+            "validated_ok": report.get("validated_ok"),
+        }
+
+        with self._lock:
+            self._count("/tank/risk/route_report")
+            self._latest["route_risk_report"] = deepcopy(report)
+            self._latest["decision"] = deepcopy(decision)
+            log_entries = self._latest.get("llm_log")
+            if not isinstance(log_entries, list):
+                log_entries = []
+            log_entries.append(ai_entry)
+            log_entries = log_entries[-20:]
+            self._latest["llm_log"] = deepcopy(log_entries)
+            self._latest["ai_log"] = deepcopy(log_entries)
+
+        selected_route = result.get("selected_route") or "?"
+        summary = result.get("summary") or "LLM route risk report received"
+        self.get_logger().info(f"route risk report updated: selected={selected_route}, summary={summary}")
+
     # 지속 제어 명령 topic(/tank/control/command)을 수신했을 때 실행되는 callback이다.
     def on_control_command(self, msg: String) -> None:
         # JSON 파싱/명령 검증 중 오류가 날 수 있으므로 예외 처리를 시작한다.

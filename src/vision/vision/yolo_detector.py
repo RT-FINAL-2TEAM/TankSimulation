@@ -274,41 +274,56 @@ class TankYoloDetector:
             self._set_load_error(f"YOLO model not found: {self.config.model_path}")
             return
 
-        try:
-            self._model = YOLO(str(self.config.model_path))
-            self._model_names = normalize_model_names(self._model.names)
-            self._public_names = {
-                class_id: self.normalize_public_class_name(name)
-                for class_id, name in self._model_names.items()
-            }
-            if self.config.use_cuda:
-                torch.backends.cudnn.benchmark = _env_flag("YOLO_CUDNN_BENCHMARK", False)
-                warmup_image = np.zeros((max(32, self.config.imgsz), max(32, self.config.imgsz), 3), dtype=np.uint8)
-                warmup_image, _, _ = self.preprocess_frame(warmup_image)
-                for _ in range(max(1, self.config.warmup_runs)):
-                    with torch.inference_mode():
-                        self._model.predict(
-                            source=warmup_image,
-                            conf=self.config.model_conf,
-                            imgsz=self.config.imgsz,
-                            device=self.config.device,
-                            half=self.config.half,
-                            iou=self.config.iou,
-                            max_det=self.config.max_det,
-                            verbose=False,
-                        )
-                torch.cuda.synchronize()
-            with self._state_lock:
-                self._state["loaded"] = True
-                self._state["load_error"] = None
-            print(
-                "[vision] YOLO loaded: "
-                f"model={self.config.model_path}, labels={self._model_names}, public={self._public_names}, "
-                f"device={self.config.device}, half={self.config.half}, imgsz={self.config.imgsz}, "
-                f"tracking={self.config.tracking_enabled}, tracker={self.config.tracker}, persist={self.config.track_persist}"
-            )
-        except Exception as exc:
-            self._set_load_error(str(exc))
+        candidate_paths = [self.config.model_path]
+        if self.config.model_path.suffix.lower() == ".engine":
+            pt_fallback = self.config.model_path.with_suffix(".pt")
+            if pt_fallback.exists():
+                candidate_paths.append(pt_fallback)
+
+        errors = []
+        for model_path in candidate_paths:
+            try:
+                self._model = YOLO(str(model_path))
+                self.config.model_path = model_path
+                self._model_names = normalize_model_names(self._model.names)
+                self._public_names = {
+                    class_id: self.normalize_public_class_name(name)
+                    for class_id, name in self._model_names.items()
+                }
+                if self.config.use_cuda:
+                    torch.backends.cudnn.benchmark = _env_flag("YOLO_CUDNN_BENCHMARK", False)
+                    warmup_image = np.zeros((max(32, self.config.imgsz), max(32, self.config.imgsz), 3), dtype=np.uint8)
+                    warmup_image, _, _ = self.preprocess_frame(warmup_image)
+                    for _ in range(max(1, self.config.warmup_runs)):
+                        with torch.inference_mode():
+                            self._model.predict(
+                                source=warmup_image,
+                                conf=self.config.model_conf,
+                                imgsz=self.config.imgsz,
+                                device=self.config.device,
+                                half=self.config.half,
+                                iou=self.config.iou,
+                                max_det=self.config.max_det,
+                                verbose=False,
+                            )
+                    torch.cuda.synchronize()
+                with self._state_lock:
+                    self._state["loaded"] = True
+                    self._state["load_error"] = None
+                print(
+                    "[vision] YOLO loaded: "
+                    f"model={self.config.model_path}, labels={self._model_names}, public={self._public_names}, "
+                    f"device={self.config.device}, half={self.config.half}, imgsz={self.config.imgsz}, "
+                    f"tracking={self.config.tracking_enabled}, tracker={self.config.tracker}, persist={self.config.track_persist}"
+                )
+                return
+            except Exception as exc:
+                self._model = None
+                errors.append(f"{model_path}: {exc}")
+                if model_path != candidate_paths[-1]:
+                    print(f"[vision] YOLO load failed, trying fallback model: {exc}")
+
+        self._set_load_error(" | ".join(errors) if errors else "unknown YOLO load error")
 
     def _set_load_error(self, message: str) -> None:
         with self._state_lock:

@@ -17,9 +17,7 @@ profiles:
     object_multipliers:
       unknown: 1.0
       rock: 1.2
-      wall: 1.4
       tree: 0.8
-      tent: 1.1
       person: 2.0
       tank: 3.0
       house: 2.5
@@ -50,9 +48,7 @@ profiles:
     object_multipliers:
       unknown: 1.0
       rock: 1.4
-      wall: 1.6
       tree: 1.0
-      tent: 1.2
       person: 2.5
       tank: 4.0
       house: 3.0
@@ -71,9 +67,7 @@ profiles:
     object_multipliers:
       unknown: 1.0
       rock: 1.0
-      wall: 1.2
       tree: 0.6
-      tent: 0.9
       person: 1.8
       tank: 2.5
       house: 2.0
