@@ -289,9 +289,33 @@ def _resolve_static_map_overview_path() -> Path:
     if env_path:
         return Path(env_path).expanduser().resolve()
 
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        share_path = Path(get_package_share_directory("rviz_visualization")) / "map" / "finalmap_overview.png"
+        if share_path.exists():
+            return share_path
+    except Exception:
+        pass
+
+    here = Path(__file__).resolve()
+    workspace_candidates = []
+    for parent in here.parents:
+        workspace_candidates.extend(
+            [
+                parent / "src" / "rviz_visualization" / "map" / "finalmap_overview.png",
+                parent / "src" / "rviz_visualization" / "map" / "finalmap_overview.jpg",
+                parent / "install" / "rviz_visualization" / "share" / "rviz_visualization" / "map" / "finalmap_overview.png",
+                parent / "install" / "rviz_visualization" / "share" / "rviz_visualization" / "map" / "finalmap_overview.jpg",
+                parent / "share" / "rviz_visualization" / "map" / "finalmap_overview.png",
+                parent / "share" / "rviz_visualization" / "map" / "finalmap_overview.jpg",
+            ]
+        )
+
     candidates = [
         Path(__file__).resolve().parents[2] / "rviz_visualization" / "map" / "finalmap_overview.png",
         Path(__file__).resolve().parents[2] / "rviz_visualization" / "map" / "finalmap_overview.jpg",
+        *workspace_candidates,
         Path(r"C:\Users\green\OneDrive\Desktop\teamproject\map\finalmap_overview.png"),
         Path(r"C:\Users\green\OneDrive\Desktop\teamproject\map\finalmap_overview.jpg"),
     ]

@@ -555,22 +555,6 @@ def render_view_page() -> str:
                 padding: 10px;
                 font-size: 12px;
             }
-            .map-legend {
-                position: absolute;
-                left: 10px;
-                bottom: 10px;
-                display: flex;
-                gap: 8px;
-                flex-wrap: wrap;
-                color: var(--muted);
-                font-size: 11px;
-                pointer-events: none;
-            }
-            .map-legend span {
-                background: rgba(3, 8, 5, 0.78);
-                border: 1px solid var(--line-dim);
-                padding: 3px 6px;
-            }
             @media (max-width: 980px) {
                 body { overflow: auto; }
                 .mfd { min-height: 100vh; height: auto; grid-template-rows: auto auto auto; }
@@ -621,9 +605,6 @@ def render_view_page() -> str:
                     </div>
                     <div class="map-wrap">
                         <canvas id="mapCanvas"></canvas>
-                        <div id="mapLegend" class="map-legend">
-                            <span>SELF</span><span>ENEMY</span><span>TARGET</span><span>WATER</span><span>RIDGE</span><span>HIGH</span><span>TREE</span><span>ROCK</span><span>HOUSE</span><span>ROUTE</span>
-                        </div>
                     </div>
                 </section>
             </main>
@@ -680,15 +661,7 @@ def render_view_page() -> str:
                 byId("map-tab-terrain").classList.toggle("active", activeMapTab === "terrain");
                 byId("map-tab-ros").classList.toggle("active", activeMapTab === "ros");
                 byId("mapPanelTitle").textContent = activeMapTab === "ros" ? "ROS MAP" : "TERRAIN MAP";
-                updateMapLegend();
                 drawMap(latestState || {});
-            }
-            function updateMapLegend() {
-                const terrain = ["SELF", "ENEMY", "WATER", "RIDGE", "HIGH", "TREE", "ROCK"];
-                const ros = ["SELF", "ENEMY", "TARGET", "OBS", "ROUTE", "YOLO"];
-                byId("mapLegend").innerHTML = (activeMapTab === "ros" ? ros : terrain)
-                    .map((label) => `<span>${label}</span>`)
-                    .join("");
             }
             function latestBridge(state) { return state?.bridge?.latest || {}; }
             function routeCounts(state) { return state?.bridge?.routeCounts || state?.bridge?.route_counts || {}; }
@@ -1065,9 +1038,13 @@ def render_view_page() -> str:
             function drawOverviewTexture(ctx, rect, mode = "terrain") {
                 if (!overviewImageLoaded || !overviewImage) return false;
                 ctx.save();
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = "high";
                 ctx.drawImage(overviewImage, rect.x, rect.y, rect.w, rect.h);
-                ctx.fillStyle = mode === "ros" ? "rgba(3, 12, 9, 0.56)" : "rgba(3, 14, 8, 0.34)";
-                ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+                if (mode === "ros") {
+                    ctx.fillStyle = "rgba(3, 12, 9, 0.42)";
+                    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+                }
                 ctx.strokeStyle = "rgba(57, 255, 136, 0.08)";
                 ctx.lineWidth = 1;
                 const grid = 30;
@@ -1088,48 +1065,59 @@ def render_view_page() -> str:
             }
             function drawTopographicLayer(ctx, mapper, staticObjects, mapData, width, height) {
                 const grid = buildTerrainGrid(staticObjects, mapData);
-                if (!grid) return false;
-                const rect = screenRectFromBounds(mapper, grid.bounds);
+                const bounds = grid?.bounds || mapBoundsFromMap(mapData);
+                const rect = screenRectFromBounds(mapper, bounds);
                 ctx.save();
                 const usedTexture = drawOverviewTexture(ctx, rect, "terrain");
-                if (!usedTexture) {
+                if (usedTexture) {
+                    ctx.restore();
+                    ctx.save();
+                    ctx.fillStyle = "rgba(216, 255, 233, 0.82)";
+                    ctx.font = "11px Consolas, monospace";
+                    ctx.textAlign = "left";
+                    ctx.fillText("OVERVIEW MAP", rect.x + 10, rect.y + 18);
+                    ctx.restore();
+                    return true;
+                }
+                if (!grid) {
                     ctx.fillStyle = "#06110b";
                     ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+                    ctx.restore();
+                    return false;
                 }
+                ctx.fillStyle = "#06110b";
+                ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
                 ctx.beginPath();
                 ctx.rect(rect.x, rect.y, rect.w, rect.h);
                 ctx.clip();
-                if (!usedTexture) {
-                    for (let row = 0; row < grid.rows; row += 1) {
-                        for (let col = 0; col < grid.cols; col += 1) {
-                            const h00 = terrainValue(grid, row, col);
-                            const h10 = terrainValue(grid, row, col + 1);
-                            const h11 = terrainValue(grid, row + 1, col + 1);
-                            const h01 = terrainValue(grid, row + 1, col);
-                            const h = (h00 + h10 + h11 + h01) * 0.25;
-                            fillTerrainCell(ctx, grid, mapper, row, col, topoColor((h - grid.terrain.min) / grid.terrain.span));
-                            const shade = clamp01(((h10 + h11) - (h00 + h01)) / grid.terrain.span + 0.5) - 0.5;
-                            if (Math.abs(shade) > 0.025) {
-                                fillTerrainCell(
-                                    ctx,
-                                    grid,
-                                    mapper,
-                                    row,
-                                    col,
-                                    shade > 0 ? `rgba(216, 255, 233, ${Math.min(0.08, shade * 0.16)})` : `rgba(0, 0, 0, ${Math.min(0.16, Math.abs(shade) * 0.28)})`,
-                                    0.8
-                                );
-                            }
+                for (let row = 0; row < grid.rows; row += 1) {
+                    for (let col = 0; col < grid.cols; col += 1) {
+                        const h00 = terrainValue(grid, row, col);
+                        const h10 = terrainValue(grid, row, col + 1);
+                        const h11 = terrainValue(grid, row + 1, col + 1);
+                        const h01 = terrainValue(grid, row + 1, col);
+                        const h = (h00 + h10 + h11 + h01) * 0.25;
+                        fillTerrainCell(ctx, grid, mapper, row, col, topoColor((h - grid.terrain.min) / grid.terrain.span));
+                        const shade = clamp01(((h10 + h11) - (h00 + h01)) / grid.terrain.span + 0.5) - 0.5;
+                        if (Math.abs(shade) > 0.025) {
+                            fillTerrainCell(
+                                ctx,
+                                grid,
+                                mapper,
+                                row,
+                                col,
+                                shade > 0 ? `rgba(216, 255, 233, ${Math.min(0.08, shade * 0.16)})` : `rgba(0, 0, 0, ${Math.min(0.16, Math.abs(shade) * 0.28)})`,
+                                0.8
+                            );
                         }
                     }
                 }
-                let waterLabel = usedTexture ? "texture" : "overview";
-                if (!usedTexture) {
-                    drawRockyZones(ctx, mapper, mapData);
-                    const hasOverviewWater = terrainZonesOf(mapData, "water").length > 0;
-                    if (hasOverviewWater) {
-                        drawWaterZones(ctx, mapper, mapData);
-                    } else {
+                let waterLabel = "overview";
+                drawRockyZones(ctx, mapper, mapData);
+                const hasOverviewWater = terrainZonesOf(mapData, "water").length > 0;
+                if (hasOverviewWater) {
+                    drawWaterZones(ctx, mapper, mapData);
+                } else {
                     const lowWaterLimit = grid.terrain.min + grid.terrain.span * 0.34;
                     const deepWaterLimit = grid.terrain.min + grid.terrain.span * 0.24;
                     waterLabel = `<=${numberText(lowWaterLimit, 1)}`;
@@ -1156,10 +1144,9 @@ def render_view_page() -> str:
                     ctx.lineWidth = 1.2;
                     drawContourLevel(ctx, grid, mapper, deepWaterLimit);
                     ctx.stroke();
-                    }
-                    drawPassageZones(ctx, mapper, mapData, "terrain");
-                    drawContours(ctx, grid, mapper);
                 }
+                drawPassageZones(ctx, mapper, mapData, "terrain");
+                drawContours(ctx, grid, mapper);
                 ctx.restore();
 
                 ctx.save();
@@ -1172,7 +1159,7 @@ def render_view_page() -> str:
                 ctx.fillStyle = "rgba(68, 217, 255, 0.86)";
                 ctx.fillText(`water ${waterLabel}`, rect.x + rect.w - 10, rect.y + 34);
                 ctx.restore();
-                return true;
+                return false;
             }
             function getDetections(state) {
                 const yoloDetections = state?.yolo?.latestReturnedDetections;
@@ -1948,7 +1935,6 @@ def render_view_page() -> str:
                 drawMap(latestState || {});
                 drawFeedOverlay(latestState || {});
             });
-            updateMapLegend();
             if (new URLSearchParams(window.location.search).get("map") === "ros") setMapTab("ros");
             fetchStaticMap();
             fetchDashboardState();
