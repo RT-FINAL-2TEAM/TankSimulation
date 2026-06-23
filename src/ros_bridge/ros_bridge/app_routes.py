@@ -274,14 +274,14 @@ def _resolve_static_map_path() -> Path:
     try:
         from ament_index_python.packages import get_package_share_directory
 
-        share_path = Path(get_package_share_directory("rviz_visualization")) / "map" / "finalmap.map"
+        share_path = Path(get_package_share_directory("rviz_visualization")) / "map" / "final_v4.map"
         if share_path.exists():
             return share_path
     except Exception:
         pass
 
     # source tree fallback: .../src/ros_bridge/ros_bridge/app_routes.py -> .../src
-    return Path(__file__).resolve().parents[2] / "rviz_visualization" / "map" / "finalmap.map"
+    return Path(__file__).resolve().parents[2] / "rviz_visualization" / "map" / "final_v4.map"
 
 
 def _resolve_static_map_overview_path() -> Path:

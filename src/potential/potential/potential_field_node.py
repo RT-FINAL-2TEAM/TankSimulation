@@ -696,7 +696,7 @@ class TeamPotentialFieldNode(Node):
 
         default_map = ""
         try:
-            default_map = os.path.join(get_package_share_directory("rviz_visualization"), "map", "finalmap.map")
+            default_map = os.path.join(get_package_share_directory("rviz_visualization"), "map", "final_v4.map")
         except Exception:
             pass
 

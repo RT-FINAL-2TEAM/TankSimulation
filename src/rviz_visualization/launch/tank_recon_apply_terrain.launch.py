@@ -24,7 +24,7 @@ def generate_launch_description():
     pkg_share = get_package_share_directory("rviz_visualization")
     rviz_config = os.path.join(pkg_share, "rviz", "tank_finalmap.rviz")
     config_file = os.path.join(pkg_share, "config", "static_map_costs.yaml")
-    finalmap_file = os.path.join(pkg_share, "map", "finalmap.map")
+    finalmap_file = os.path.join(pkg_share, "map", "final_v4.map")
 
     terrain_save_dir = "~/tankcc/tank_terrain_maps"
     terrain_save_filename = "terrain_map_latest.npz"
