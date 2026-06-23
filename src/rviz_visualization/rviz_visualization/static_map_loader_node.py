@@ -187,6 +187,8 @@ class StaticMapLoaderNode(Node):
         objects: List[MapObject] = []
         for obs in map_data.get("obstacles", []):
             prefab = str(obs.get("prefabName", "unknown"))
+            if prefab.lower().startswith(("human", "person", "wall", "tent")):
+                continue
             pos = obs.get("position", {}) or {}
             rot = obs.get("rotation", {}) or {}
             raw_x = float(pos.get("x", 0.0))

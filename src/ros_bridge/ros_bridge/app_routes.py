@@ -327,14 +327,14 @@ def _resolve_static_map_overview_path() -> Path:
 
 def _map_object_category(name: Any) -> str:
     text = str(name or "").lower()
+    if text.startswith(("human", "person", "wall", "tent")):
+        return "ignored"
     if text.startswith("tree"):
         return "tree"
     if text.startswith("rock"):
         return "rock"
     if text.startswith("house"):
         return "house"
-    if text.startswith("human"):
-        return "human"
     if text.startswith("car"):
         return "car"
     if text.startswith("tank"):
@@ -508,9 +508,14 @@ def _load_static_map_payload() -> Dict[str, Any]:
     xs = []
     zs = []
     heights = []
+    filtered_obstacles = []
     for obj in obstacles:
         if not isinstance(obj, dict):
             continue
+        prefab_name = str(obj.get("prefabName") or "")
+        if prefab_name.lower().startswith(("human", "person", "wall", "tent")):
+            continue
+        filtered_obstacles.append(obj)
         category = _map_object_category(obj.get("prefabName"))
         category_counts[category] = category_counts.get(category, 0) + 1
         pos = obj.get("position")
@@ -526,6 +531,8 @@ def _load_static_map_payload() -> Dict[str, Any]:
         zs.append(z)
         heights.append(height)
 
+    payload["obstacles"] = filtered_obstacles
+    payload["objectCount"] = len(filtered_obstacles)
     payload["categoryCounts"] = category_counts
     if xs and zs:
         payload["objectBounds"] = {

@@ -266,7 +266,7 @@ def smooth_path(grid: list[list[int]], path: list[tuple[int, int]]) -> list[tupl
     return smoothed
 
 def load_static_obstacles_from_map(map_path: str) -> list[dict]:
-    """맵 파일에서 고정된 지형지물(Tree, Rock, Wall 등) 위치를 읽어 bbox 형태로 반환합니다."""
+    """맵 파일에서 사용하는 고정 지형지물(Tree, Rock 등) 위치를 bbox 형태로 반환합니다."""
     try:
         with open(map_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -275,8 +275,8 @@ def load_static_obstacles_from_map(map_path: str) -> list[dict]:
     obstacles = []
     for obs in data.get('obstacles', []):
         prefab = obs.get('prefabName', '')
-        # 동적/위협 객체는 제외
-        if prefab.startswith('Human') or prefab.startswith('Tank') or prefab.startswith('House'):
+        # 사용하지 않는 객체와 위협 객체는 정적 장애물에서 제외
+        if prefab.startswith(('Human', 'Person', 'Wall', 'Tent', 'Tank', 'House')):
             continue
         
         pos = obs.get('position', {})
@@ -291,10 +291,6 @@ def load_static_obstacles_from_map(map_path: str) -> list[dict]:
             # (경로 중심선이 바위 5m 밖이어도 차폭 2m면 차체가 바위에 닿아 끼이던 문제 해결)
             radius = ROCK_RADIUS + TANK_HALF_WIDTH
             obs_type = 'Rock'
-        elif 'Wall' in prefab:
-            radius = 2.0
-            obs_type = 'Wall'
-
         obstacles.append({
             'type': obs_type,
             'x_min': x - radius,

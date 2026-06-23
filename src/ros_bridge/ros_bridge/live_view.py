@@ -42,7 +42,6 @@ _LIVE_VIEW_BROWSER_OVERLAY = os.getenv("TANK_LIVE_VIEW_BROWSER_OVERLAY", "true")
 _CLASS_COLORS_BGR = {
     "tank": (0, 0, 255),
     "rock": (0, 255, 255),
-    "person": (136, 255, 57),
     "car": (0, 140, 255),
     "unknown": (255, 255, 255),
 }
@@ -686,15 +685,17 @@ def render_view_page() -> str:
             }
             function mapObjectCategory(name) {
                 const text = String(name || "").toLowerCase();
+                if (text.startsWith("human") || text.startsWith("person") || text.startsWith("wall") || text.startsWith("tent")) return "ignored";
                 if (text.startsWith("tree")) return "tree";
                 if (text.startsWith("rock")) return "rock";
                 if (text.startsWith("house")) return "house";
-                if (text.startsWith("human")) return "human";
                 if (text.startsWith("car")) return "car";
                 if (text.startsWith("tank")) return "tank";
                 return "unknown";
             }
             function readStaticObjectPoint(obj) {
+                const prefabName = String(obj?.prefabName || "").toLowerCase();
+                if (prefabName.startsWith("human") || prefabName.startsWith("person") || prefabName.startsWith("wall") || prefabName.startsWith("tent")) return null;
                 const pos = obj?.position || {};
                 const x = Number(pos.x);
                 const y = Number(pos.z);
@@ -1162,17 +1163,21 @@ def render_view_page() -> str:
                 return false;
             }
             function getDetections(state) {
+                const isActiveDetection = (det) => {
+                    const cls = String(det?.className || det?.class_name || det?.modelClassName || "").toLowerCase();
+                    return cls !== "person" && cls !== "wall" && cls !== "tent";
+                };
                 const yoloDetections = state?.yolo?.latestReturnedDetections;
-                if (Array.isArray(yoloDetections) && yoloDetections.length) return yoloDetections;
+                if (Array.isArray(yoloDetections) && yoloDetections.length) return yoloDetections.filter(isActiveDetection);
                 const liveDetections = state?.liveView?.latestDetections;
-                if (Array.isArray(liveDetections) && liveDetections.length) return liveDetections;
+                if (Array.isArray(liveDetections) && liveDetections.length) return liveDetections.filter(isActiveDetection);
                 const detect = latestBridge(state)?.detect_result;
-                if (Array.isArray(detect?.detections)) return detect.detections;
+                if (Array.isArray(detect?.detections)) return detect.detections.filter(isActiveDetection);
                 return [];
             }
             function overlayClassColor(className) {
                 const key = String(className || "").toLowerCase();
-                const colors = { person: "#39ff88", car: "#ff8c00", tank: "#ff5b64", rock: "#ffca4f", house: "#b084ff" };
+                const colors = { car: "#ff8c00", tank: "#ff5b64", rock: "#ffca4f", house: "#b084ff" };
                 return colors[key] || "#d8ffe9";
             }
             function driveImageBox(canvas, sourceW, sourceH) {
@@ -1635,7 +1640,6 @@ def render_view_page() -> str:
                     tree: "#39ff88",
                     rock: "#d8ffe9",
                     house: "#b084ff",
-                    human: "#ffca4f",
                     car: "#ff8c00",
                     tank: "#ff5b64",
                     unknown: "#9ad8b4"
@@ -1817,7 +1821,7 @@ def render_view_page() -> str:
                     }
                     if (activeMapTab === "ros" && !player && !enemy && !destination && !obstacles.length && !route.length && detectionContacts.length) {
                         const pad = 34;
-                        const classColors = { house: "#b084ff", person: "#39ff88", tank: "#ff5b64", rock: "#ffca4f", car: "#ff8c00" };
+                        const classColors = { house: "#b084ff", tank: "#ff5b64", rock: "#ffca4f", car: "#ff8c00" };
                         ctx.fillStyle = "#44d9ff";
                         ctx.font = "13px Consolas, monospace";
                         ctx.fillText("YOLO CONTACTS", 18, bridge.error ? (staticPoint ? 92 : 70) : (staticPoint ? 70 : 52));

@@ -76,20 +76,6 @@ categories:
       max_value: 1.0
       fallback_constant: 0.40
 
-  human:
-    prefixes: ["Human"]
-    marker_type: CYLINDER
-    scale: [1.0, 1.0, 2.0]
-    color_recon: [1.0, 0.85, 0.05, 0.65]
-    color_mission: [1.0, 0.95, 0.05, 0.95]
-    impassable: false
-    inflation_radius_m: 2.0
-    risk:
-      type: gaussian
-      radius_m: 20.0
-      sigma_m: 7.0
-      max_value: 0.60
-
   tank:
     prefixes: ["Tank"]
     marker_type: CUBE
