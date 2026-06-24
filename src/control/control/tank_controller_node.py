@@ -5,8 +5,9 @@
 제어 정책은 의도적으로 팀 서버 로직을 따른다:
 - target yaw = atan2(dx, dy). 여기서 map x/y는 Unity x/z에 대응한다.
 - 조향 명령은 yaw error에 비례하는 weight의 A/D다.
-- 속도 명령은 yaw error가 크면 감속/정지하고 최종 goal에서 정지한다.
-- 지역최소/끼임(stuck) 탈출: 후진 후 제자리 선회.
+- 속도 명령은 yaw error가 크면 동역학 데이터 기반으로 감속하고 최종 goal에서 정지한다.
+- 큰 yaw error에서는 STOP 제자리 회전 대신 W 저속 crawl turn을 사용한다.
+- 지역최소/끼임(stuck) 탈출: 후진 후 저속 선회.
 
 공식 Tank Challenge /get_action JSON을 /tank/control/command로 발행한다.
 """
@@ -15,7 +16,7 @@ import json
 import math
 import os
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
 
 import rclpy
 import yaml
@@ -36,6 +37,9 @@ from control.config import (
     MAX_AD_WEIGHT,
     MIN_AD_WEIGHT,
     ROTATE_IN_PLACE_ANGLE_DEG,
+    CRAWL_PIVOT_ANGLE_DEG,
+    CRAWL_PIVOT_WS_WEIGHT,
+    CRAWL_TURN_WS_WEIGHT,
     SLOWDOWN_ANGLE_DEG,
     STOP_DISTANCE,
     STRAIGHT_WS_WEIGHT,
@@ -107,6 +111,9 @@ class TeamPathControllerNode(Node):
         self.declare_parameter("straight_ws_weight", STRAIGHT_WS_WEIGHT)
         self.declare_parameter("turn_ws_weight", TURN_WS_WEIGHT)
         self.declare_parameter("rotate_in_place_angle_deg", ROTATE_IN_PLACE_ANGLE_DEG)
+        self.declare_parameter("crawl_pivot_angle_deg", CRAWL_PIVOT_ANGLE_DEG)
+        self.declare_parameter("crawl_pivot_ws_weight", CRAWL_PIVOT_WS_WEIGHT)
+        self.declare_parameter("crawl_turn_ws_weight", CRAWL_TURN_WS_WEIGHT)
         self.declare_parameter("slowdown_angle_deg", SLOWDOWN_ANGLE_DEG)
         self.declare_parameter("stop_distance", STOP_DISTANCE)
         self.declare_parameter("enable_stuck_escape", ENABLE_STUCK_ESCAPE)
@@ -114,6 +121,74 @@ class TeamPathControllerNode(Node):
         self.declare_parameter("stuck_min_movement", STUCK_MIN_MOVEMENT)
         self.declare_parameter("escape_reverse_sec", ESCAPE_REVERSE_SEC)
         self.declare_parameter("escape_turn_sec", ESCAPE_TURN_SEC)
+        self.declare_parameter("enable_safety_speed_limit", True)
+        self.declare_parameter("safety_status_topic", "/tank/potential/safety_status")
+        self.declare_parameter("safety_status_ttl_sec", 1.0)
+        # APF 합벡터 기반 전차식 정지 선회 제어.
+        # APF가 원하는 이동방향과 현재 차체 heading 차이가 크면 W를 떼고 A/D만 수행한다.
+        self.declare_parameter("enable_apf_vector_stop_pivot", True)
+        self.declare_parameter("apf_stop_angle_deg", 35.0)
+        self.declare_parameter("apf_slow_angle_deg", 20.0)
+        self.declare_parameter("apf_stop_distance", 9.0)
+        self.declare_parameter("apf_ttc_stop_sec", 2.0)
+        self.declare_parameter("apf_ttc_slow_sec", 3.0)
+        self.declare_parameter("apf_min_speed_for_ttc", 0.8)
+        self.declare_parameter("apf_slow_ws_weight", 0.12)
+        # APF STOP pivot이 오래 지속되면 제자리에서 빙빙 도는 루프가 생긴다.
+        # 짧게 차체 방향만 바꾸고, 이후 cooldown 동안은 저속 전진 탈출을 허용한다.
+        self.declare_parameter("apf_stop_pivot_max_sec", 1.15)
+        self.declare_parameter("apf_stop_pivot_release_angle_deg", 24.0)
+        self.declare_parameter("apf_stop_pivot_cooldown_sec", 1.0)
+        # 장애물 좌/우 위치 기반 회피 방향 강제.
+        # 장애물이 오른쪽이면 A, 왼쪽이면 D를 우선 사용해 장애물 쪽으로 감기는 루프를 막는다.
+        self.declare_parameter("prefer_turn_away_from_nearest_obstacle", True)
+        self.declare_parameter("away_turn_lock_sec", 1.2)
+        # A/D 반복 토글 방지: 짧은 시간 안에 조향 방향이 바뀌면 기존 방향을 잠시 유지한다.
+        self.declare_parameter("enable_steering_direction_lock", True)
+        self.declare_parameter("steering_direction_lock_sec", 0.9)
+        # 장애물이 이미 옆으로 지나가는 상황에서는 STOP pivot을 하지 않고 저속 W로 통과한다.
+        # nearest obstacle bearing이 큰 경우(좌/우 측면)는 정면 충돌 위험보다 side-pass 상황으로 본다.
+        self.declare_parameter("enable_side_pass_forward", True)
+        self.declare_parameter("side_pass_bearing_deg", 58.0)
+        self.declare_parameter("side_pass_min_distance", 4.2)
+        self.declare_parameter("side_pass_ws_weight", 0.22)
+        self.declare_parameter("front_stop_bearing_deg", 42.0)
+        self.declare_parameter("hard_stop_distance", 3.8)
+        self.declare_parameter("turn_away_hard_distance", 4.8)
+        # 지그재그 장애물 사이에서 nearest side가 좌/우로 바뀌며 A/D가 반복되는 현상 억제.
+        self.declare_parameter("enable_ad_oscillation_guard", True)
+        self.declare_parameter("ad_flip_window_sec", 3.0)
+        self.declare_parameter("ad_flip_threshold", 3)
+        self.declare_parameter("ad_oscillation_hold_sec", 2.0)
+        self.declare_parameter("ad_oscillation_slow_ws_weight", 0.18)
+        # 급격한 경로 꺾임 대응: yaw error가 큰데 W를 계속 누르면 큰 원을 그리며 벗어난다.
+        # 일정 각도 이상이면 W를 떼고 A/D만 눌러 차체 방향을 먼저 맞춘다.
+        self.declare_parameter("enable_sharp_turn_stop_pivot", True)
+        self.declare_parameter("sharp_turn_stop_angle_deg", 70.0)
+        self.declare_parameter("sharp_turn_release_angle_deg", 30.0)
+        self.declare_parameter("sharp_turn_min_target_distance", 4.0)
+        self.declare_parameter("sharp_turn_max_sec", 1.25)
+        self.declare_parameter("sharp_turn_cooldown_sec", 0.6)
+        self.declare_parameter("sharp_turn_block_when_apf_side_pass", True)
+        # 실제 속도 기반 오버슛 방지. 입력 weight를 줄여도 관성으로 코너/장애물에 밀고 들어가면
+        # yaw error와 현재 속도를 보고 STOP/S braking을 짧게 건다.
+        self.declare_parameter("enable_turn_overspeed_guard", True)
+        self.declare_parameter("turn_overspeed_angle_deg", 35.0)
+        self.declare_parameter("turn_overspeed_speed_mps", 2.8)
+        self.declare_parameter("turn_overspeed_hard_angle_deg", 60.0)
+        self.declare_parameter("turn_overspeed_hard_speed_mps", 4.5)
+        self.declare_parameter("turn_overspeed_reverse_weight", 0.38)
+        self.declare_parameter("turn_overspeed_slow_ws_weight", 0.10)
+        self.declare_parameter("danger_obstacle_brake_speed_mps", 1.0)
+        self.declare_parameter("danger_obstacle_reverse_weight", 0.50)
+        # APF/local target이 현재 위치 너무 가까이 있거나 뒤쪽으로 튀면 차체가 제자리에서 좌우로 돈다.
+        # 이런 경우에는 현재 global path에서 더 앞쪽 point를 다시 선택해 target을 안정화한다.
+        self.declare_parameter("enable_forward_target_guard", True)
+        self.declare_parameter("forward_guard_min_target_distance", 6.0)
+        self.declare_parameter("forward_guard_yaw_error_deg", 85.0)
+        self.declare_parameter("forward_guard_target_distance", 12.0)
+        self.declare_parameter("forward_guard_max_search_points", 120)
+        self.declare_parameter("forward_guard_allow_in_danger", False)
 
         self.enable_local_target = bool(self.get_parameter("enable_local_target").value)
         self.target_ttl_sec = float(self.get_parameter("target_ttl_sec").value)
@@ -129,6 +204,9 @@ class TeamPathControllerNode(Node):
         self.straight_ws_weight = float(self.get_parameter("straight_ws_weight").value)
         self.turn_ws_weight = float(self.get_parameter("turn_ws_weight").value)
         self.rotate_in_place_angle_deg = float(self.get_parameter("rotate_in_place_angle_deg").value)
+        self.crawl_pivot_angle_deg = float(self.get_parameter("crawl_pivot_angle_deg").value)
+        self.crawl_pivot_ws_weight = float(self.get_parameter("crawl_pivot_ws_weight").value)
+        self.crawl_turn_ws_weight = float(self.get_parameter("crawl_turn_ws_weight").value)
         self.max_yaw_rate = float(self.get_parameter("max_yaw_rate").value)
         self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
         self.enable_local_target = bool(self.get_parameter("enable_local_target").value)
@@ -141,6 +219,90 @@ class TeamPathControllerNode(Node):
         self.stuck_min_movement = float(self.get_parameter("stuck_min_movement").value)
         self.escape_reverse_sec = float(self.get_parameter("escape_reverse_sec").value)
         self.escape_turn_sec = float(self.get_parameter("escape_turn_sec").value)
+        self.enable_safety_speed_limit = bool(self.get_parameter("enable_safety_speed_limit").value)
+        self.safety_status_topic = str(self.get_parameter("safety_status_topic").value)
+        self.safety_status_ttl_sec = float(self.get_parameter("safety_status_ttl_sec").value)
+        self.safety_speed_limit_ws: Optional[float] = None
+        self.safety_mode: str = "unknown"
+        self.safety_nearest_obstacle_distance: Optional[float] = None
+        self.safety_status_stamp: float = 0.0
+        self.safety_apf_active: bool = False
+        self.safety_apf_heading_error_deg: Optional[float] = None
+        self.safety_apf_heading_abs_error_deg: Optional[float] = None
+        self.safety_apf_desired_heading_deg: Optional[float] = None
+        self.safety_apf_result_vector: Dict[str, float] = {"x": 0.0, "y": 0.0, "norm": 0.0}
+        self.safety_nearest_obstacle_side: str = ""
+        self.safety_nearest_obstacle_bearing_error_deg: Optional[float] = None
+        self.safety_nearest_obstacle_turn_away_cmd: str = ""
+        self.safety_recommended_turn_cmd: str = ""
+        self._away_turn_lock_cmd: str = ""
+        self._away_turn_lock_until: float = 0.0
+        self._apf_stop_pivot_start: float = 0.0
+        self._apf_stop_pivot_cooldown_until: float = 0.0
+        self._apf_stop_pivot_last_reason: str = "none"
+        self.safety_emergency_pivot_recommended: bool = False
+        self.safety_apf_heading_stop_recommended: bool = False
+        self.safety_apf_heading_slow_recommended: bool = False
+        self.enable_apf_vector_stop_pivot = bool(self.get_parameter("enable_apf_vector_stop_pivot").value)
+        self.apf_stop_angle_deg = float(self.get_parameter("apf_stop_angle_deg").value)
+        self.apf_slow_angle_deg = float(self.get_parameter("apf_slow_angle_deg").value)
+        self.apf_stop_distance = float(self.get_parameter("apf_stop_distance").value)
+        self.apf_ttc_stop_sec = float(self.get_parameter("apf_ttc_stop_sec").value)
+        self.apf_ttc_slow_sec = float(self.get_parameter("apf_ttc_slow_sec").value)
+        self.apf_min_speed_for_ttc = float(self.get_parameter("apf_min_speed_for_ttc").value)
+        self.apf_slow_ws_weight = float(self.get_parameter("apf_slow_ws_weight").value)
+        self.apf_stop_pivot_max_sec = float(self.get_parameter("apf_stop_pivot_max_sec").value)
+        self.apf_stop_pivot_release_angle_deg = float(self.get_parameter("apf_stop_pivot_release_angle_deg").value)
+        self.apf_stop_pivot_cooldown_sec = float(self.get_parameter("apf_stop_pivot_cooldown_sec").value)
+        self.prefer_turn_away_from_nearest_obstacle = bool(self.get_parameter("prefer_turn_away_from_nearest_obstacle").value)
+        self.away_turn_lock_sec = float(self.get_parameter("away_turn_lock_sec").value)
+        self.enable_steering_direction_lock = bool(self.get_parameter("enable_steering_direction_lock").value)
+        self.steering_direction_lock_sec = float(self.get_parameter("steering_direction_lock_sec").value)
+        self.enable_side_pass_forward = bool(self.get_parameter("enable_side_pass_forward").value)
+        self.side_pass_bearing_deg = float(self.get_parameter("side_pass_bearing_deg").value)
+        self.side_pass_min_distance = float(self.get_parameter("side_pass_min_distance").value)
+        self.side_pass_ws_weight = float(self.get_parameter("side_pass_ws_weight").value)
+        self.front_stop_bearing_deg = float(self.get_parameter("front_stop_bearing_deg").value)
+        self.hard_stop_distance = float(self.get_parameter("hard_stop_distance").value)
+        self.turn_away_hard_distance = float(self.get_parameter("turn_away_hard_distance").value)
+        self.enable_ad_oscillation_guard = bool(self.get_parameter("enable_ad_oscillation_guard").value)
+        self.ad_flip_window_sec = float(self.get_parameter("ad_flip_window_sec").value)
+        self.ad_flip_threshold = int(self.get_parameter("ad_flip_threshold").value)
+        self.ad_oscillation_hold_sec = float(self.get_parameter("ad_oscillation_hold_sec").value)
+        self.ad_oscillation_slow_ws_weight = float(self.get_parameter("ad_oscillation_slow_ws_weight").value)
+        self.enable_sharp_turn_stop_pivot = bool(self.get_parameter("enable_sharp_turn_stop_pivot").value)
+        self.sharp_turn_stop_angle_deg = float(self.get_parameter("sharp_turn_stop_angle_deg").value)
+        self.sharp_turn_release_angle_deg = float(self.get_parameter("sharp_turn_release_angle_deg").value)
+        self.sharp_turn_min_target_distance = float(self.get_parameter("sharp_turn_min_target_distance").value)
+        self.sharp_turn_max_sec = float(self.get_parameter("sharp_turn_max_sec").value)
+        self.sharp_turn_cooldown_sec = float(self.get_parameter("sharp_turn_cooldown_sec").value)
+        self.sharp_turn_block_when_apf_side_pass = bool(self.get_parameter("sharp_turn_block_when_apf_side_pass").value)
+        self.enable_turn_overspeed_guard = bool(self.get_parameter("enable_turn_overspeed_guard").value)
+        self.turn_overspeed_angle_deg = float(self.get_parameter("turn_overspeed_angle_deg").value)
+        self.turn_overspeed_speed_mps = float(self.get_parameter("turn_overspeed_speed_mps").value)
+        self.turn_overspeed_hard_angle_deg = float(self.get_parameter("turn_overspeed_hard_angle_deg").value)
+        self.turn_overspeed_hard_speed_mps = float(self.get_parameter("turn_overspeed_hard_speed_mps").value)
+        self.turn_overspeed_reverse_weight = float(self.get_parameter("turn_overspeed_reverse_weight").value)
+        self.turn_overspeed_slow_ws_weight = float(self.get_parameter("turn_overspeed_slow_ws_weight").value)
+        self.danger_obstacle_brake_speed_mps = float(self.get_parameter("danger_obstacle_brake_speed_mps").value)
+        self.danger_obstacle_reverse_weight = float(self.get_parameter("danger_obstacle_reverse_weight").value)
+        self.enable_forward_target_guard = bool(self.get_parameter("enable_forward_target_guard").value)
+        self.forward_guard_min_target_distance = float(self.get_parameter("forward_guard_min_target_distance").value)
+        self.forward_guard_yaw_error_deg = float(self.get_parameter("forward_guard_yaw_error_deg").value)
+        self.forward_guard_target_distance = float(self.get_parameter("forward_guard_target_distance").value)
+        self.forward_guard_max_search_points = int(self.get_parameter("forward_guard_max_search_points").value)
+        self.forward_guard_allow_in_danger = bool(self.get_parameter("forward_guard_allow_in_danger").value)
+        self._steering_direction_lock_cmd: str = ""
+        self._steering_direction_lock_until: float = 0.0
+        self._steering_direction_lock_reason: str = "none"
+        self._last_effective_ad_cmd: str = ""
+        self._ad_flip_times: List[float] = []
+        self._ad_oscillation_hold_cmd: str = ""
+        self._ad_oscillation_hold_until: float = 0.0
+        self._ad_oscillation_last_reason: str = "none"
+        self._sharp_turn_pivot_start: float = 0.0
+        self._sharp_turn_pivot_cooldown_until: float = 0.0
+        self._sharp_turn_pivot_last_reason: str = "none"
 
         self.tank_params = self.load_tank_params(str(self.get_parameter("tank_param_file").value))
         self.max_speed = self.extract_max_from_dict(self.tank_params.get("steady_state_speed", {}), 19.45)
@@ -157,6 +319,7 @@ class TeamPathControllerNode(Node):
         self.local_target_stamp: float = 0.0
         self.collision_count = 0
         self.mission_complete = False
+        self.target_guard_status: Dict[str, Any] = {"enabled": False, "active": False, "reason": "init"}
 
         self.last_stuck_check_time = 0.0
         self.last_stuck_check_pos: Optional[Tuple[float, float]] = None
@@ -178,6 +341,7 @@ class TeamPathControllerNode(Node):
         self.create_subscription(PoseStamped, TOPIC_LOCAL_TARGET_POSE, self.local_target_cb, 10)
         self.create_subscription(NavPath, "/tank/global_path", self.global_path_cb, 10)
         self.create_subscription(String, TOPIC_COLLISION_EVENT, self.collision_cb, 10)
+        self.create_subscription(String, self.safety_status_topic, self.safety_status_cb, 10)
         hz = float(self.get_parameter("controller_hz").value)
         self.create_timer(1.0 / max(1.0, hz), self.timer_cb)
         self.get_logger().info(
@@ -261,6 +425,697 @@ class TeamPathControllerNode(Node):
     def collision_cb(self, msg: String) -> None:
         self.collision_count += 1
 
+    def safety_status_cb(self, msg: String) -> None:
+        try:
+            data = json.loads(msg.data)
+        except Exception:
+            return
+        try:
+            self.safety_speed_limit_ws = float(data.get("speed_limit_ws"))
+        except Exception:
+            self.safety_speed_limit_ws = None
+        self.safety_mode = str(data.get("mode", "unknown"))
+        try:
+            nearest = data.get("nearest_obstacle_distance")
+            self.safety_nearest_obstacle_distance = None if nearest is None else float(nearest)
+        except Exception:
+            self.safety_nearest_obstacle_distance = None
+
+        self.safety_nearest_obstacle_side = str(data.get("nearest_obstacle_side") or "")
+        try:
+            v = data.get("nearest_obstacle_bearing_error_deg")
+            self.safety_nearest_obstacle_bearing_error_deg = None if v is None else float(v)
+        except Exception:
+            self.safety_nearest_obstacle_bearing_error_deg = None
+        self.safety_nearest_obstacle_turn_away_cmd = str(data.get("nearest_obstacle_turn_away_cmd") or "")
+        self.safety_recommended_turn_cmd = str(data.get("recommended_turn_cmd") or "")
+
+        self.safety_apf_active = bool(data.get("apf_active", False))
+        self.safety_emergency_pivot_recommended = bool(data.get("emergency_pivot_recommended", False))
+        self.safety_apf_heading_stop_recommended = bool(data.get("apf_heading_stop_recommended", False))
+        self.safety_apf_heading_slow_recommended = bool(data.get("apf_heading_slow_recommended", False))
+        try:
+            v = data.get("apf_heading_error_deg")
+            self.safety_apf_heading_error_deg = None if v is None else float(v)
+        except Exception:
+            self.safety_apf_heading_error_deg = None
+        try:
+            v = data.get("apf_heading_abs_error_deg")
+            self.safety_apf_heading_abs_error_deg = None if v is None else float(v)
+        except Exception:
+            self.safety_apf_heading_abs_error_deg = None
+        try:
+            v = data.get("apf_desired_heading_deg")
+            self.safety_apf_desired_heading_deg = None if v is None else float(v)
+        except Exception:
+            self.safety_apf_desired_heading_deg = None
+        vec = data.get("apf_result_vector") if isinstance(data.get("apf_result_vector"), dict) else {}
+        try:
+            self.safety_apf_result_vector = {
+                "x": float(vec.get("x", 0.0)),
+                "y": float(vec.get("y", 0.0)),
+                "norm": float(vec.get("norm", 0.0)),
+            }
+        except Exception:
+            self.safety_apf_result_vector = {"x": 0.0, "y": 0.0, "norm": 0.0}
+
+        self.safety_status_stamp = self.get_clock().now().nanoseconds / 1e9
+
+    def current_safety_limit(self) -> Tuple[Optional[float], str]:
+        if not self.enable_safety_speed_limit:
+            return None, "disabled"
+        if self.safety_speed_limit_ws is None:
+            return None, "none"
+        now = self.get_clock().now().nanoseconds / 1e9
+        if now - self.safety_status_stamp > self.safety_status_ttl_sec:
+            return None, "stale"
+        return clamp(float(self.safety_speed_limit_ws), 0.0, 1.0), self.safety_mode
+
+    def apply_turn_overspeed_guard(
+        self,
+        cmd_ws: str,
+        w_ws: float,
+        yaw_error: float,
+        speed_mode: str,
+        safety_mode: str,
+        apf_vector_control: Dict[str, Any],
+    ) -> Tuple[str, float, str, Dict[str, Any]]:
+        """코너/장애물 앞 오버슛 방지용 실제 속도 기반 braking layer.
+
+        기존 제어는 W weight를 줄이는 방식이라 이미 5~10m/s로 붙은 관성은 바로 줄이지 못한다.
+        그래서 큰 yaw error 또는 danger obstacle 상태에서 속도가 높으면 짧게 S/STOP을 우선한다.
+        """
+        status: Dict[str, Any] = {
+            "enabled": self.enable_turn_overspeed_guard,
+            "active": False,
+            "reason": "disabled",
+            "current_speed_mps": self.current_speed,
+            "yaw_abs_error_deg": abs(float(yaw_error)),
+            "cmd_before": cmd_ws,
+            "w_before": float(w_ws),
+        }
+        if not self.enable_turn_overspeed_guard or cmd_ws == "S":
+            return cmd_ws, w_ws, speed_mode, status
+
+        speed = max(0.0, float(self.current_speed))
+        yaw_abs = abs(float(yaw_error))
+        front_blocking = bool(apf_vector_control.get("front_blocking", False))
+        hard_close = bool(apf_vector_control.get("hard_close", False))
+        danger = str(safety_mode).lower() == "danger" or (front_blocking and hard_close)
+
+        # 장애물이 가까운데 속도가 남아 있으면 W/STOP만으로는 밀려 들어가므로 S로 먼저 감속한다.
+        if danger and speed >= self.danger_obstacle_brake_speed_mps:
+            status.update({
+                "active": True,
+                "reason": "danger_obstacle_brake",
+                "front_blocking": front_blocking,
+                "hard_close": hard_close,
+                "cmd_after": "S",
+                "w_after": self.danger_obstacle_reverse_weight,
+            })
+            return "S", clamp(self.danger_obstacle_reverse_weight, 0.0, 1.0), f"{speed_mode}|danger_obstacle_brake", status
+
+        # 큰 코너 진입 고속: 역입력으로 짧게 감속.
+        if yaw_abs >= self.turn_overspeed_hard_angle_deg and speed >= self.turn_overspeed_hard_speed_mps:
+            status.update({
+                "active": True,
+                "reason": "hard_turn_overspeed_brake",
+                "cmd_after": "S",
+                "w_after": self.turn_overspeed_reverse_weight,
+            })
+            return "S", clamp(self.turn_overspeed_reverse_weight, 0.0, 1.0), f"{speed_mode}|hard_turn_overspeed_brake", status
+
+        # 중간 코너 고속: 가속을 끊고 선회 안정화.
+        if yaw_abs >= self.turn_overspeed_angle_deg and speed >= self.turn_overspeed_speed_mps:
+            status.update({
+                "active": True,
+                "reason": "turn_overspeed_stop",
+                "cmd_after": "STOP",
+                "w_after": 1.0,
+            })
+            return "STOP", 1.0, f"{speed_mode}|turn_overspeed_stop", status
+
+        # 코너에서는 아직 위험 threshold 아래라도 W를 더 낮춘다.
+        if cmd_ws == "W" and yaw_abs >= self.turn_overspeed_angle_deg and w_ws > self.turn_overspeed_slow_ws_weight:
+            status.update({
+                "active": True,
+                "reason": "turn_overspeed_slow",
+                "cmd_after": "W",
+                "w_after": self.turn_overspeed_slow_ws_weight,
+            })
+            return "W", clamp(self.turn_overspeed_slow_ws_weight, 0.0, 1.0), f"{speed_mode}|turn_overspeed_slow", status
+
+        status.update({"reason": "clear", "cmd_after": cmd_ws, "w_after": float(w_ws)})
+        return cmd_ws, w_ws, speed_mode, status
+
+    def is_safety_status_fresh(self) -> bool:
+        if self.safety_status_stamp <= 0.0:
+            return False
+        now = self.get_clock().now().nanoseconds / 1e9
+        return (now - self.safety_status_stamp) <= self.safety_status_ttl_sec
+
+    def obstacle_bearing_abs_deg(self) -> Optional[float]:
+        if self.safety_nearest_obstacle_bearing_error_deg is None:
+            return None
+        try:
+            return abs(float(self.safety_nearest_obstacle_bearing_error_deg))
+        except Exception:
+            return None
+
+    def is_side_pass_context(self) -> bool:
+        """장애물이 전방을 막는 것이 아니라 차체 옆에 있는 통과 상황인지 판단한다."""
+        if not self.enable_side_pass_forward:
+            return False
+        nearest = self.safety_nearest_obstacle_distance
+        bearing_abs = self.obstacle_bearing_abs_deg()
+        if nearest is None or bearing_abs is None:
+            return False
+        return nearest >= self.side_pass_min_distance and bearing_abs >= self.side_pass_bearing_deg
+
+    def is_front_blocking_context(self) -> bool:
+        """장애물이 전방 corridor에 있어 STOP pivot까지 고려해야 하는 상황인지 판단한다."""
+        nearest = self.safety_nearest_obstacle_distance
+        bearing_abs = self.obstacle_bearing_abs_deg()
+        if nearest is None:
+            return False
+        if nearest <= self.hard_stop_distance:
+            return True
+        if bearing_abs is None:
+            return True
+        return bearing_abs <= self.front_stop_bearing_deg
+
+    def apply_steering_direction_lock(self, cmd_ad: str, context: str = "normal") -> Tuple[str, Dict[str, Any]]:
+        """짧은 주기의 A↔D 토글을 억제한다.
+
+        APF 경계나 경로 코너에서 target이 좌우로 흔들리면 매 tick A/D가 뒤집힌다.
+        전차는 차동구동이라 이런 토글이 곧 제자리 진동/큰 원운동으로 이어진다.
+        그래서 한 번 정한 조향 방향을 짧게 유지한다.
+        """
+        now = self.get_clock().now().nanoseconds / 1e9
+        original_cmd = cmd_ad if cmd_ad in ("A", "D") else ""
+        locked = False
+        reason = "none"
+
+        if not self.enable_steering_direction_lock or original_cmd == "":
+            if original_cmd == "":
+                self._steering_direction_lock_cmd = ""
+                self._steering_direction_lock_until = 0.0
+                self._steering_direction_lock_reason = "no_ad_cmd"
+            return cmd_ad, {
+                "enabled": self.enable_steering_direction_lock,
+                "original_cmd": original_cmd,
+                "cmd": cmd_ad,
+                "locked": False,
+                "lock_cmd": self._steering_direction_lock_cmd,
+                "lock_until": self._steering_direction_lock_until,
+                "reason": self._steering_direction_lock_reason,
+                "context": context,
+            }
+
+        if (
+            self._steering_direction_lock_cmd in ("A", "D")
+            and now < self._steering_direction_lock_until
+            and original_cmd != self._steering_direction_lock_cmd
+        ):
+            cmd_ad = self._steering_direction_lock_cmd
+            locked = True
+            reason = "direction_lock_hold"
+        else:
+            if original_cmd != self._steering_direction_lock_cmd or now >= self._steering_direction_lock_until:
+                self._steering_direction_lock_cmd = original_cmd
+                self._steering_direction_lock_until = now + max(0.0, self.steering_direction_lock_sec)
+                reason = "direction_lock_set"
+            else:
+                reason = "direction_lock_continue"
+
+        self._steering_direction_lock_reason = reason
+        return cmd_ad, {
+            "enabled": self.enable_steering_direction_lock,
+            "original_cmd": original_cmd,
+            "cmd": cmd_ad,
+            "locked": locked,
+            "lock_cmd": self._steering_direction_lock_cmd,
+            "lock_until": self._steering_direction_lock_until,
+            "reason": reason,
+            "context": context,
+            "lock_sec": self.steering_direction_lock_sec,
+        }
+
+    def apply_ad_oscillation_guard(self, cmd_ad: str, context: str = "normal") -> Tuple[str, Dict[str, Any]]:
+        """지그재그 장애물 사이에서 A↔D가 반복될 때 한쪽 방향을 잠시 고정한다."""
+        now = self.get_clock().now().nanoseconds / 1e9
+        original_cmd = cmd_ad if cmd_ad in ("A", "D") else ""
+        active = False
+        reason = "none"
+
+        if not self.enable_ad_oscillation_guard or original_cmd == "":
+            if original_cmd == "":
+                self._last_effective_ad_cmd = ""
+                self._ad_flip_times = [t for t in self._ad_flip_times if now - t <= self.ad_flip_window_sec]
+            return cmd_ad, {
+                "enabled": self.enable_ad_oscillation_guard,
+                "active": False,
+                "original_cmd": original_cmd,
+                "cmd": cmd_ad,
+                "hold_cmd": self._ad_oscillation_hold_cmd,
+                "hold_until": self._ad_oscillation_hold_until,
+                "flip_count": len(self._ad_flip_times),
+                "reason": "disabled_or_no_ad",
+                "context": context,
+            }
+
+        # 이미 oscillation hold 중이면 현재 판단이 바뀌어도 유지한다.
+        if self._ad_oscillation_hold_cmd in ("A", "D") and now < self._ad_oscillation_hold_until:
+            cmd_ad = self._ad_oscillation_hold_cmd
+            active = True
+            reason = "oscillation_hold"
+        else:
+            # window 내 flip count 계산.
+            self._ad_oscillation_hold_cmd = ""
+            self._ad_oscillation_hold_until = 0.0
+            self._ad_flip_times = [t for t in self._ad_flip_times if now - t <= self.ad_flip_window_sec]
+            if (
+                self._last_effective_ad_cmd in ("A", "D")
+                and original_cmd in ("A", "D")
+                and original_cmd != self._last_effective_ad_cmd
+            ):
+                self._ad_flip_times.append(now)
+
+            if len(self._ad_flip_times) >= max(1, self.ad_flip_threshold):
+                # 새 명령으로 뒤집지 말고 직전 유효 방향을 잠시 유지해 좌우 진동을 끊는다.
+                hold_cmd = self._last_effective_ad_cmd if self._last_effective_ad_cmd in ("A", "D") else original_cmd
+                self._ad_oscillation_hold_cmd = hold_cmd
+                self._ad_oscillation_hold_until = now + max(0.0, self.ad_oscillation_hold_sec)
+                self._ad_flip_times.clear()
+                cmd_ad = hold_cmd
+                active = True
+                reason = "oscillation_detected_hold_previous"
+            else:
+                cmd_ad = original_cmd
+                reason = "tracking"
+
+        if cmd_ad in ("A", "D"):
+            self._last_effective_ad_cmd = cmd_ad
+        self._ad_oscillation_last_reason = reason
+        return cmd_ad, {
+            "enabled": self.enable_ad_oscillation_guard,
+            "active": active,
+            "original_cmd": original_cmd,
+            "cmd": cmd_ad,
+            "hold_cmd": self._ad_oscillation_hold_cmd,
+            "hold_until": self._ad_oscillation_hold_until,
+            "flip_count": len(self._ad_flip_times),
+            "reason": reason,
+            "context": context,
+            "policy": {
+                "window_sec": self.ad_flip_window_sec,
+                "threshold": self.ad_flip_threshold,
+                "hold_sec": self.ad_oscillation_hold_sec,
+                "slow_ws_weight": self.ad_oscillation_slow_ws_weight,
+            },
+        }
+
+    def sharp_turn_pivot_decision(
+        self,
+        target: Tuple[float, float],
+        source: str,
+        yaw_error: float,
+        cmd_ad: str,
+    ) -> Dict[str, Any]:
+        """경로가 급격히 꺾일 때 W를 끊고 차체 방향을 먼저 맞춘다."""
+        now = self.get_clock().now().nanoseconds / 1e9
+        target_distance = get_distance(self.current_pos, target) if self.current_pos is not None else 0.0
+        abs_err = abs(yaw_error)
+        cooldown_active = now < self._sharp_turn_pivot_cooldown_until
+        side_pass = self.is_side_pass_context()
+        front_blocking = self.is_front_blocking_context()
+        # APF가 장애물 옆 통과 상황을 만들고 있을 때 sharp-turn STOP까지 겹치면
+        # 지나가도 되는 장애물 옆에서 멈췄다 출발하는 현상이 생긴다.
+        block_by_side_pass = bool(self.sharp_turn_block_when_apf_side_pass and self.safety_apf_active and side_pass and not front_blocking)
+        trigger = (
+            self.enable_sharp_turn_stop_pivot
+            and not cooldown_active
+            and not block_by_side_pass
+            and target_distance >= self.sharp_turn_min_target_distance
+            and abs_err >= self.sharp_turn_stop_angle_deg
+        )
+
+        active = False
+        elapsed = 0.0
+        guard_reason = "none"
+        if trigger:
+            if self._sharp_turn_pivot_start <= 0.0:
+                self._sharp_turn_pivot_start = now
+            elapsed = now - self._sharp_turn_pivot_start
+            aligned_enough = abs_err <= self.sharp_turn_release_angle_deg
+            timed_out = elapsed >= max(0.1, self.sharp_turn_max_sec)
+            if aligned_enough or timed_out:
+                active = False
+                guard_reason = "aligned_release" if aligned_enough else "max_sec_release_allow_slow_turn"
+                self._sharp_turn_pivot_start = 0.0
+                self._sharp_turn_pivot_cooldown_until = now + max(0.0, self.sharp_turn_cooldown_sec)
+            else:
+                active = True
+                guard_reason = "active"
+        else:
+            self._sharp_turn_pivot_start = 0.0
+            if cooldown_active:
+                guard_reason = "cooldown_allow_slow_turn"
+
+        turn_cmd = cmd_ad if cmd_ad in ("A", "D") else ("D" if yaw_error > 0.0 else "A")
+        self._sharp_turn_pivot_last_reason = guard_reason
+        return {
+            "enabled": self.enable_sharp_turn_stop_pivot,
+            "active": active,
+            "turn_cmd": turn_cmd,
+            "target_source": source,
+            "target_distance": target_distance,
+            "yaw_error_deg": yaw_error,
+            "yaw_abs_error_deg": abs_err,
+            "side_pass": side_pass,
+            "front_blocking": front_blocking,
+            "block_by_side_pass": block_by_side_pass,
+            "start": self._sharp_turn_pivot_start,
+            "elapsed": elapsed,
+            "cooldown_until": self._sharp_turn_pivot_cooldown_until,
+            "guard_reason": guard_reason,
+            "policy": {
+                "stop_angle_deg": self.sharp_turn_stop_angle_deg,
+                "release_angle_deg": self.sharp_turn_release_angle_deg,
+                "min_target_distance": self.sharp_turn_min_target_distance,
+                "max_sec": self.sharp_turn_max_sec,
+                "cooldown_sec": self.sharp_turn_cooldown_sec,
+            },
+        }
+
+    def apf_vector_control_decision(self) -> Dict[str, Any]:
+        """APF 합벡터와 차체 heading 차이를 이용해 W 차단 여부를 결정한다."""
+        fresh = self.is_safety_status_fresh()
+        nearest = self.safety_nearest_obstacle_distance
+        apf_err = self.safety_apf_heading_error_deg
+        apf_abs = self.safety_apf_heading_abs_error_deg
+        if apf_abs is None and apf_err is not None:
+            apf_abs = abs(apf_err)
+
+        speed = max(0.0, float(self.current_speed))
+        ttc = None
+        if nearest is not None and speed >= self.apf_min_speed_for_ttc:
+            # 보수적 TTC: 장애물 bearing을 모르는 상태에서는 현재 속도로 닫힌다고 가정한다.
+            ttc = nearest / max(speed, 0.1)
+
+        bearing_abs = self.obstacle_bearing_abs_deg()
+        close = nearest is not None and nearest <= self.apf_stop_distance
+        hard_close = nearest is not None and nearest <= self.hard_stop_distance
+        side_pass = self.is_side_pass_context()
+        front_blocking = self.is_front_blocking_context()
+        stop_allowed = bool(hard_close or front_blocking)
+
+        # 장애물이 옆에 있는 side-pass 상황이면 APF 합벡터가 크게 꺾여도 STOP하지 않는다.
+        # STOP은 전방 corridor를 막거나 매우 가까운 hard-close 상황에서만 허용한다.
+        heading_stop = (
+            fresh
+            and self.safety_apf_active
+            and close
+            and stop_allowed
+            and not (side_pass and not hard_close)
+            and apf_abs is not None
+            and apf_abs >= self.apf_stop_angle_deg
+        )
+        ttc_stop = (
+            fresh
+            and self.safety_apf_active
+            and stop_allowed
+            and ttc is not None
+            and ttc <= self.apf_ttc_stop_sec
+            and apf_abs is not None
+            and apf_abs >= self.apf_slow_angle_deg
+        )
+        recommended_stop = (
+            fresh
+            and self.safety_emergency_pivot_recommended
+            and stop_allowed
+            and not (side_pass and not hard_close)
+            and apf_abs is not None
+            and apf_abs >= self.apf_slow_angle_deg
+        )
+        stop_pivot = bool(self.enable_apf_vector_stop_pivot and (heading_stop or ttc_stop or recommended_stop))
+
+        slow_turn = bool(
+            self.enable_apf_vector_stop_pivot
+            and fresh
+            and self.safety_apf_active
+            and close
+            and apf_abs is not None
+            and apf_abs >= self.apf_slow_angle_deg
+        )
+        if stop_pivot:
+            slow_turn = True
+
+        turn_cmd = ""
+        turn_reason = "none"
+        now = self.get_clock().now().nanoseconds / 1e9
+
+        # APF STOP pivot 루프 방지.
+        # APF 합벡터가 계속 옆을 가리키면 stop_pivot이 영구 유지되어 제자리 회전만 한다.
+        # 그래서 STOP pivot은 짧게만 허용하고, 이후 cooldown 동안은 slow_turn(W 저속)을 허용한다.
+        pivot_elapsed = 0.0
+        pivot_guard_reason = "none"
+        if stop_pivot and now < self._apf_stop_pivot_cooldown_until:
+            stop_pivot = False
+            pivot_guard_reason = "cooldown_allow_slow_escape"
+        elif stop_pivot:
+            if self._apf_stop_pivot_start <= 0.0:
+                self._apf_stop_pivot_start = now
+            pivot_elapsed = now - self._apf_stop_pivot_start
+            aligned_enough = (apf_abs is not None and apf_abs <= self.apf_stop_pivot_release_angle_deg)
+            timed_out = pivot_elapsed >= max(0.1, self.apf_stop_pivot_max_sec)
+            if aligned_enough or timed_out:
+                stop_pivot = False
+                pivot_guard_reason = "aligned_release" if aligned_enough else "max_sec_release_allow_slow_escape"
+                self._apf_stop_pivot_start = 0.0
+                self._apf_stop_pivot_cooldown_until = now + max(0.0, self.apf_stop_pivot_cooldown_sec)
+        else:
+            self._apf_stop_pivot_start = 0.0
+
+        self._apf_stop_pivot_last_reason = pivot_guard_reason
+
+        # 1순위: 이미 잠근 회피 방향 유지. 너무 자주 A/D가 바뀌면 제자리 루프가 생긴다.
+        if self._away_turn_lock_cmd and now < self._away_turn_lock_until:
+            turn_cmd = self._away_turn_lock_cmd
+            turn_reason = "locked_away_from_nearest_obstacle"
+
+        # 2순위: 가장 가까운 장애물의 반대 방향으로 선회.
+        # 장애물 right -> A, 장애물 left -> D.
+        use_nearest_away = bool(
+            self.prefer_turn_away_from_nearest_obstacle
+            and self.safety_nearest_obstacle_turn_away_cmd in ("A", "D")
+            and (front_blocking or hard_close or not side_pass or (nearest is not None and nearest <= self.turn_away_hard_distance))
+        )
+        if not turn_cmd and use_nearest_away:
+            turn_cmd = self.safety_nearest_obstacle_turn_away_cmd
+            turn_reason = f"away_from_nearest_obstacle_{self.safety_nearest_obstacle_side}"
+            if stop_pivot or slow_turn:
+                self._away_turn_lock_cmd = turn_cmd
+                self._away_turn_lock_until = now + max(0.0, self.away_turn_lock_sec)
+
+        # 3순위: potential node가 권고한 방향. 단, side-pass 상황에서는 nearest 기준 권고가
+        # 좌우 장애물 사이에서 계속 뒤집히므로 APF heading 부호/기본 조향을 우선한다.
+        if not turn_cmd and (not side_pass) and self.safety_recommended_turn_cmd in ("A", "D"):
+            turn_cmd = self.safety_recommended_turn_cmd
+            turn_reason = "potential_recommended_turn"
+
+        # 최후 fallback: APF heading error 부호.
+        if not turn_cmd and apf_err is not None and abs(apf_err) >= 1.0:
+            # 기존 controller 관례와 동일하게 yaw_error > 0이면 D, < 0이면 A.
+            turn_cmd = "D" if apf_err > 0.0 else "A"
+            turn_reason = "apf_heading_error_sign"
+
+        if not (stop_pivot or slow_turn):
+            self._away_turn_lock_cmd = ""
+            self._away_turn_lock_until = 0.0
+
+        return {
+            "fresh": fresh,
+            "enabled": self.enable_apf_vector_stop_pivot,
+            "stop_pivot": stop_pivot,
+            "slow_turn": slow_turn,
+            "turn_cmd": turn_cmd,
+            "turn_reason": turn_reason,
+            "nearest_obstacle_distance": nearest,
+            "nearest_obstacle_side": self.safety_nearest_obstacle_side,
+            "nearest_obstacle_bearing_abs_deg": bearing_abs,
+            "front_blocking": front_blocking,
+            "side_pass": side_pass,
+            "hard_close": hard_close,
+            "stop_allowed": stop_allowed,
+            "use_nearest_away": use_nearest_away,
+            "side_pass_ws_weight": self.side_pass_ws_weight,
+            "nearest_obstacle_side": self.safety_nearest_obstacle_side,
+            "nearest_obstacle_bearing_error_deg": self.safety_nearest_obstacle_bearing_error_deg,
+            "nearest_obstacle_turn_away_cmd": self.safety_nearest_obstacle_turn_away_cmd,
+            "recommended_turn_cmd": self.safety_recommended_turn_cmd,
+            "away_turn_lock_cmd": self._away_turn_lock_cmd,
+            "away_turn_lock_until": self._away_turn_lock_until,
+            "apf_stop_pivot_start": self._apf_stop_pivot_start,
+            "apf_stop_pivot_elapsed": pivot_elapsed,
+            "apf_stop_pivot_cooldown_until": self._apf_stop_pivot_cooldown_until,
+            "apf_stop_pivot_guard_reason": pivot_guard_reason,
+            "ttc_sec": ttc,
+            "apf_heading_error_deg": apf_err,
+            "apf_heading_abs_error_deg": apf_abs,
+            "apf_desired_heading_deg": self.safety_apf_desired_heading_deg,
+            "apf_result_vector": self.safety_apf_result_vector,
+            "apf_active": self.safety_apf_active,
+            "emergency_pivot_recommended": self.safety_emergency_pivot_recommended,
+            "heading_stop": heading_stop,
+            "ttc_stop": ttc_stop,
+            "recommended_stop": recommended_stop,
+            "policy": {
+                "stop_angle_deg": self.apf_stop_angle_deg,
+                "slow_angle_deg": self.apf_slow_angle_deg,
+                "stop_distance_m": self.apf_stop_distance,
+                "ttc_stop_sec": self.apf_ttc_stop_sec,
+                "ttc_slow_sec": self.apf_ttc_slow_sec,
+                "slow_ws_weight": self.apf_slow_ws_weight,
+                "stop_pivot_max_sec": self.apf_stop_pivot_max_sec,
+                "stop_pivot_release_angle_deg": self.apf_stop_pivot_release_angle_deg,
+                "stop_pivot_cooldown_sec": self.apf_stop_pivot_cooldown_sec,
+                "front_stop_bearing_deg": self.front_stop_bearing_deg,
+                "side_pass_bearing_deg": self.side_pass_bearing_deg,
+                "side_pass_min_distance": self.side_pass_min_distance,
+                "hard_stop_distance": self.hard_stop_distance,
+                "turn_away_hard_distance": self.turn_away_hard_distance,
+            },
+        }
+
+    def _yaw_error_to_target(self, target: Tuple[float, float]) -> float:
+        if self.current_pos is None:
+            return 0.0
+        dx = target[0] - self.current_pos[0]
+        dy = target[1] - self.current_pos[1]
+        desired_yaw = math.degrees(math.atan2(dx, dy))
+        return normalize_angle(desired_yaw - self.current_yaw)
+
+    def _forward_target_from_global_path(self, lookahead_distance: Optional[float] = None) -> Optional[Tuple[float, float]]:
+        """현재 위치를 global_path에 투영한 뒤 일정 거리 앞의 point를 반환한다.
+
+        local_target/APF target이 현재 위치 가까이에서 좌우로 바뀌면 controller가
+        target을 향해 제자리 회전만 반복한다. 이때 path의 "진행 방향" 기준 target을
+        다시 잡아 회전 루프를 끊는다.
+        """
+        if self.current_pos is None or len(self.global_path) < 2:
+            return None
+        lookahead = max(float(lookahead_distance if lookahead_distance is not None else self.forward_guard_target_distance), 1.0)
+        route = self.global_path
+        max_points = max(2, int(self.forward_guard_max_search_points))
+
+        best_i = 0
+        best_t = 0.0
+        best_dist = float("inf")
+        # 너무 긴 path 전체를 매 tick 다 보지 않도록 제한하되, 기본 120 segment면 충분하다.
+        end_i = min(len(route) - 1, max_points)
+        for i in range(0, end_i):
+            ax, ay = route[i]
+            bx, by = route[i + 1]
+            dx = bx - ax
+            dy = by - ay
+            denom = dx * dx + dy * dy
+            t = 0.0 if denom <= 1e-9 else clamp(((self.current_pos[0] - ax) * dx + (self.current_pos[1] - ay) * dy) / denom, 0.0, 1.0)
+            px = ax + t * dx
+            py = ay + t * dy
+            d = get_distance(self.current_pos, (px, py))
+            if d < best_dist:
+                best_dist = d
+                best_i = i
+                best_t = t
+
+        remaining = lookahead
+        ax, ay = route[best_i]
+        bx, by = route[best_i + 1]
+        seg_len = get_distance((ax, ay), (bx, by))
+        cur = (ax + best_t * (bx - ax), ay + best_t * (by - ay))
+        first_remaining = seg_len * (1.0 - best_t)
+        if remaining <= first_remaining and seg_len > 1e-9:
+            r = remaining / seg_len
+            return (cur[0] + r * (bx - ax), cur[1] + r * (by - ay))
+        remaining -= first_remaining
+        for j in range(best_i + 1, len(route) - 1):
+            a = route[j]
+            b = route[j + 1]
+            seg_len = get_distance(a, b)
+            if remaining <= seg_len and seg_len > 1e-9:
+                r = remaining / seg_len
+                return (a[0] + r * (b[0] - a[0]), a[1] + r * (b[1] - a[1]))
+            remaining -= seg_len
+        return route[-1]
+
+    def apply_forward_target_guard(self, target: Tuple[float, float], source: str) -> Tuple[Tuple[float, float], str, Dict[str, Any]]:
+        status: Dict[str, Any] = {
+            "enabled": self.enable_forward_target_guard,
+            "active": False,
+            "reason": "disabled",
+            "source_before": source,
+            "source_after": source,
+        }
+        if not self.enable_forward_target_guard or self.current_pos is None:
+            return target, source, status
+
+        target_distance = get_distance(self.current_pos, target)
+        yaw_error = self._yaw_error_to_target(target)
+        yaw_abs = abs(yaw_error)
+        safety_mode = str(getattr(self, "safety_mode", "unknown")).lower()
+        apf_active = bool(getattr(self, "safety_apf_active", False))
+        in_danger = safety_mode == "danger"
+        status.update({
+            "reason": "clear",
+            "target_distance_before": target_distance,
+            "yaw_error_before_deg": yaw_error,
+            "safety_mode": safety_mode,
+            "safety_apf_active": apf_active,
+        })
+
+        # 위험 장애물에 대한 APF 회피 중이면 APF target을 존중한다. 문제는 회피가 끝난 뒤
+        # local target이 너무 가까운 지점/뒤쪽 지점으로 남아 제자리 회전을 만드는 경우다.
+        if in_danger and not self.forward_guard_allow_in_danger:
+            status["reason"] = "blocked_by_danger_safety"
+            return target, source, status
+        if apf_active and target_distance >= self.forward_guard_min_target_distance:
+            status["reason"] = "blocked_by_active_apf"
+            return target, source, status
+
+        too_close = target_distance < self.forward_guard_min_target_distance
+        bad_bearing = yaw_abs >= self.forward_guard_yaw_error_deg
+        # local_target_apf가 passthrough 상태에서도 사용되므로 source에만 의존하지 말고,
+        # close+bearing 조건이면 전방 path target으로 교체한다.
+        if not (too_close or bad_bearing):
+            return target, source, status
+
+        forward = self._forward_target_from_global_path(self.forward_guard_target_distance)
+        if forward is None:
+            status["reason"] = "no_global_path_forward_target"
+            return target, source, status
+        forward_dist = get_distance(self.current_pos, forward)
+        forward_yaw_error = self._yaw_error_to_target(forward)
+        # 교체 target이 기존보다 더 가깝거나 더 심한 후방 target이면 교체하지 않는다.
+        if forward_dist <= max(1.0, target_distance + 1.0):
+            status["reason"] = "forward_target_not_far_enough"
+            status["forward_distance"] = forward_dist
+            status["forward_yaw_error_deg"] = forward_yaw_error
+            return target, source, status
+
+        status.update({
+            "active": True,
+            "reason": "near_or_bad_bearing_local_target_replaced",
+            "source_after": "global_path_forward_guard",
+            "target_before": {"x": target[0], "y": target[1]},
+            "target_after": {"x": forward[0], "y": forward[1]},
+            "forward_distance": forward_dist,
+            "forward_yaw_error_deg": forward_yaw_error,
+            "too_close": too_close,
+            "bad_bearing": bad_bearing,
+        })
+        return forward, "global_path_forward_guard", status
+
     def choose_target(self) -> Tuple[Optional[Tuple[float, float]], str]:
         now = self.get_clock().now().nanoseconds / 1e9
         if self.enable_local_target and self.local_target is not None and now - self.local_target_stamp <= self.target_ttl_sec:
@@ -317,16 +1172,25 @@ class TeamPathControllerNode(Node):
             return "STOP", 1.0, "goal_reached"
         if get_distance(self.current_pos, target) < 1.0 and self.goal_pos and get_distance(target, self.goal_pos) < self.stop_distance:
             return "STOP", 1.0, "target_stop"
+        # 새 전차 제어 데이터셋 기준:
+        # - STOP + A/D 제자리 회전은 검증 데이터가 부족함.
+        # - W=0.1~0.2 + A/D는 2~4m급 회전반경으로 검증되어 있어 stuck 위험이 낮다.
+        if abs_err > self.crawl_pivot_angle_deg:
+            w_ws = clamp(self.crawl_pivot_ws_weight, 0.05, 1.0)
+            return "W", w_ws, "crawl_pivot"
         if abs_err > self.rotate_in_place_angle_deg:
-            return "STOP", 1.0, "rotate_before_drive"
-        
-        speed_factor = self.max_speed / 19.45 if self.max_speed > 0.0 else 1.0
+            w_ws = clamp(self.crawl_turn_ws_weight, 0.05, 1.0)
+            return "W", w_ws, "crawl_turn"
+
+        # W/S weight는 시뮬레이터 입력 그 자체다.
+        # tank_parameters.yaml의 max_speed가 갱신되어도 명령 weight가 임의로 축소되지 않도록
+        # 기존 speed_factor = max_speed / 19.45 보정은 제거한다.
         if abs_err > self.slowdown_angle_deg:
-            w_ws = clamp(self.turn_ws_weight * speed_factor, 0.1, 1.0)
+            w_ws = clamp(self.turn_ws_weight, 0.1, 1.0)
             return "W", w_ws, "slow_turn"
-            
+
         error_scale = 1.0 - (abs_err / self.slowdown_angle_deg) * 0.3
-        w_ws = clamp(self.straight_ws_weight * speed_factor * error_scale, 0.1, 1.0)
+        w_ws = clamp(self.straight_ws_weight * error_scale, 0.1, 1.0)
         return "W", w_ws, "cruise"
 
     def escape_command_if_needed(self, target: Optional[Tuple[float, float]] = None) -> Optional[Tuple[Dict[str, Any], str]]:
@@ -410,6 +1274,8 @@ class TeamPathControllerNode(Node):
             self.publish_status({"ok": False, "reason": source, "current": {"x": self.current_pos[0], "y": self.current_pos[1]}})
             return
 
+        target, source, self.target_guard_status = self.apply_forward_target_guard(target, source)
+
         escape = self.escape_command_if_needed(target)
         if escape is not None:
             action, mode = escape
@@ -419,6 +1285,70 @@ class TeamPathControllerNode(Node):
 
         cmd_ad, w_ad, yaw_error, desired_yaw = self.calculate_steering(target)
         cmd_ws, w_ws, speed_mode = self.calculate_speed(target, yaw_error)
+
+        apf_vector_control = self.apf_vector_control_decision()
+        sharp_turn_control = self.sharp_turn_pivot_decision(target, source, yaw_error, cmd_ad)
+        apf_vector_override = False
+        sharp_turn_override = False
+        steering_lock_status: Dict[str, Any] = {"enabled": self.enable_steering_direction_lock, "reason": "not_applied"}
+        ad_oscillation_status: Dict[str, Any] = {"enabled": self.enable_ad_oscillation_guard, "reason": "not_applied"}
+        if apf_vector_control.get("stop_pivot", False):
+            # APF 합벡터 방향과 차체 heading 차이가 크고 장애물이 가까우면 W를 완전히 끊는다.
+            cmd_ws = "STOP"
+            w_ws = 1.0
+            cmd_ad = apf_vector_control.get("turn_cmd") or cmd_ad
+            cmd_ad, steering_lock_status = self.apply_steering_direction_lock(cmd_ad, "apf_stop_pivot")
+            w_ad = 1.0 if cmd_ad else 0.0
+            speed_mode = "apf_vector_stop_pivot"
+            apf_vector_override = True
+        elif sharp_turn_control.get("active", False):
+            # 경로가 확 꺾이는 구간에서는 W를 누르지 않고 A/D로 차체 방향을 먼저 맞춘다.
+            cmd_ws = "STOP"
+            w_ws = 1.0
+            cmd_ad = sharp_turn_control.get("turn_cmd") or cmd_ad
+            cmd_ad, steering_lock_status = self.apply_steering_direction_lock(cmd_ad, "sharp_path_turn_stop_pivot")
+            w_ad = 1.0 if cmd_ad else 0.0
+            speed_mode = "sharp_path_turn_stop_pivot"
+            sharp_turn_override = True
+        else:
+            if apf_vector_control.get("slow_turn", False) and cmd_ws == "W":
+                # APF 방향 차이가 중간 수준이면 W는 허용하되 매우 낮은 속도로만 진행한다.
+                if w_ws > self.apf_slow_ws_weight:
+                    w_ws = self.apf_slow_ws_weight
+                    speed_mode = f"{speed_mode}|apf_vector_slow"
+                    apf_vector_override = True
+            # STOP pivot이 아니더라도 A/D 토글은 짧게 억제한다.
+            cmd_ad, steering_lock_status = self.apply_steering_direction_lock(cmd_ad, "normal_or_slow_turn")
+
+        # 최종 A/D 명령에 대해 oscillation guard를 한 번 더 적용한다.
+        cmd_ad, ad_oscillation_status = self.apply_ad_oscillation_guard(cmd_ad, speed_mode)
+        if ad_oscillation_status.get("active", False):
+            if cmd_ad in ("A", "D"):
+                w_ad = max(w_ad, 0.85)
+            if cmd_ws == "W" and w_ws > self.ad_oscillation_slow_ws_weight:
+                w_ws = self.ad_oscillation_slow_ws_weight
+                speed_mode = f"{speed_mode}|ad_oscillation_guard"
+
+        # 장애물이 옆에 있고 전방을 막지 않는 통과 상황은 STOP 대신 저속 W를 허용한다.
+        if (
+            cmd_ws == "W"
+            and apf_vector_control.get("side_pass", False)
+            and not apf_vector_control.get("front_blocking", False)
+            and w_ws < self.side_pass_ws_weight
+        ):
+            w_ws = self.side_pass_ws_weight
+            speed_mode = f"{speed_mode}|side_pass_forward"
+
+        safety_limit, safety_mode = self.current_safety_limit()
+        safety_clamped = False
+        if cmd_ws == "W" and safety_limit is not None and w_ws > safety_limit:
+            w_ws = safety_limit
+            speed_mode = f"{speed_mode}|safety_{safety_mode}"
+            safety_clamped = True
+
+        cmd_ws, w_ws, speed_mode, turn_overspeed_guard_status = self.apply_turn_overspeed_guard(
+            cmd_ws, w_ws, yaw_error, speed_mode, safety_mode, apf_vector_control
+        )
         action = self.make_action(cmd_ws, w_ws, cmd_ad, w_ad)
         if speed_mode == "goal_reached":
             # 목적지 도달 시 시뮬레이터 일시정지 요청.
@@ -449,6 +1379,73 @@ class TeamPathControllerNode(Node):
             "yaw_error_deg": yaw_error,
             "current_speed_mps": self.current_speed,
             "speed_mode": speed_mode,
+            "safety": {
+                "enabled": self.enable_safety_speed_limit,
+                "mode": self.safety_mode,
+                "limit_ws": safety_limit,
+                "nearest_obstacle_distance": self.safety_nearest_obstacle_distance,
+                "clamped": safety_clamped,
+                "apf_vector_override": apf_vector_override,
+                "sharp_turn_override": sharp_turn_override,
+                "apf_vector_control": apf_vector_control,
+                "sharp_turn_control": sharp_turn_control,
+                "steering_direction_lock": steering_lock_status,
+                "ad_oscillation_guard": ad_oscillation_status,
+                "turn_overspeed_guard": turn_overspeed_guard_status,
+                "target_guard": self.target_guard_status,
+            },
+            "controller_profile": {
+                "straight_ws_weight": self.straight_ws_weight,
+                "turn_ws_weight": self.turn_ws_weight,
+                "crawl_pivot_ws_weight": self.crawl_pivot_ws_weight,
+                "crawl_turn_ws_weight": self.crawl_turn_ws_weight,
+                "crawl_pivot_angle_deg": self.crawl_pivot_angle_deg,
+                "rotate_in_place_angle_deg": self.rotate_in_place_angle_deg,
+                "slowdown_angle_deg": self.slowdown_angle_deg,
+                "enable_apf_vector_stop_pivot": self.enable_apf_vector_stop_pivot,
+                "prefer_turn_away_from_nearest_obstacle": self.prefer_turn_away_from_nearest_obstacle,
+                "away_turn_lock_sec": self.away_turn_lock_sec,
+                "apf_stop_pivot_max_sec": self.apf_stop_pivot_max_sec,
+                "apf_stop_pivot_release_angle_deg": self.apf_stop_pivot_release_angle_deg,
+                "apf_stop_pivot_cooldown_sec": self.apf_stop_pivot_cooldown_sec,
+                "apf_stop_angle_deg": self.apf_stop_angle_deg,
+                "apf_slow_angle_deg": self.apf_slow_angle_deg,
+                "apf_stop_distance": self.apf_stop_distance,
+                "apf_ttc_stop_sec": self.apf_ttc_stop_sec,
+                "apf_slow_ws_weight": self.apf_slow_ws_weight,
+                "enable_steering_direction_lock": self.enable_steering_direction_lock,
+                "steering_direction_lock_sec": self.steering_direction_lock_sec,
+                "enable_side_pass_forward": self.enable_side_pass_forward,
+                "side_pass_bearing_deg": self.side_pass_bearing_deg,
+                "side_pass_min_distance": self.side_pass_min_distance,
+                "side_pass_ws_weight": self.side_pass_ws_weight,
+                "front_stop_bearing_deg": self.front_stop_bearing_deg,
+                "hard_stop_distance": self.hard_stop_distance,
+                "enable_ad_oscillation_guard": self.enable_ad_oscillation_guard,
+                "ad_flip_window_sec": self.ad_flip_window_sec,
+                "ad_flip_threshold": self.ad_flip_threshold,
+                "ad_oscillation_hold_sec": self.ad_oscillation_hold_sec,
+                "enable_sharp_turn_stop_pivot": self.enable_sharp_turn_stop_pivot,
+                "sharp_turn_stop_angle_deg": self.sharp_turn_stop_angle_deg,
+                "sharp_turn_release_angle_deg": self.sharp_turn_release_angle_deg,
+                "sharp_turn_min_target_distance": self.sharp_turn_min_target_distance,
+                "sharp_turn_max_sec": self.sharp_turn_max_sec,
+                "sharp_turn_cooldown_sec": self.sharp_turn_cooldown_sec,
+                "sharp_turn_block_when_apf_side_pass": self.sharp_turn_block_when_apf_side_pass,
+                "enable_turn_overspeed_guard": self.enable_turn_overspeed_guard,
+                "turn_overspeed_angle_deg": self.turn_overspeed_angle_deg,
+                "turn_overspeed_speed_mps": self.turn_overspeed_speed_mps,
+                "turn_overspeed_hard_angle_deg": self.turn_overspeed_hard_angle_deg,
+                "turn_overspeed_hard_speed_mps": self.turn_overspeed_hard_speed_mps,
+                "turn_overspeed_reverse_weight": self.turn_overspeed_reverse_weight,
+                "turn_overspeed_slow_ws_weight": self.turn_overspeed_slow_ws_weight,
+                "danger_obstacle_brake_speed_mps": self.danger_obstacle_brake_speed_mps,
+                "danger_obstacle_reverse_weight": self.danger_obstacle_reverse_weight,
+                "enable_forward_target_guard": self.enable_forward_target_guard,
+                "forward_guard_min_target_distance": self.forward_guard_min_target_distance,
+                "forward_guard_yaw_error_deg": self.forward_guard_yaw_error_deg,
+                "forward_guard_target_distance": self.forward_guard_target_distance,
+            },
             "mission_complete": self.mission_complete,
             "collision_count": self.collision_count,
             "mean_cte": mean_cte,

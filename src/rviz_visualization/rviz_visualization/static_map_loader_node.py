@@ -196,7 +196,7 @@ class StaticMapLoaderNode(Node):
             objects.append(
                 MapObject(
                     prefab_name=prefab,
-                    category=self._category_for_prefab(prefab),
+                    category=self._category_for_obstacle(obs),
                     raw_x=raw_x,
                     raw_y=raw_y,
                     raw_z=raw_z,
@@ -215,6 +215,20 @@ class StaticMapLoaderNode(Node):
 
     def _raw_to_map(self, raw_x: float, raw_y: float, raw_z: float) -> Tuple[float, float, float]:
         return raw_x, raw_z, raw_y
+
+    def _category_for_obstacle(self, obs: Dict[str, Any]) -> str:
+        """객체의 범주를 결정한다. 정찰 발견객체는 metadata.class_name 우선
+        (detected_rock_* 처럼 소문자 prefab이라 prefix 매칭이 안 되므로),
+        없으면(=finalmap 네이티브) 기존 prefab prefix 매칭으로 폴백."""
+        meta = obs.get("metadata", {}) or {}
+        cls = str(meta.get("class_name", "")).strip().lower()
+        if cls:
+            categories = self.config.get("categories", {})
+            alias = {"person": "human", "human": "human", "outpost": "house"}
+            cls = alias.get(cls, cls)
+            if cls in categories:
+                return cls
+        return self._category_for_prefab(str(obs.get("prefabName", "")))
 
     def _category_for_prefab(self, prefab: str) -> str:
         for category, spec in self.config.get("categories", {}).items():

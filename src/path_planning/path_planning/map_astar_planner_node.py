@@ -72,6 +72,7 @@ from path_planning.config import (
     TOPIC_LIDAR_DETECTED_MAP,
     TOPIC_LOOKAHEAD_POSE,
     TOPIC_MAP_OBSTACLES,
+    TOPIC_DISCOVERED_OBJECTS,
     TOPIC_PATH_POINTS,
     TOPIC_PLANNER_STATUS,
     TOPIC_PLAYER_POSE,
@@ -86,6 +87,8 @@ from path_planning.config import (
     ROUTE_SIDE,
     USE_STATIC_MAP,
     STATIC_MAP_FILE,
+    TERRAIN_COST_FILE,
+    TERRAIN_WEIGHT,
     LIDAR_CLUSTER_BBOX_MARGIN,
 )
 
@@ -94,6 +97,7 @@ from path_planning.route_loader import get_route_waypoints
 from path_planning.team_path_planning import (
     plan_path_through_waypoints as team_plan_path_through_waypoints,
     load_static_obstacles_from_map,
+    DEFAULT_STATIC_INFLATE,
 )
 
 
@@ -118,10 +122,11 @@ def add_obstacles(grid: List[List[int]], obstacles: List[Dict[str, float]], res:
     rows, cols = len(grid), len(grid[0])
     for obs in obstacles:
         try:
-            x_min = max(0, int((float(obs["x_min"]) - inflate) / res))
-            x_max = min(cols - 1, int((float(obs["x_max"]) + inflate) / res))
-            z_min = max(0, int((float(obs["z_min"]) - inflate) / res))
-            z_max = min(rows - 1, int((float(obs["z_max"]) + inflate) / res))
+            obs_inflate = float(obs.get("_inflate_override", inflate)) if isinstance(obs, dict) else float(inflate)
+            x_min = max(0, int((float(obs["x_min"]) - obs_inflate) / res))
+            x_max = min(cols - 1, int((float(obs["x_max"]) + obs_inflate) / res))
+            z_min = max(0, int((float(obs["z_min"]) - obs_inflate) / res))
+            z_max = min(rows - 1, int((float(obs["z_max"]) + obs_inflate) / res))
         except Exception:
             continue
         for z in range(z_min, z_max + 1):
@@ -263,11 +268,12 @@ def plan_global_path(
     use_smoothing: bool = True,
     max_expansions: int = 250000,
     static_obstacles: Optional[List[Dict[str, float]]] = None,
+    static_inflate: float = DEFAULT_STATIC_INFLATE,
 ) -> List[Tuple[float, float]]:
     grid = create_grid(width, height, resolution)
     if static_obstacles:
-        # 정적 장애물(나무 등)은 작은 inflate=1.0로(team_path_planning와 동일 정책)
-        add_obstacles(grid, static_obstacles, resolution, 1.0)
+        # Known static map obstacle은 hard no-go다. 기존 1.0m inflate는 초록점 사이 통과를 허용했다.
+        add_obstacles(grid, static_obstacles, resolution, static_inflate)
     add_obstacles(grid, obstacles, resolution, inflate)
 
     start_grid = (int(start_pos[0] / resolution), int(start_pos[1] / resolution))
@@ -326,6 +332,175 @@ def parse_obstacles_payload(payload: Any) -> List[Dict[str, float]]:
             if bbox is not None:
                 bboxes.append(bbox)
     return bboxes
+
+DISCOVERED_CLASS_RADIUS = {
+    # A* persistent obstacle 반경. 값은 전체 폭이 아니라 중심 기준 반경이다.
+    # rock/car 실제 폭이 약 8m라면 radius는 4m가 기준이다. 추가 안전여유는
+    # discovered_obstacle_inflate에서 별도로 준다.
+    "rock": 4.0,
+    "car": 4.0,
+    "tank": 4.5,
+    "house": 5.5,
+    "wall": 4.0,
+    "tent": 4.0,
+    "tree": 4.0,
+    "unknown": 3.0,
+}
+
+
+def _as_float(v: Any, default: float = 0.0) -> float:
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+
+def _as_bool(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v)
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "y", "confirmed")
+    return False
+
+
+def _discovered_xy(obj: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    # /tank/map/discovered/objects 규약: DiscoveredObject.map_x/map_y가 A* 평면 x/y이다.
+    if "map_x" in obj and "map_y" in obj:
+        return _as_float(obj.get("map_x")), _as_float(obj.get("map_y"))
+    pos = obj.get("position_map") if isinstance(obj.get("position_map"), dict) else None
+    if pos is not None:
+        return _as_float(pos.get("x")), _as_float(pos.get("y", pos.get("z", 0.0)))
+    # 저장된 discovered .map 규약은 Unity raw: position.x=map.x, position.z=map.y
+    pos = obj.get("position") if isinstance(obj.get("position"), dict) else None
+    if pos is not None:
+        return _as_float(pos.get("x")), _as_float(pos.get("z", pos.get("y", 0.0)))
+    return None
+
+
+def parse_discovered_objects_payload(
+    payload: Any,
+    *,
+    confirmed_only: bool,
+    min_observations: int,
+    ignored_classes: set[str],
+    default_radius: float,
+) -> List[Dict[str, float]]:
+    if not isinstance(payload, dict):
+        return []
+    objects = payload.get("objects")
+    if not isinstance(objects, list):
+        return []
+    bboxes: List[Dict[str, float]] = []
+    for obj in objects:
+        if not isinstance(obj, dict):
+            continue
+        cls = str(obj.get("class_name", obj.get("className", obj.get("class", "unknown")))).strip().lower()
+        if cls in ignored_classes:
+            continue
+        obs_count = int(_as_float(obj.get("observation_count", obj.get("observations", 0)), 0.0))
+        confirmed = _as_bool(obj.get("is_confirmed", obj.get("confirmed", False)))
+        if confirmed_only and not confirmed:
+            continue
+        if obs_count < max(0, min_observations):
+            continue
+        xy = _discovered_xy(obj)
+        if xy is None:
+            continue
+        x, y = xy
+        radius = float(DISCOVERED_CLASS_RADIUS.get(cls, default_radius))
+        bboxes.append({
+            "x_min": x - radius,
+            "x_max": x + radius,
+            "z_min": y - radius,
+            "z_max": y + radius,
+            "source": "discovered_object",
+            "class_name": cls,
+            "object_id": str(obj.get("object_id", obj.get("id", ""))),
+            "observation_count": obs_count,
+            "is_confirmed": confirmed,
+        })
+    return bboxes
+
+
+def point_in_bbox_with_margin(point: Tuple[float, float], bbox: Dict[str, float], margin: float) -> bool:
+    x, y = point
+    return (
+        float(bbox.get("x_min", 0.0)) - margin <= x <= float(bbox.get("x_max", 0.0)) + margin
+        and float(bbox.get("z_min", 0.0)) - margin <= y <= float(bbox.get("z_max", 0.0)) + margin
+    )
+
+
+def bbox_center(bbox: Dict[str, float]) -> Tuple[float, float]:
+    return (
+        0.5 * (float(bbox.get("x_min", 0.0)) + float(bbox.get("x_max", 0.0))),
+        0.5 * (float(bbox.get("z_min", 0.0)) + float(bbox.get("z_max", 0.0))),
+    )
+
+
+def bbox_center_distance(a: Dict[str, float], b: Dict[str, float]) -> float:
+    ax, ay = bbox_center(a)
+    bx, by = bbox_center(b)
+    return math.hypot(ax - bx, ay - by)
+
+
+def bbox_copy_as_memory(bbox: Dict[str, float], now: float, *, hits: int = 1) -> Dict[str, float]:
+    cx, cy = bbox_center(bbox)
+    copied = {
+        "x_min": float(bbox.get("x_min", cx)),
+        "x_max": float(bbox.get("x_max", cx)),
+        "z_min": float(bbox.get("z_min", cy)),
+        "z_max": float(bbox.get("z_max", cy)),
+        "source": "lidar_cluster_memory",
+        "cluster_id": int(bbox.get("cluster_id", -1)) if isinstance(bbox.get("cluster_id", -1), (int, float)) else -1,
+        "count": int(bbox.get("count", 0)) if isinstance(bbox.get("count", 0), (int, float)) else 0,
+        "first_seen_wall": float(bbox.get("first_seen_wall", now)),
+        "last_seen_wall": float(now),
+        "hits": int(hits),
+    }
+    return copied
+
+
+def is_path_blocked_by_bboxes(
+    current_pos: Tuple[float, float],
+    route: Sequence[Tuple[float, float]],
+    route_index: int,
+    bboxes: Sequence[Dict[str, float]],
+    min_distance: float,
+    max_distance: float,
+    margin: float,
+) -> bool:
+    """Persistent discovered/static-like bbox가 현재 진행 경로 corridor를 막는지 검사한다.
+
+    LiDAR obstacle memory와 달리 discovered object는 point history가 아니라 bbox이므로,
+    현재 위치부터 lookahead 거리까지 route point/segment 샘플이 bbox+margin 안으로 들어가면 blocked로 본다.
+    """
+    if not bboxes or not route:
+        return False
+    start_i = max(0, min(route_index, len(route) - 1))
+    prev = current_pos
+    dist_from_now = 0.0
+    sample_step = 1.0
+    for i in range(start_i, len(route)):
+        nxt = route[i]
+        seg_len = get_distance(prev, nxt)
+        steps = max(1, int(math.ceil(seg_len / sample_step)))
+        for k in range(1, steps + 1):
+            t = k / steps
+            p = (prev[0] + (nxt[0] - prev[0]) * t, prev[1] + (nxt[1] - prev[1]) * t)
+            d_inc = get_distance(prev, p) if k == 1 else sample_step
+            # 누적 거리는 근사로 충분하다. 너무 먼 미래의 discovered 때문에 과민 재계획하지 않게 max_distance로 제한.
+            dist_from_now += d_inc
+            if dist_from_now < min_distance:
+                continue
+            if dist_from_now > max_distance:
+                return False
+            for bbox in bboxes:
+                if point_in_bbox_with_margin(p, bbox, margin):
+                    return True
+        prev = nxt
+    return False
 
 
 def find_lookahead_along_path(pos: Tuple[float, float], route: Sequence[Tuple[float, float]], lookahead_dist: float) -> Tuple[Tuple[float, float], int]:
@@ -396,6 +571,9 @@ class TeamDynamicAStarPlannerNode(Node):
         self.declare_parameter("plan_retry_period_sec", PLAN_RETRY_PERIOD_SEC)
         self.declare_parameter("path_block_margin", PATH_BLOCK_MARGIN)
         self.declare_parameter("path_block_required_hits", PATH_BLOCK_REQUIRED_HITS)
+        self.declare_parameter("dynamic_replan_max_count", 0)
+        self.declare_parameter("dynamic_replan_min_progress_m", 0.0)
+        self.declare_parameter("dynamic_replan_progress_guard_sec", 0.0)
         self.declare_parameter("lidar_block_min_distance", LIDAR_BLOCK_MIN_DISTANCE)
         self.declare_parameter("lidar_block_max_distance", LIDAR_BLOCK_MAX_DISTANCE)
         self.declare_parameter("lidar_cluster_eps", LIDAR_CLUSTER_EPS)
@@ -417,8 +595,42 @@ class TeamDynamicAStarPlannerNode(Node):
         self.declare_parameter("route_config_file", ROUTE_CONFIG_FILE)
         self.declare_parameter("use_static_map", USE_STATIC_MAP)
         self.declare_parameter("static_map_file", STATIC_MAP_FILE)
+        self.declare_parameter("terrain_cost_file", TERRAIN_COST_FILE)
+        self.declare_parameter("terrain_weight", TERRAIN_WEIGHT)
         self.declare_parameter("use_lidar_cluster_bboxes", USE_LIDAR_CLUSTER_BBOXES)
         self.declare_parameter("lidar_cluster_bbox_margin", LIDAR_CLUSTER_BBOX_MARGIN)
+        # Known/discovered obstacle costmap policy.
+        self.declare_parameter("static_obstacle_inflate", DEFAULT_STATIC_INFLATE)
+        self.declare_parameter("use_discovered_objects_for_astar", True)
+        self.declare_parameter("discovered_objects_topic", TOPIC_DISCOVERED_OBJECTS)
+        self.declare_parameter("discovered_confirmed_only", True)
+        self.declare_parameter("discovered_min_observations", 2)
+        self.declare_parameter("discovered_default_radius", 3.5)
+        self.declare_parameter("discovered_obstacle_inflate", 2.0)
+        self.declare_parameter("ignored_discovered_classes_for_astar", "person,human,blue,red")
+        # LiDAR cluster persistence: 현재 프레임에서 cluster가 잠깐 사라져도 A* costmap에는 TTL 동안 유지한다.
+        self.declare_parameter("enable_lidar_cluster_memory", True)
+        self.declare_parameter("lidar_cluster_memory_ttl_sec", 18.0)
+        self.declare_parameter("lidar_cluster_memory_merge_distance", 5.0)
+        self.declare_parameter("lidar_cluster_memory_inflate", 3.0)
+        self.declare_parameter("lidar_cluster_memory_max_count", 80)
+        self.declare_parameter("use_lidar_cluster_memory_for_path_block", False)
+        # Route/checkpoint commitment: dynamic replan이 체크포인트 진행 상태를 뒤로 되돌려
+        # lookahead가 좌우로 튀는 것을 막는다.
+        self.declare_parameter("route_index_never_decrease", True)
+        self.declare_parameter("dynamic_replan_keep_route_index", True)
+        self.declare_parameter("route_commit_lock_sec", 6.0)
+        # Path-block trigger는 현재 보이는 cluster를 주력으로 사용한다.
+        # history/discovered는 A* costmap에는 넣되, 반복 replan trigger로 쓰면 경로가 흔들릴 수 있다.
+        self.declare_parameter("use_lidar_memory_for_path_block", False)
+        self.declare_parameter("use_discovered_objects_for_path_block", False)
+        # Emergency fast replan: 현재 보이는 LiDAR cluster가 전차 전방 가까운 A* corridor를 막으면
+        # 일반 5초 cooldown/2-hit 조건보다 빠르게 재계획한다. Memory/discovered는 여기서 쓰지 않는다.
+        self.declare_parameter("emergency_cluster_replan_enabled", True)
+        self.declare_parameter("emergency_replan_cooldown_sec", 1.5)
+        self.declare_parameter("emergency_replan_front_distance", 16.0)
+        self.declare_parameter("emergency_replan_min_distance", 0.0)
+        self.declare_parameter("emergency_replan_margin", 8.0)
 
         self.map_width = int(self.get_parameter("map_width").value)
         self.map_height = int(self.get_parameter("map_height").value)
@@ -433,6 +645,9 @@ class TeamDynamicAStarPlannerNode(Node):
         self.plan_retry_period_sec = float(self.get_parameter("plan_retry_period_sec").value)
         self.path_block_margin = float(self.get_parameter("path_block_margin").value)
         self.path_block_required_hits = max(1, int(self.get_parameter("path_block_required_hits").value))
+        self.dynamic_replan_max_count = int(self.get_parameter("dynamic_replan_max_count").value)
+        self.dynamic_replan_min_progress_m = float(self.get_parameter("dynamic_replan_min_progress_m").value)
+        self.dynamic_replan_progress_guard_sec = float(self.get_parameter("dynamic_replan_progress_guard_sec").value)
         self.lidar_block_min_distance = float(self.get_parameter("lidar_block_min_distance").value)
         self.lidar_block_max_distance = float(self.get_parameter("lidar_block_max_distance").value)
         self.lidar_cluster_eps = float(self.get_parameter("lidar_cluster_eps").value)
@@ -460,8 +675,36 @@ class TeamDynamicAStarPlannerNode(Node):
         self.route_config_file = str(self.get_parameter("route_config_file").value)
         self.use_static_map = bool(self.get_parameter("use_static_map").value)
         self.static_map_file = str(self.get_parameter("static_map_file").value)
+        self.terrain_cost_file = str(self.get_parameter("terrain_cost_file").value)
+        self.terrain_weight = float(self.get_parameter("terrain_weight").value)
         self.use_lidar_cluster_bboxes = bool(self.get_parameter("use_lidar_cluster_bboxes").value)
         self.lidar_cluster_bbox_margin = float(self.get_parameter("lidar_cluster_bbox_margin").value)
+        self.static_obstacle_inflate = float(self.get_parameter("static_obstacle_inflate").value)
+        self.use_discovered_objects_for_astar = bool(self.get_parameter("use_discovered_objects_for_astar").value)
+        self.discovered_objects_topic = str(self.get_parameter("discovered_objects_topic").value)
+        self.discovered_confirmed_only = bool(self.get_parameter("discovered_confirmed_only").value)
+        self.discovered_min_observations = int(self.get_parameter("discovered_min_observations").value)
+        self.discovered_default_radius = float(self.get_parameter("discovered_default_radius").value)
+        self.discovered_obstacle_inflate = float(self.get_parameter("discovered_obstacle_inflate").value)
+        ignored_disc_raw = str(self.get_parameter("ignored_discovered_classes_for_astar").value)
+        self.ignored_discovered_classes_for_astar = {c.strip().lower() for c in ignored_disc_raw.split(",") if c.strip()}
+        self.enable_lidar_cluster_memory = bool(self.get_parameter("enable_lidar_cluster_memory").value)
+        self.lidar_cluster_memory_ttl_sec = float(self.get_parameter("lidar_cluster_memory_ttl_sec").value)
+        self.lidar_cluster_memory_merge_distance = float(self.get_parameter("lidar_cluster_memory_merge_distance").value)
+        self.lidar_cluster_memory_inflate = float(self.get_parameter("lidar_cluster_memory_inflate").value)
+        self.lidar_cluster_memory_max_count = int(self.get_parameter("lidar_cluster_memory_max_count").value)
+        self.use_lidar_cluster_memory_for_path_block = bool(self.get_parameter("use_lidar_cluster_memory_for_path_block").value)
+        self.route_index_never_decrease = bool(self.get_parameter("route_index_never_decrease").value)
+        self.dynamic_replan_keep_route_index = bool(self.get_parameter("dynamic_replan_keep_route_index").value)
+        self.route_commit_lock_sec = float(self.get_parameter("route_commit_lock_sec").value)
+        self.use_lidar_memory_for_path_block = bool(self.get_parameter("use_lidar_memory_for_path_block").value)
+        self.use_discovered_objects_for_path_block = bool(self.get_parameter("use_discovered_objects_for_path_block").value)
+        self.emergency_cluster_replan_enabled = bool(self.get_parameter("emergency_cluster_replan_enabled").value)
+        self.emergency_replan_cooldown_sec = float(self.get_parameter("emergency_replan_cooldown_sec").value)
+        self.emergency_replan_front_distance = float(self.get_parameter("emergency_replan_front_distance").value)
+        self.emergency_replan_min_distance = float(self.get_parameter("emergency_replan_min_distance").value)
+        self.emergency_replan_margin = float(self.get_parameter("emergency_replan_margin").value)
+        self.emergency_cluster_blocked = False
 
         # 정적 맵(나무 등)을 1회 로드해 보관. use_gt_obstacles/obstacles_cb/replan과 독립.
         # 전역 A* 코스트맵에 넣어 나무 회피 + clearance 중앙정렬을 가능하게 한다.
@@ -473,6 +716,10 @@ class TeamDynamicAStarPlannerNode(Node):
             self.get_logger().info(
                 f"static map obstacles loaded: {len(self.static_obstacles)} from {sm_path}")
 
+        # 지형 거칠기 비용 격자(게이트형, 시나리오2 전용). 빈 경로면 None → 정찰 동작 불변.
+        # {(ix, iy): roughness} — A* 1m 격자 인덱스 기준. scenario2_terrain.json에서 로드.
+        self.terrain_grid: Optional[Dict[Tuple[int, int], float]] = self._load_terrain_grid(self.terrain_cost_file)
+
         self.current_pos: Optional[Tuple[float, float]] = None
         self.goal_pos: Optional[Tuple[float, float]] = None
         if bool(self.get_parameter("default_goal_enabled").value):
@@ -481,13 +728,26 @@ class TeamDynamicAStarPlannerNode(Node):
         self.lidar_obstacles = LidarObstacleMemory()
         self.latest_cluster_bboxes: List[Dict[str, float]] = []
         self.latest_cluster_count = 0
+        self.lidar_cluster_memory: List[Dict[str, float]] = []
+        self.lidar_cluster_memory_last_prune_wall = -1e9
+        self.discovered_bboxes: List[Dict[str, float]] = []
+        self.discovered_count = 0
+        self.discovered_confirmed_count = 0
+        self.path_block_source = "none"
         self.route: List[Tuple[float, float]] = []
         self.route_version = 0
         self.route_index = 0
+        # route_index는 재계획 중에도 진행 상태로 취급한다. dynamic replan 후 일정 시간 동안
+        # 이전보다 뒤쪽 route index를 보지 않게 해 lookahead가 반대방향으로 튀는 것을 막는다.
+        self.route_index_floor = 0
+        self.route_commit_until_wall = -1e9
         # planner 속도 제한엔 monotonic wall time을 쓴다. /clock이 비활성이면 ROS time이 0에 머물 수 있다.
         self.last_plan_wall = -1e9
         self.last_plan_attempt_wall = -1e9
         self.last_dynamic_replan_wall = -1e9
+        self.last_dynamic_replan_pos: Optional[Tuple[float, float]] = None
+        self.dynamic_replan_count = 0
+        self.dynamic_replan_guard_reason = "none"
         self.last_path_publish_wall = -1e9
         self.path_block_hit_count = 0
         self.last_replan_reason = "not_planned"
@@ -509,6 +769,8 @@ class TeamDynamicAStarPlannerNode(Node):
         self.create_subscription(String, TOPIC_MAP_OBSTACLES, self.obstacles_cb, 10)
         self.create_subscription(PointCloud2, TOPIC_LIDAR_DETECTED_MAP, self.lidar_cb, 10)
         self.create_subscription(String, TOPIC_LIDAR_CLUSTERS, self.lidar_clusters_cb, 10)
+        if self.use_discovered_objects_for_astar:
+            self.create_subscription(String, self.discovered_objects_topic, self.discovered_cb, 10)
         self.create_timer(1.0 / max(1.0, PLANNER_HZ), self.timer_cb)
         # goal을 2Hz로 주기 발행한다(구독자가 volatile QoS라 latch가 통하지 않으므로 주기 발행).
         self.create_timer(0.5, self.publish_goal)
@@ -520,7 +782,11 @@ class TeamDynamicAStarPlannerNode(Node):
             f"use_gt_obstacles={self.use_gt_obstacles}, dynamic_replan={self.enable_dynamic_replan}, "
             f"goal={self.goal_pos}, resolution={self.resolution}, inflate={self.inflate}, "
             f"route_waypoints={self.use_route_waypoints}:{self.route_map_name}/{self.route_id}, "
-            f"cluster_bboxes={self.use_lidar_cluster_bboxes}"
+            f"cluster_bboxes={self.use_lidar_cluster_bboxes}, cluster_memory={self.enable_lidar_cluster_memory}, "
+            f"static_inflate={self.static_obstacle_inflate}, "
+            f"discovered_astar={self.use_discovered_objects_for_astar}, "
+            f"route_lock={self.route_commit_lock_sec}s, route_index_never_decrease={self.route_index_never_decrease}, "
+            f"lidar_memory_block_trigger={self.use_lidar_memory_for_path_block}"
         )
 
     def wall_time(self) -> float:
@@ -534,6 +800,12 @@ class TeamDynamicAStarPlannerNode(Node):
                 self.route = []
                 self.plan_request_pending = True
                 self.plan_request_reason = "teleport_detected"
+                self.dynamic_replan_count = 0
+                self.last_dynamic_replan_pos = None
+                self.dynamic_replan_guard_reason = "teleport_reset"
+                self.route_index = 0
+                self.route_index_floor = 0
+                self.route_commit_until_wall = -1e9
         self.current_pos = new_pos
 
     def goal_pose_cb(self, msg: PoseStamped) -> None:
@@ -548,6 +820,12 @@ class TeamDynamicAStarPlannerNode(Node):
             self.plan_request_reason = "goal_updated"
             self.last_replan_reason = "goal_updated"
             self.path_block_hit_count = 0
+            self.dynamic_replan_count = 0
+            self.last_dynamic_replan_pos = None
+            self.dynamic_replan_guard_reason = "goal_reset"
+            self.route_index = 0
+            self.route_index_floor = 0
+            self.route_commit_until_wall = -1e9
 
     def obstacles_cb(self, msg: String) -> None:
         try:
@@ -625,6 +903,10 @@ class TeamDynamicAStarPlannerNode(Node):
                         continue
             self.latest_cluster_bboxes = bboxes
             self.latest_cluster_count = len(clusters) if isinstance(clusters, list) else 0
+            if self.enable_lidar_cluster_memory and bboxes:
+                self.remember_lidar_cluster_bboxes(bboxes)
+            else:
+                self.prune_lidar_cluster_memory(self.wall_time())
             if self.use_lidar_cluster_bboxes:
                 # 동적 재탐색이 꺼져 있어도 클러스터에서 유도한 A* bbox를 발행한다.
                 # RViz/디버그 노드가 DBSCAN 출력이 planner bbox 입력에 연결됐는지 확인할 수 있도록.
@@ -632,10 +914,114 @@ class TeamDynamicAStarPlannerNode(Node):
         except Exception as exc:
             self.get_logger().warn(f"failed to parse lidar clusters: {exc}")
 
+    def discovered_cb(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+            self.discovered_count = int(payload.get("count", 0)) if isinstance(payload, dict) else 0
+            self.discovered_confirmed_count = int(payload.get("confirmed_count", 0)) if isinstance(payload, dict) else 0
+            self.discovered_bboxes = parse_discovered_objects_payload(
+                payload,
+                confirmed_only=self.discovered_confirmed_only,
+                min_observations=self.discovered_min_observations,
+                ignored_classes=self.ignored_discovered_classes_for_astar,
+                default_radius=self.discovered_default_radius,
+            )
+            for bbox in self.discovered_bboxes:
+                bbox["_inflate_override"] = self.discovered_obstacle_inflate
+        except Exception as exc:
+            self.get_logger().warn(f"failed to parse discovered objects for A*: {exc}")
+
+    def build_discovered_bboxes(self) -> List[Dict[str, float]]:
+        if not self.use_discovered_objects_for_astar:
+            return []
+        if self.discovered_obstacle_inflate <= 0.0:
+            return list(self.discovered_bboxes)
+        # discovered bbox 자체는 class별 물리 반경이고, A*에는 별도 inflate를 적용한다.
+        return list(self.discovered_bboxes)
+
+    def prune_lidar_cluster_memory(self, now: float) -> None:
+        if not self.enable_lidar_cluster_memory:
+            self.lidar_cluster_memory = []
+            return
+        ttl = max(0.0, self.lidar_cluster_memory_ttl_sec)
+        if ttl <= 0.0:
+            self.lidar_cluster_memory = []
+            return
+        self.lidar_cluster_memory = [
+            m for m in self.lidar_cluster_memory
+            if (now - float(m.get("last_seen_wall", now))) <= ttl
+        ]
+        max_count = max(0, self.lidar_cluster_memory_max_count)
+        if max_count > 0 and len(self.lidar_cluster_memory) > max_count:
+            self.lidar_cluster_memory.sort(key=lambda m: float(m.get("last_seen_wall", 0.0)), reverse=True)
+            self.lidar_cluster_memory = self.lidar_cluster_memory[:max_count]
+        self.lidar_cluster_memory_last_prune_wall = now
+
+    def remember_lidar_cluster_bboxes(self, bboxes: Sequence[Dict[str, float]]) -> None:
+        if not self.enable_lidar_cluster_memory:
+            return
+        now = self.wall_time()
+        self.prune_lidar_cluster_memory(now)
+        merge_dist = max(0.0, self.lidar_cluster_memory_merge_distance)
+        for bbox in bboxes:
+            try:
+                # 유효 bbox만 기억한다. 너무 작은/잘못된 bbox는 버린다.
+                if float(bbox.get("x_max", 0.0)) < float(bbox.get("x_min", 0.0)):
+                    continue
+                if float(bbox.get("z_max", 0.0)) < float(bbox.get("z_min", 0.0)):
+                    continue
+            except Exception:
+                continue
+            best_i = -1
+            best_d = 1e9
+            for i, mem in enumerate(self.lidar_cluster_memory):
+                d = bbox_center_distance(bbox, mem)
+                if d < best_d:
+                    best_d = d
+                    best_i = i
+            if best_i >= 0 and best_d <= merge_dist:
+                old = self.lidar_cluster_memory[best_i]
+                hits = int(old.get("hits", 1)) + 1
+                updated = bbox_copy_as_memory(bbox, now, hits=hits)
+                updated["first_seen_wall"] = float(old.get("first_seen_wall", now))
+                updated["memory_id"] = old.get("memory_id", f"mem_{int(now * 1000)}_{best_i}")
+                updated["_inflate_override"] = self.lidar_cluster_memory_inflate
+                self.lidar_cluster_memory[best_i] = updated
+            else:
+                mem = bbox_copy_as_memory(bbox, now, hits=1)
+                mem["memory_id"] = f"mem_{int(now * 1000)}_{len(self.lidar_cluster_memory)}"
+                mem["_inflate_override"] = self.lidar_cluster_memory_inflate
+                self.lidar_cluster_memory.append(mem)
+        self.prune_lidar_cluster_memory(now)
+
+    def build_lidar_cluster_memory_bboxes(self, current_bboxes: Optional[Sequence[Dict[str, float]]] = None) -> List[Dict[str, float]]:
+        if not self.enable_lidar_cluster_memory:
+            return []
+        now = self.wall_time()
+        self.prune_lidar_cluster_memory(now)
+        current_bboxes = current_bboxes or []
+        out: List[Dict[str, float]] = []
+        # 현재 프레임 cluster와 거의 같은 memory는 중복 costmap을 만들지 않도록 제외한다.
+        # cluster가 시야에서 사라진 경우에만 memory layer가 A*에 남는다.
+        dedupe_dist = max(0.0, self.lidar_cluster_memory_merge_distance)
+        for mem in self.lidar_cluster_memory:
+            if current_bboxes and any(bbox_center_distance(mem, cur) <= dedupe_dist for cur in current_bboxes):
+                continue
+            copied = dict(mem)
+            copied["source"] = "lidar_cluster_memory"
+            copied["age_sec"] = max(0.0, now - float(copied.get("last_seen_wall", now)))
+            copied["_inflate_override"] = self.lidar_cluster_memory_inflate
+            out.append(copied)
+        return out
+
     def build_lidar_bboxes(self) -> List[Dict[str, float]]:
+        current: List[Dict[str, float]] = []
         if self.use_lidar_cluster_bboxes and self.latest_cluster_bboxes:
-            return list(self.latest_cluster_bboxes)
-        return self.lidar_obstacles.build_bboxes(self.lidar_cluster_eps, self.lidar_cluster_min_samples)
+            current = list(self.latest_cluster_bboxes)
+        else:
+            current = self.lidar_obstacles.build_bboxes(self.lidar_cluster_eps, self.lidar_cluster_min_samples)
+        memory = self.build_lidar_cluster_memory_bboxes(current)
+        return list(current) + memory
 
     def maybe_plan(self, reason: str) -> None:
         self._request_plan_async(reason)
@@ -655,16 +1041,59 @@ class TeamDynamicAStarPlannerNode(Node):
         obstacles: List[Dict[str, float]] = []
         if self.use_gt_obstacles:
             obstacles.extend(deepcopy(self.gt_obstacles))
+
+        # Persistent discovered objects는 한 번 확인되면 현재 LiDAR 시야 밖이어도 A* hard obstacle로 유지한다.
+        discovered_bboxes: List[Dict[str, float]] = deepcopy(self.build_discovered_bboxes())
+        if discovered_bboxes:
+            # add_obstacles는 inflate를 일괄 적용하므로, discovered bbox는 class radius만 들고 있고
+            # planning worker에서 discovered_obstacle_inflate를 반영해 확장한다.
+            pass
+
         lidar_bboxes: List[Dict[str, float]] = []
-        if self.enable_dynamic_replan and self.lidar_obstacles.history_count > 0:
+        if self.enable_dynamic_replan and (self.lidar_obstacles.history_count > 0 or self.latest_cluster_bboxes):
             lidar_bboxes = deepcopy(self.build_lidar_bboxes())
-            obstacles.extend(lidar_bboxes)
+
+        # dynamic obstacles는 source별 inflation이 달라서 worker에서 합성한다.
+        obstacles.extend(lidar_bboxes)
+        obstacles.extend(discovered_bboxes)
 
         threading.Thread(
             target=self._plan_worker,
-            args=(reason, start_pos, goal_pos, obstacles, lidar_bboxes),
+            args=(reason, start_pos, goal_pos, obstacles, lidar_bboxes, discovered_bboxes),
             daemon=True
         ).start()
+
+    def _load_terrain_grid(self, path: str) -> Optional[Dict[Tuple[int, int], float]]:
+        """scenario2_terrain.json(셀별 roughness 격자)을 A* 1m 격자 인덱스 dict로 로드한다.
+
+        반환 {(ix, iy): roughness(dz/m)}. 빈 경로/없음/파싱실패면 None(게이트 OFF) → 정찰 동작 불변.
+        cells의 cell_size는 1.0(생성기가 A* 격자에 맞춰 생성)이라 ix/iy를 그대로 격자 인덱스로 쓴다.
+        """
+        if not path:
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as exc:
+            self.get_logger().warn(f"terrain cost file load failed (게이트 OFF): {path} ({exc})")
+            return None
+        cells = data.get("cells", []) if isinstance(data, dict) else []
+        grid: Dict[Tuple[int, int], float] = {}
+        for c in cells:
+            try:
+                rough = float(c.get("roughness", 0.0))
+                if rough <= 0.0:
+                    continue
+                grid[(int(c["ix"]), int(c["iy"]))] = rough
+            except Exception:
+                continue
+        cell_size = data.get("cell_size", 1.0) if isinstance(data, dict) else 1.0
+        if abs(float(cell_size) - 1.0) > 1e-6:
+            self.get_logger().warn(
+                f"terrain cell_size={cell_size}≠1.0 — A* 격자와 정렬이 안 맞을 수 있음(생성기 cell_size=1.0 권장)")
+        self.get_logger().info(
+            f"terrain cost grid loaded: {len(grid)} cells (weight={self.terrain_weight}) from {path}")
+        return grid or None
 
     def _plan_worker(
         self,
@@ -672,7 +1101,8 @@ class TeamDynamicAStarPlannerNode(Node):
         start_pos: Tuple[float, float],
         goal_pos: Tuple[float, float],
         obstacles: List[Dict[str, float]],
-        lidar_bboxes: List[Dict[str, float]]
+        lidar_bboxes: List[Dict[str, float]],
+        discovered_bboxes: List[Dict[str, float]]
     ) -> None:
         try:
             route: List[Tuple[float, float]] = []
@@ -688,8 +1118,11 @@ class TeamDynamicAStarPlannerNode(Node):
                         obstacles,
                         static_obstacles=self.static_obstacles,
                         inflate=self.inflate,
+                        static_inflate=self.static_obstacle_inflate,
                         clearance_weight=self.route_clearance_weight,
                         side=self.route_side,
+                        terrain_grid=self.terrain_grid,
+                        terrain_weight=self.terrain_weight,
                     )
                     route_mode = f"route_waypoints:{self.route_map_name}/{self.route_id}/{self.route_side}"
                 except Exception as exc:
@@ -707,17 +1140,33 @@ class TeamDynamicAStarPlannerNode(Node):
                     use_smoothing=self.use_path_smoothing,
                     max_expansions=self.max_expansions,
                     static_obstacles=self.static_obstacles,
+                    static_inflate=self.static_obstacle_inflate,
                 )
                 route_mode = "direct_astar"
 
             if route:
                 with self._planning_lock:
+                    prev_route_index = int(self.route_index)
                     self.route = route
-                    self.route_index = 0
+                    now_wall = self.wall_time()
+                    # 일반적으로 새 경로는 새 좌표계(route point list)를 갖지만, dynamic replan에서는
+                    # 현재 체크포인트 진행 상태를 뒤로 되돌리면 lookahead가 반대방향으로 튄다.
+                    # 따라서 이전 route_index를 floor로 보존하고 publish_lookahead에서 일정 시간 강제한다.
+                    if reason == "lidar_path_blocked" and self.dynamic_replan_keep_route_index:
+                        self.route_index_floor = min(max(0, prev_route_index), max(0, len(route) - 1))
+                        self.route_index = self.route_index_floor
+                        self.route_commit_until_wall = now_wall + max(0.0, self.route_commit_lock_sec)
+                    else:
+                        self.route_index = 0
+                        self.route_index_floor = 0
+                        self.route_commit_until_wall = -1e9
                     self.route_version += 1
-                    self.last_plan_wall = self.wall_time()
+                    self.last_plan_wall = now_wall
                     if reason == "lidar_path_blocked":
                         self.last_dynamic_replan_wall = self.last_plan_wall
+                        self.last_dynamic_replan_pos = start_pos
+                        self.dynamic_replan_count += 1
+                        self.dynamic_replan_guard_reason = "accepted"
                     self.plan_request_pending = False
                     self.path_block_hit_count = 0
                     self.last_path_publish_wall = -1e9
@@ -727,7 +1176,7 @@ class TeamDynamicAStarPlannerNode(Node):
                 self.publish_path(force=True)
                 self.get_logger().info(
                     f"A* path updated: reason={reason}, mode={route_mode}, points={len(route)}, "
-                    f"obstacles={len(obstacles)}, lidar_bboxes={len(lidar_bboxes)}"
+                    f"obstacles={len(obstacles)}, lidar_bboxes={len(lidar_bboxes)}, discovered_bboxes={len(discovered_bboxes)}"
                 )
             else:
                 with self._planning_lock:
@@ -790,12 +1239,27 @@ class TeamDynamicAStarPlannerNode(Node):
     def publish_lookahead(self) -> Optional[Tuple[float, float]]:
         if self.current_pos is None or not self.route:
             return None
-        if self.goal_pos is not None and get_distance(self.current_pos, self.goal_pos) < self.goal_tolerance:
+        at_goal = (self.goal_pos is not None
+                   and get_distance(self.current_pos, self.goal_pos) < self.goal_tolerance)
+        if at_goal:
             target = self.goal_pos
             idx = len(self.route) - 1
         else:
             target, idx = find_lookahead_along_path(self.current_pos, self.route, self.lookahead_distance)
+        wall_now = self.wall_time()
+        # route_index는 진행 상태다. replan 직후 lock 시간뿐 아니라 일반 주행 중에도
+        # lookahead projection이 가까운 이전 segment를 다시 잡으면 target이 뒤로 튀고
+        # controller가 제자리 U-turn을 반복한다. 따라서 명시 reset/replan 전까지는 감소를 막는다.
+        if self.route_index_never_decrease and self.route:
+            prev_floor = min(max(0, int(self.route_index)), len(self.route) - 1)
+            commit_floor = min(max(0, int(self.route_index_floor)), len(self.route) - 1)
+            floor = max(prev_floor, commit_floor)
+            if idx < floor:
+                idx = floor
+                target = self.route[floor]
         self.route_index = idx
+        if self.route_index_never_decrease:
+            self.route_index_floor = max(int(self.route_index_floor), int(self.route_index))
         msg = PoseStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = MAP_FRAME
@@ -822,8 +1286,49 @@ class TeamDynamicAStarPlannerNode(Node):
             "lidar_history_points": self.lidar_obstacles.history_count,
             "lidar_cluster_count": self.latest_cluster_count,
             "lidar_cluster_bbox_count": len(self.latest_cluster_bboxes),
+            "lidar_cluster_memory_count": len(self.lidar_cluster_memory),
+            "lidar_cluster_memory_astar_bbox_count": len(self.build_lidar_cluster_memory_bboxes(self.latest_cluster_bboxes)),
+            "enable_lidar_cluster_memory": self.enable_lidar_cluster_memory,
+            "lidar_cluster_memory_ttl_sec": self.lidar_cluster_memory_ttl_sec,
+            "lidar_cluster_memory_merge_distance": self.lidar_cluster_memory_merge_distance,
+            "lidar_cluster_memory_inflate": self.lidar_cluster_memory_inflate,
+            "lidar_cluster_memory_max_count": self.lidar_cluster_memory_max_count,
+            "use_lidar_cluster_memory_for_path_block": self.use_lidar_cluster_memory_for_path_block,
             "use_lidar_cluster_bboxes": self.use_lidar_cluster_bboxes,
+            "static_obstacle_count": len(self.static_obstacles),
+            "static_obstacle_inflate": self.static_obstacle_inflate,
+            "discovered_object_count": self.discovered_count,
+            "discovered_confirmed_count": self.discovered_confirmed_count,
+            "discovered_astar_bbox_count": len(self.discovered_bboxes),
+            "use_discovered_objects_for_astar": self.use_discovered_objects_for_astar,
+            "discovered_confirmed_only": self.discovered_confirmed_only,
+            "discovered_min_observations": self.discovered_min_observations,
+            "path_block_source": self.path_block_source,
+            "emergency_cluster_blocked": self.emergency_cluster_blocked,
+            "emergency_cluster_replan_enabled": self.emergency_cluster_replan_enabled,
+            "emergency_replan_cooldown_sec": self.emergency_replan_cooldown_sec,
+            "emergency_replan_front_distance": self.emergency_replan_front_distance,
+            "emergency_replan_min_distance": self.emergency_replan_min_distance,
+            "emergency_replan_margin": self.emergency_replan_margin,
+            "path_block_uses_lidar_memory": self.use_lidar_memory_for_path_block,
+            "path_block_uses_lidar_cluster_bboxes": self.use_lidar_cluster_bboxes,
+            "path_block_uses_discovered_objects": self.use_discovered_objects_for_path_block,
+            "route_index_never_decrease": self.route_index_never_decrease,
+            "dynamic_replan_keep_route_index": self.dynamic_replan_keep_route_index,
+            "route_commit_lock_sec": self.route_commit_lock_sec,
+            "route_index_floor": self.route_index_floor,
+            "route_commit_remaining_sec": max(0.0, self.route_commit_until_wall - self.wall_time()),
             "dynamic_replan": self.enable_dynamic_replan,
+            "dynamic_replan_count": self.dynamic_replan_count,
+            "dynamic_replan_max_count": self.dynamic_replan_max_count,
+            "dynamic_replan_guard_reason": self.dynamic_replan_guard_reason,
+            "last_dynamic_replan_pos": {"x": self.last_dynamic_replan_pos[0], "y": self.last_dynamic_replan_pos[1]} if self.last_dynamic_replan_pos else None,
+            "path_block_required_hits": self.path_block_required_hits,
+            "path_block_hit_count": self.path_block_hit_count,
+            "dynamic_replan_min_progress_m": self.dynamic_replan_min_progress_m,
+            "dynamic_replan_progress_guard_sec": self.dynamic_replan_progress_guard_sec,
+            "dynamic_replan_cooldown_sec": self.dynamic_replan_cooldown_sec,
+            "dynamic_replan_cooldown_remaining_sec": max(0.0, self.dynamic_replan_cooldown_sec - (self.wall_time() - self.last_dynamic_replan_wall)),
             "use_route_waypoints": self.use_route_waypoints,
             "route_map_name": self.route_map_name,
             "route_id": self.route_id,
@@ -855,22 +1360,120 @@ class TeamDynamicAStarPlannerNode(Node):
         #    전역경로가 끊임없이 재생성되는 것을 막는다.
         elif self.route and self.enable_dynamic_replan:
             cooldown_ok = (wall_now - self.last_dynamic_replan_wall) >= self.dynamic_replan_cooldown_sec
-            blocked_now = self.lidar_obstacles.is_current_path_blocked(
+            # 빠른 재계획 트리거는 "장애물이 보였는가"가 아니라
+            # "현재 A* 경로 corridor를 실제로 막는가"를 기준으로 한다.
+            # detected_points_map memory뿐 아니라 최신 LiDAR cluster bbox도 직접 검사한다.
+            if self.use_lidar_memory_for_path_block:
+                lidar_memory_blocked = self.lidar_obstacles.is_current_path_blocked(
+                    self.current_pos,
+                    self.route,
+                    self.route_index,
+                    self.lidar_block_min_distance,
+                    self.lidar_block_max_distance,
+                    self.path_block_margin,
+                )
+            else:
+                lidar_memory_blocked = False
+            cluster_blocked = is_path_blocked_by_bboxes(
                 self.current_pos,
                 self.route,
                 self.route_index,
+                self.latest_cluster_bboxes if self.use_lidar_cluster_bboxes else [],
                 self.lidar_block_min_distance,
                 self.lidar_block_max_distance,
                 self.path_block_margin,
             )
+            # Emergency path block: 현재 보이는 cluster가 가까운 전방 corridor를 막으면
+            # 2-hit/5초 일반 replan보다 빠르게 A*를 다시 만든다.
+            # 이 검사는 memory/discovered가 아니라 최신 cluster만 사용하므로 경로 흔들림을 크게 늘리지 않는다.
+            emergency_cluster_blocked = False
+            if self.emergency_cluster_replan_enabled and self.use_lidar_cluster_bboxes:
+                emergency_cluster_blocked = is_path_blocked_by_bboxes(
+                    self.current_pos,
+                    self.route,
+                    self.route_index,
+                    self.latest_cluster_bboxes,
+                    self.emergency_replan_min_distance,
+                    self.emergency_replan_front_distance,
+                    self.emergency_replan_margin,
+                )
+            self.emergency_cluster_blocked = bool(emergency_cluster_blocked)
+            cluster_memory_bboxes = self.build_lidar_cluster_memory_bboxes(self.latest_cluster_bboxes)
+            cluster_memory_blocked = is_path_blocked_by_bboxes(
+                self.current_pos,
+                self.route,
+                self.route_index,
+                cluster_memory_bboxes if self.use_lidar_cluster_memory_for_path_block else [],
+                self.lidar_block_min_distance,
+                self.lidar_block_max_distance,
+                self.path_block_margin,
+            )
+            discovered_blocked = is_path_blocked_by_bboxes(
+                self.current_pos,
+                self.route,
+                self.route_index,
+                self.discovered_bboxes if (self.use_discovered_objects_for_astar and self.use_discovered_objects_for_path_block) else [],
+                self.lidar_block_min_distance,
+                self.lidar_block_max_distance,
+                self.path_block_margin,
+            )
+            lidar_blocked = bool(lidar_memory_blocked or cluster_blocked or cluster_memory_blocked or emergency_cluster_blocked)
+            blocked_now = bool(lidar_blocked or discovered_blocked)
+            sources = []
+            if lidar_memory_blocked:
+                sources.append("lidar_memory")
+            if emergency_cluster_blocked:
+                sources.append("emergency_lidar_cluster")
+            elif cluster_blocked:
+                sources.append("lidar_cluster")
+            if cluster_memory_blocked:
+                sources.append("lidar_cluster_memory")
+            if discovered_blocked:
+                sources.append("discovered")
+            self.path_block_source = "+".join(sources) if sources else "none"
+
             if blocked_now:
                 self.path_block_hit_count += 1
             else:
                 self.path_block_hit_count = 0
+                # 이전 tick의 cooldown/progress 메시지가 status에 계속 남지 않도록 정리한다.
+                self.dynamic_replan_guard_reason = "none"
 
-            if cooldown_ok and self.path_block_hit_count >= self.path_block_required_hits:
+            count_ok = self.dynamic_replan_max_count <= 0 or self.dynamic_replan_count < self.dynamic_replan_max_count
+            progress_ok = True
+            moved_since_last_replan = None
+            if self.last_dynamic_replan_pos is not None and self.current_pos is not None:
+                moved_since_last_replan = get_distance(self.current_pos, self.last_dynamic_replan_pos)
+                elapsed_since_last = wall_now - self.last_dynamic_replan_wall
+                if (
+                    elapsed_since_last < self.dynamic_replan_progress_guard_sec
+                    and moved_since_last_replan < self.dynamic_replan_min_progress_m
+                ):
+                    progress_ok = False
+                    self.dynamic_replan_guard_reason = (
+                        f"progress_guard moved={moved_since_last_replan:.2f}m "
+                        f"elapsed={elapsed_since_last:.1f}s"
+                    )
+
+            emergency_cooldown_ok = (wall_now - self.last_dynamic_replan_wall) >= max(0.0, self.emergency_replan_cooldown_sec)
+            if emergency_cluster_blocked and count_ok and progress_ok and emergency_cooldown_ok:
+                need_plan = True
+                reason = "emergency_lidar_cluster_path_blocked"
+                self.dynamic_replan_guard_reason = "none"
+            elif cooldown_ok and count_ok and progress_ok and self.path_block_hit_count >= self.path_block_required_hits:
                 need_plan = True
                 reason = "lidar_path_blocked"
+                self.dynamic_replan_guard_reason = "none"
+            elif emergency_cluster_blocked and not emergency_cooldown_ok:
+                self.dynamic_replan_guard_reason = (
+                    f"emergency cooldown remaining={max(0.0, self.emergency_replan_cooldown_sec - (wall_now - self.last_dynamic_replan_wall)):.2f}s"
+                )
+            elif blocked_now and not cooldown_ok:
+                self.dynamic_replan_guard_reason = (
+                    f"cooldown remaining={max(0.0, self.dynamic_replan_cooldown_sec - (wall_now - self.last_dynamic_replan_wall)):.2f}s"
+                )
+            elif not count_ok:
+                self.dynamic_replan_guard_reason = "max_dynamic_replans_reached"
 
         # 3) 선택적 저빈도 루트 갱신. 이것도 기본은 비활성이다.
         if (

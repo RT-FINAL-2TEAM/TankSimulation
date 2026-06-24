@@ -104,6 +104,32 @@ categories:
       sigma_m: 10.0
       max_value: 1.0
 
+  # 정찰 발견객체(detected_car_*)는 metadata.class_name=car로 이 범주에 매칭된다.
+  car:
+    prefixes: ["Car"]
+    marker_type: CUBE
+    scale: [4.0, 2.0, 1.6]
+    color_recon: [1.0, 0.40, 0.80, 0.65]   # 핑크 — 발견 SAVED car 마커와 일관
+    color_mission: [1.0, 0.30, 0.75, 0.90]
+    impassable: true
+    inflation_radius_m: 3.0
+    risk:
+      type: constant
+      value: 0.25
+
+  # 정찰 발견객체(detected_tent_*)는 metadata.class_name=tent로 이 범주에 매칭된다.
+  tent:
+    prefixes: ["Tent"]
+    marker_type: CUBE
+    scale: [3.0, 3.0, 2.5]
+    color_recon: [1.0, 1.0, 0.25, 0.60]   # 노랑
+    color_mission: [1.0, 1.0, 0.15, 0.85]
+    impassable: true
+    inflation_radius_m: 2.5
+    risk:
+      type: constant
+      value: 0.20
+
   unknown:
     prefixes: []
     marker_type: CUBE

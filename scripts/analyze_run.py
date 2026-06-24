@@ -32,6 +32,8 @@ from matplotlib import font_manager
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(PROJECT_ROOT, "recon_reports")
 DEFAULT_MAP = os.path.join(PROJECT_ROOT, "src", "rviz_visualization", "map", "finalmap.map")
+# GT 정답맵(객체 포함 원본; finalmap은 청소돼 객체 없음) — 경로별 '발견했어야 할 객체' 탐지율 산정용.
+GT_OBJECTS_MAP = os.path.join(PROJECT_ROOT, "src", "rviz_visualization", "map", "final_v3.map")
 
 for _cjk in ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
              "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"):
@@ -117,6 +119,195 @@ def curvature_at(path, i):
         return 0.0
     c = max(-1.0, min(1.0, (a[0] * b[0] + a[1] * b[1]) / (na * nb)))
     return math.degrees(math.acos(c)) / max(1.0, (na + nb) / 2.0)
+
+
+# --------------------------------------------------------------------------- #
+# 정찰 검증 (weave / stop-to-confirm / 인식 / 충돌)
+# --------------------------------------------------------------------------- #
+def signed_cross_track(px, pz, path):
+    """경로 대비 부호있는 횡거리(좌 +, 우 −). weave(좌우 흔들림) 진동 측정용."""
+    if not path or len(path) < 2:
+        return None
+    i = nearest_seg_index(px, pz, path)
+    ax, az = path[i]
+    bx, bz = path[i + 1]
+    dx, dz = bx - ax, bz - az
+    L = math.hypot(dx, dz)
+    if L < 1e-6:
+        return None
+    nx, nz = -dz / L, dx / L            # 좌측 단위 법선
+    return (px - ax) * nx + (pz - az) * nz
+
+
+def load_route(input_dir, rid):
+    """route_{rid}.json을 찾는다. 없으면 comparison.json의 route_{rid}로 폴백
+    (시나리오2 run이 route_A.json을 지워도 A 분석 가능). analysis/ 하위도 탐색."""
+    for sub in (".", "analysis"):
+        p = os.path.join(input_dir, sub, f"route_{rid}.json")
+        if os.path.exists(p):
+            return json.load(open(p, encoding="utf-8")), p
+    for sub in (".", "analysis"):
+        cp = os.path.join(input_dir, sub, "comparison.json")
+        if os.path.exists(cp):
+            comp = json.load(open(cp, encoding="utf-8"))
+            if isinstance(comp, dict) and comp.get(f"route_{rid}"):
+                return comp[f"route_{rid}"], f"{cp}#route_{rid}"
+    return None, None
+
+
+def find_discovered_map(input_dir, rid):
+    """발견객체맵 위치(폴더 재구성 전/후 모두 대응)."""
+    for sub in ("handoff", "recon_map", "analysis", "."):
+        p = os.path.join(input_dir, sub, f"discovered_objects_route_{rid}.map")
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def recon_recognition(input_dir, rid, yolo_counts):
+    """확정 발견객체(센서퓨전 확정) class별 수 + YOLO raw 프레임수."""
+    confirmed = {}
+    dp = find_discovered_map(input_dir, rid)
+    if dp:
+        try:
+            for o in (json.load(open(dp, encoding="utf-8")).get("obstacles", []) or []):
+                meta = o.get("metadata", {}) or {}
+                if meta.get("is_confirmed"):
+                    c = str(meta.get("class_name", "?"))
+                    confirmed[c] = confirmed.get(c, 0) + 1
+        except Exception:
+            pass
+    return {"confirmed_by_class": confirmed, "confirmed_total": sum(confirmed.values()),
+            "yolo_raw": yolo_counts or {}}
+
+
+def gt_detection_rate(route_data, input_dir, rid, gt_map_path, near_m=30.0, match_m=8.0):
+    """GT(final_v3.map) 실제 객체 대비 경로별 탐지율 — 'A가 경로 옆 객체를 놓쳤나'에 직답.
+    경로 궤적 ≤near_m 이내 GT 객체(=발견했어야 할 것) 중 확정(센서퓨전)으로 잡힌 비율 + 놓친 목록."""
+    try:
+        gt = json.load(open(gt_map_path, encoding="utf-8"))
+    except Exception:
+        return None
+    objs = []  # (class, map_x, map_y) — map_x=raw.x, map_y=raw.z (좌표규약)
+    for o in (gt.get("obstacles", []) or []):
+        n = str(o.get("prefabName", ""))
+        cls = next((k for k in ("Rock", "Car", "House", "Tank", "Tent") if n.startswith(k)), None)
+        if not cls:
+            continue
+        p = o.get("position", {}) or {}
+        objs.append((cls.lower(), float(p.get("x", 0.0)), float(p.get("z", 0.0))))
+    samples = ((route_data.get("diagnostics") or {}).get("samples") or [])
+    traj = [(s["p"][0], s["p"][1]) for s in samples if s.get("p")]
+    if not objs or not traj:
+        return None
+    confirmed = []  # 확정 객체 위치
+    dp = find_discovered_map(input_dir, rid)
+    if dp:
+        try:
+            for o in (json.load(open(dp, encoding="utf-8")).get("obstacles", []) or []):
+                m = o.get("metadata", {}) or {}
+                if m.get("is_confirmed") and m.get("map_x") is not None:
+                    confirmed.append((float(m["map_x"]), float(m["map_y"])))
+        except Exception:
+            pass
+    on_route, detected, missed = 0, 0, []
+    for cls, ox, oy in objs:
+        md = min(math.hypot(ox - x, oy - y) for x, y in traj)
+        if md > near_m:
+            continue
+        on_route += 1
+        if any(math.hypot(ox - cx, oy - cy) <= match_m for cx, cy in confirmed):
+            detected += 1
+        else:
+            missed.append(f"{cls}({round(ox)},{round(oy)})~{round(md)}m")
+    return {"on_route": on_route, "detected": detected,
+            "rate": (round(detected / on_route, 2) if on_route else None),
+            "missed": missed, "near_m": near_m}
+
+
+def analyze_recon(d):
+    """정찰 검증 지표: weave(좌우 흔들림) / stop-to-confirm(정지) / 충돌."""
+    diag = d.get("diagnostics") or {}
+    samples = diag.get("samples") or []
+    planned = diag.get("planned_paths") or []
+    if not samples:
+        return None
+    cts = []
+    for s in samples:
+        p = s.get("p")
+        path = active_path(planned, s.get("t", 0.0))
+        if p and path:
+            ct = signed_cross_track(p[0], p[1], path)
+            if ct is not None:
+                cts.append(ct)
+    weave_amp = round(sum(abs(c) for c in cts) / len(cts), 2) if cts else None
+    weave_max = round(max((abs(c) for c in cts), default=0.0), 2)
+    dir_changes, prev = 0, None
+    for c in cts:                          # ±0.5m 넘는 좌↔우 전환만 유효 진동으로
+        sgn = 1 if c > 0.5 else (-1 if c < -0.5 else 0)
+        if sgn != 0:
+            if prev is not None and sgn != prev:
+                dir_changes += 1
+            prev = sgn
+    # stop-to-confirm: diag sample의 hold(정지여부) 연속구간 = 의도적 정지 에피소드
+    hold_logged = any(("hold" in s) for s in samples)
+    episodes, hold_time, in_hold, ep_start = 0, 0.0, False, None
+    for s in samples:
+        h = bool(s.get("hold"))
+        if h and not in_hold:
+            episodes += 1
+            in_hold = True
+            ep_start = s.get("t", 0.0)
+        elif not h and in_hold:
+            hold_time += s.get("t", 0.0) - (ep_start or 0.0)
+            in_hold = False
+    if in_hold and ep_start is not None:
+        hold_time += samples[-1].get("t", 0.0) - ep_start
+    stop_cmds = 0
+    for s in samples:                      # 전체 STOP(yaw 떨림 포함) — hold와 비교용
+        try:
+            if json.loads(s.get("cmd", "{}")).get("moveWS", {}).get("command") == "STOP":
+                stop_cmds += 1
+        except Exception:
+            pass
+    # 속도 프로파일(연속 pose 거리/dt, m/s) — 충돌 1순위가 과속이라 진단에 노출.
+    spd = []
+    for i in range(1, len(samples)):
+        p0, p1 = samples[i - 1].get("p"), samples[i].get("p")
+        t0, t1 = samples[i - 1].get("t", 0.0), samples[i].get("t", 0.0)
+        if p0 and p1 and 0.01 < (t1 - t0) < 2.0:
+            spd.append((math.hypot(p1[0] - p0[0], p1[1] - p0[1]) / (t1 - t0), p1[0], p1[1]))
+    speed = None
+    if spd:
+        vs = sorted(s[0] for s in spd)
+        n = len(vs)
+        # 충돌 군집 진입 속도(≤8m): 과속 진입→ram 확인
+        cpts = set((round(c.get("x", 0)), round(c.get("z", 0))) for c in (d.get("collision_events") or []))
+        col_vs = [s[0] for s in spd if any(math.hypot(s[1] - cx, s[2] - cy) <= 8 for cx, cy in cpts)]
+        speed = {"mean": round(sum(vs) / n, 1), "median": round(vs[n // 2], 1),
+                 "p90": round(vs[int(n * 0.9)], 1), "max": round(max(vs), 1),
+                 "near_collision_mean": (round(sum(col_vs) / len(col_vs), 1) if col_vs else None)}
+    return {
+        "weave": {"amp_mean_m": weave_amp, "amp_max_m": weave_max, "dir_changes": dir_changes, "n": len(cts)},
+        "stop_confirm": {"hold_logged": hold_logged,
+                         "hold_episodes": episodes, "hold_time_s": round(hold_time, 1),
+                         "stop_cmds": stop_cmds, "samples": len(samples)},
+        "speed": speed,
+        "collisions_count": (d.get("result") or {}).get("collisions"),
+        "collision_pts": d.get("collision_events") or [],
+        "fusion_rejects": d.get("fusion_rejects") or {},
+    }
+
+
+def fmt_fusion_rejects(fr):
+    """융합 사유 히스토그램 → 'ok N(p%) · 사유 N · …' (성공/실패 한눈에). 왜 확정 안 되나."""
+    if not fr:
+        return "(없음 — fusion_rejects 미기록, 재주행 필요)"
+    total = sum(fr.values()) or 1
+    ok = sum(v for k, v in fr.items() if str(k).startswith("ok"))
+    items = sorted(fr.items(), key=lambda kv: -kv[1])
+    parts = [f"성공 {ok}({100*ok//total}%)"] + [f"{k} {v}" for k, v in items if not str(k).startswith("ok")]
+    return " · ".join(parts)
 
 
 # --------------------------------------------------------------------------- #
@@ -273,6 +464,17 @@ def render_overlay(rid, d, res, out_dir):
         ax.scatter([xs[0]], [zs[0]], s=130, marker="o", color="#1a9850",
                    edgecolors="black", zorder=7, label="출발")
 
+    # 정찰 검증: 멈춰-확정(hold) 지점(주황 ■) + 충돌 지점(빨강 ✕)
+    hx = [s["p"][0] for s in samples if s.get("hold") and s.get("p")]
+    hz = [s["p"][1] for s in samples if s.get("hold") and s.get("p")]
+    if hx:
+        ax.scatter(hx, hz, s=42, marker="s", color="#ff8c1a", edgecolors="black",
+                   linewidths=0.3, zorder=5, label=f"멈춰-확정 hold ({len(hx)})")
+    coll = d.get("collision_events") or []
+    if coll:
+        ax.scatter([c.get("x") for c in coll], [c.get("z") for c in coll], s=70, marker="x",
+                   color="#d62728", linewidths=1.5, zorder=8, label=f"충돌 ({len(coll)})")
+
     fe = res["follow_error_m"]
     ax.set_title(f"route_{rid} 계획 vs 실제 — 추종오차 평균 "
                  f"{fe['mean'] if fe else '?'}m / 최대 {fe['max'] if fe else '?'}m", fontsize=11)
@@ -314,7 +516,7 @@ def verdict(res):
     return flags or ["뚜렷한 이상치 없음(또는 데이터 부족)"]
 
 
-def render_md(results, gt, out_dir, figs):
+def render_md(results, gt, out_dir, figs, recon=None):
     L = ["# 주행 품질 진단 (개발용 — 시나리오 공식 리포트 아님)", ""]
     L.append("> route_*.json의 diagnostics로 진동/끼임 원인을 **경로 / APF / 제어**로 귀속. 값 ↓ 낮을수록 안정.")
     L.append("")
@@ -323,6 +525,74 @@ def render_md(results, gt, out_dir, figs):
         L.append("")
         L.append("route_*.json에 `diagnostics`가 없습니다(로깅 추가 전 런). **스택을 재기동해 A→B를 한 번 재주행**한 뒤 다시 실행하세요.")
         return "\n".join(L)
+
+    # ---- 0. 정찰 검증 (사용자 확인용: weave / 멈춰-확정 / 인식 / 충돌) ----
+    recon = recon or {}
+    if any(recon.values()):
+        def rcg(rid, *path, default="—"):
+            cur = recon.get(rid)
+            for k in path:
+                cur = cur.get(k) if isinstance(cur, dict) else None
+            return default if cur is None else cur
+
+        def reco_str(rid):
+            r = recon.get(rid) or {}
+            reco = r.get("recognition") or {}
+            cb = reco.get("confirmed_by_class") or {}
+            raw = sum((reco.get("yolo_raw") or {}).values())
+            body = ", ".join(f"{k}:{v}" for k, v in sorted(cb.items())) if cb else "0"
+            return f"{body} (raw {raw})"
+
+        L.append("## 0. 정찰 검증 (weave / 멈춰-확정 / 인식 / 충돌)")
+        L.append("")
+        L.append("| 항목 | route_A | route_B | 읽는 법 |")
+        L.append("|---|---|---|---|")
+        L.append(f"| weave 진폭 평균/최대(m) | {rcg('A','weave','amp_mean_m')}/{rcg('A','weave','amp_max_m')} | "
+                 f"{rcg('B','weave','amp_mean_m')}/{rcg('B','weave','amp_max_m')} | 좌우 흔들림 크기(off면 작아야) |")
+        L.append(f"| weave 좌우전환 횟수 | {rcg('A','weave','dir_changes')} | {rcg('B','weave','dir_changes')} | 많으면 위빙 多(off면 0~소수) |")
+        L.append(f"| 멈춰-확정 정지횟수/시간(s) | {rcg('A','stop_confirm','hold_episodes')}/{rcg('A','stop_confirm','hold_time_s')} | "
+                 f"{rcg('B','stop_confirm','hold_episodes')}/{rcg('B','stop_confirm','hold_time_s')} | 후보서 **의도적 정지**(hold) |")
+        L.append(f"| 전체 STOP cmd(yaw 포함) | {rcg('A','stop_confirm','stop_cmds')} | {rcg('B','stop_confirm','stop_cmds')} | hold보다 훨씬 크면 떨림성 정지 |")
+        L.append(f"| 확정 인식(센서퓨전) | {reco_str('A')} | {reco_str('B')} | class별 확정 수(raw=YOLO 프레임) |")
+
+        def fr_str(rid):
+            return fmt_fusion_rejects((recon.get(rid) or {}).get("fusion_rejects") or {})
+        L.append(f"| 융합 결과(프레임 사유) | {fr_str('A')} | {fr_str('B')} | 성공%↓·strict_no_cluster多=YOLO↔LiDAR 매칭 실패, stale多=비동기 stale |")
+
+        def gd_str(rid):
+            gd = (recon.get(rid) or {}).get("gt_detect")
+            if not gd:
+                return "—"
+            s = f"{gd['detected']}/{gd['on_route']} (rate {gd['rate']})"
+            return s + (f" · 놓침: {', '.join(gd['missed'])}" if gd['missed'] else "")
+        _gn = next((((recon.get(r) or {}).get("gt_detect") or {}).get("near_m") for r in ("A", "B")
+                    if (recon.get(r) or {}).get("gt_detect")), 30)
+        L.append(f"| **GT 탐지율**(경로 옆 실객체) | {gd_str('A')} | {gd_str('B')} | final_v3.map 대비 경로 ≤{_gn:.0f}m 객체 중 확정 비율(놓친 객체=버그 후보) |")
+        def spd_str(rid):
+            sp = (recon.get(rid) or {}).get("speed")
+            if not sp:
+                return "—"
+            nc = f", 충돌진입 {sp['near_collision_mean']}" if sp.get("near_collision_mean") is not None else ""
+            return f"mean {sp['mean']} / p90 {sp['p90']} / max {sp['max']}{nc}"
+        L.append(f"| 속도(m/s) | {spd_str('A')} | {spd_str('B')} | mean·p90·max + 충돌지점 진입속도(과속 진입=ram 원인) |")
+        L.append(f"| 충돌 횟수 | {rcg('A','collisions_count')} | {rcg('B','collisions_count')} | 낮을수록 좋음 |")
+        L.append("")
+        for rid in ("A", "B"):
+            r = recon.get(rid)
+            if not r:
+                continue
+            w, sc = r.get("weave", {}), r.get("stop_confirm", {})
+            msgs = []
+            dc = w.get("dir_changes") or 0
+            msgs.append(f"weave {'활발' if dc >= 8 else '약함/off'}(좌우전환 {dc}회, 진폭 {w.get('amp_mean_m')}m)")
+            if not sc.get("hold_logged"):
+                msgs.append("⚠ hold 미기록(구버전 로그 — stop-to-confirm 검증하려면 재주행)")
+            elif (sc.get("hold_episodes") or 0) == 0:
+                msgs.append("**후보서 멈춤 0회** — stop-to-confirm 미작동(후보 미관측/즉시확정/조건 확인 필요)")
+            else:
+                msgs.append(f"멈춰-확정 {sc.get('hold_episodes')}회/{sc.get('hold_time_s')}s")
+            L.append(f"- **route_{rid}**: " + " · ".join(msgs))
+        L.append("")
 
     L.append("## 1. 원인 귀속 점수")
     L.append("")
@@ -387,32 +657,53 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="주행 품질 진단(개발용)")
     ap.add_argument("--input", default=OUT_DIR)
     ap.add_argument("--map", default=DEFAULT_MAP)
+    ap.add_argument("--gt-map", default=GT_OBJECTS_MAP, help="GT 정답맵(객체 포함) — 경로별 탐지율 산정")
+    ap.add_argument("--gt-near-m", type=float, default=30.0, help="경로에서 이 거리 이내 GT객체를 '발견대상'으로(융합 reach~45m)")
     args = ap.parse_args(argv)
 
     gt = gt_threat_counts(args.map)
-    results, figs = {}, {}
+    # 파생 분석물(리포트/오버레이)은 analysis/로 분리. 입력(route_*.json 등)은 root에서 읽는다.
+    out_dir = os.path.join(args.input, "analysis")
+    os.makedirs(out_dir, exist_ok=True)
+    results, figs, recon = {}, {}, {}
     for rid in ("A", "B"):
-        path = os.path.join(args.input, f"route_{rid}.json")
-        if not os.path.exists(path):
+        # route_{rid}.json → 없으면 comparison.json 폴백(시나리오2 run이 route_A.json 지워도 분석 가능).
+        d, src = load_route(args.input, rid)
+        if d is None:
             results[rid] = None
             continue
-        d = json.load(open(path, encoding="utf-8"))
         res = analyze_route(d)
+        rc = analyze_recon(d)
+        if rc is not None:
+            rc["recognition"] = recon_recognition(args.input, rid, (d.get("vision_yolo") or {}).get("counts"))
+            rc["gt_detect"] = gt_detection_rate(d, args.input, rid, args.gt_map, near_m=args.gt_near_m)
+            rc["_src"] = src
+        recon[rid] = rc
         if res is not None:
             res["_spotted"] = d.get("asset_spotted_gt", {})
-            figs[rid] = render_overlay(rid, d, res, args.input)
+            figs[rid] = render_overlay(rid, d, res, out_dir)
         results[rid] = res
-        if res:
-            ch = res["route_churn"]["route_version_changes"]
-            fe = res["follow_error_m"]
-            print(f"route_{rid}: churn {ch}, 추종오차 {fe['mean'] if fe else '?'}m(평균), "
-                  f"APF불일치 {(res['apf_disagree_deg'] or {}).get('mean','?')}°, "
-                  f"채터 {res['control_chatter']['per_min']}/분")
+        if rc:
+            w, sc = rc["weave"], rc["stop_confirm"]
+            print(f"route_{rid}({os.path.basename(src) if src else '?'}): "
+                  f"weave 좌우전환 {w['dir_changes']}회/진폭 {w['amp_mean_m']}m, "
+                  f"멈춰-확정 {sc['hold_episodes']}회/{sc['hold_time_s']}s(hold_logged={sc['hold_logged']}), "
+                  f"충돌 {rc['collisions_count']}, 확정 {rc['recognition']['confirmed_total']}")
+            sp = rc.get("speed")
+            if sp:
+                nc = f", 충돌진입 {sp['near_collision_mean']}" if sp.get("near_collision_mean") is not None else ""
+                print(f"  └ 속도(m/s): mean {sp['mean']} p90 {sp['p90']} max {sp['max']}{nc}")
+            print(f"  └ 융합: {fmt_fusion_rejects(rc.get('fusion_rejects') or {})}")
+            gd = rc.get("gt_detect")
+            if gd:
+                miss = (" 놓침=" + ", ".join(gd["missed"])) if gd["missed"] else ""
+                print(f"  └ GT탐지율(경로 ≤{gd['near_m']:.0f}m): {gd['detected']}/{gd['on_route']}"
+                      f" (rate={gd['rate']}){miss}")
         else:
             print(f"route_{rid}: 진단 데이터 없음(diagnostics 미기록) — 재주행 필요")
 
-    md = render_md(results, gt, args.input, figs)
-    out = os.path.join(args.input, "run_diagnosis.md")
+    md = render_md(results, gt, out_dir, figs, recon)
+    out = os.path.join(out_dir, "run_diagnosis.md")
     with open(out, "w", encoding="utf-8") as f:
         f.write(md)
     print(f"\n[완료] 진단 리포트: {out}")

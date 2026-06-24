@@ -17,6 +17,7 @@ from launch import LaunchDescription
 from launch.actions import SetEnvironmentVariable, DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -47,10 +48,48 @@ def generate_launch_description():
         description='Side bias for A*: west (for A), east (for B)'
     )
 
+    # 시나리오2 인계: 정찰로 만든 합본맵/지형격자를 planner에 주입하기 위한 오버라이드.
+    # 기본값 = finalmap / 빈 지형 → 정찰(recon) 동작 불변(behavior-preserving).
+    static_map_file_arg = DeclareLaunchArgument(
+        'static_map_file',
+        default_value=recon_map_file,
+        description='A* static obstacle map (default finalmap; scenario2 overrides with scenario2_map.map)'
+    )
+    terrain_cost_file_arg = DeclareLaunchArgument(
+        'terrain_cost_file',
+        default_value='',
+        description='A* terrain roughness cost grid (empty=off; scenario2 sets scenario2_terrain.json)'
+    )
+    recon_min_confirm_obs_arg = DeclareLaunchArgument(
+        'recon_min_confirm_observations', default_value='-1',
+        description='Override min fused observations to confirm (recon ~3; -1=use yaml).'
+    )
+    recon_min_confirm_age_arg = DeclareLaunchArgument(
+        'recon_min_confirm_age_sec', default_value='-1.0',
+        description='Override min age(sec) to confirm (recon ~0.5; -1=use yaml).'
+    )
+    # A* 지형 비용 가중치. recon은 terrain_cost_file 비어서 무영향; 시나리오2가 상향해 험지 회피.
+    terrain_weight_arg = DeclareLaunchArgument(
+        'terrain_weight', default_value='0.6',
+        description='A* terrain roughness cost weight (scenario2 raises so path detours steep cells).'
+    )
+    # ReconLogger 출력 폴더(route_*.json). 기본=정찰 현행. 시나리오2는 recon_reports/scenario2로
+    # 오버라이드해 정찰 route_A.json을 덮어쓰지 않게 격리.
+    recon_report_dir_arg = DeclareLaunchArgument(
+        'recon_report_dir', default_value='./recon_reports',
+        description='ReconLogger output dir for route_*.json (scenario2 overrides to isolate from recon).'
+    )
+
     return LaunchDescription([
         mission_type_arg,
         route_id_arg,
         route_side_arg,
+        static_map_file_arg,
+        terrain_cost_file_arg,
+        recon_min_confirm_obs_arg,
+        recon_min_confirm_age_arg,
+        terrain_weight_arg,
+        recon_report_dir_arg,
         SetEnvironmentVariable("TANK_START_CONTROL", "start"),
         SetEnvironmentVariable("TANK_APF_PASSTHROUGH_WHEN_CLEAR", "true"),
 
@@ -59,7 +98,7 @@ def generate_launch_description():
             executable="lidar_processor_node",
             name="tank_lidar_processor_node",
             output="screen",
-            parameters=[{"publish_legacy_lidar_json": True}],
+            parameters=[{"publish_legacy_lidar_json": False}],
         ),
         # Team visual perception integration:
         # - /detect image from ros_bridge + /info LiDAR raw -> camera LiDAR projection overlay
@@ -90,12 +129,12 @@ def generate_launch_description():
                 "map_width": 300,
                 "map_height": 300,
                 "resolution": 1.0,
-                "inflate": 5.0,
+                "inflate": 4.5,
                 "use_path_smoothing": True,
                 # False = latest TankSimulation step3 policy: do not cheat with GT obstacles.
                 # True  = use /update_obstacle bbox list for static A* validation.
                 "use_gt_obstacles": False,
-                "enable_dynamic_replan": False,
+                "enable_dynamic_replan": True,
                 "enable_periodic_replan": False,
                 # TankSimulation route A/B strategy is now active in the ROS2 planner.
                 "use_route_waypoints": True,
@@ -103,24 +142,67 @@ def generate_launch_description():
                 "route_map_name": "finalmap",
                 "route_id": LaunchConfiguration("route_id"),
                 "route_side": LaunchConfiguration("route_side"),
-                "route_clearance_weight": 0.4,
+                "route_clearance_weight": 1.0,
                 # 정적 맵(finalmap.map) 나무/바위를 전역 A* 코스트맵에 반영 → 루트가 나무 관통 안 하고
                 # 코리더 중앙으로. use_gt_obstacles와 독립(빈 static_map_file이면 finalmap.map 자동 해석).
+                # 시나리오2는 static_map_file을 scenario2_map.map으로, terrain_cost_file을
+                # scenario2_terrain.json으로 오버라이드(정찰은 기본값 finalmap / 빈 지형).
                 "use_static_map": True,
-                "static_map_file": recon_map_file,
+                # 시나리오2 인계: 정찰=finalmap 기본, 시나리오2=scenario2_map.map/지형 오버라이드.
+                "static_map_file": LaunchConfiguration("static_map_file"),
+                "terrain_cost_file": LaunchConfiguration("terrain_cost_file"),
+                "terrain_weight": ParameterValue(
+                    LaunchConfiguration("terrain_weight"), value_type=float),
+                # Known map 초록점은 자율주행 전 이미 아는 hard no-go다(팀원 fix/control).
+                "static_obstacle_inflate": 2.0,
                 # DBSCAN cluster bboxes are used when dynamic replanning is enabled.
                 "use_lidar_cluster_bboxes": True,
                 "lidar_cluster_bbox_margin": 1.0,
+                # 한 번 잡힌 LiDAR cluster는 TTL 동안 A* costmap에는 유지하되, 재계획 trigger로는 쓰지 않는다.
+                "enable_lidar_cluster_memory": True,
+                "lidar_cluster_memory_ttl_sec": 18.0,
+                "lidar_cluster_memory_merge_distance": 5.0,
+                "lidar_cluster_memory_inflate": 3.0,
+                "lidar_cluster_memory_max_count": 80,
+                "use_lidar_cluster_memory_for_path_block": False,
+                # detected_points_map history/discovered는 A* costmap에는 반영하지만, 반복 replan trigger에서는 제외한다.
+                # 현재 보이는 LiDAR cluster만 경로 차단 트리거로 쓰는 쪽이 route 흔들림이 적다.
+                "use_lidar_memory_for_path_block": False,
+                "use_discovered_objects_for_path_block": False,
+                # Dynamic replan이 체크포인트 진행 상태를 뒤로 되돌려 lookahead가 반대편으로 튀는 것을 막는다.
+                "route_index_never_decrease": True,
+                "dynamic_replan_keep_route_index": True,
+                "route_commit_lock_sec": 6.0,
+                # RViz discovered object도 confirmed 이후 A* persistent hard obstacle로 반영한다.
+                "use_discovered_objects_for_astar": True,
+                "discovered_confirmed_only": True,
+                "discovered_min_observations": 2,
+                "discovered_default_radius": 3.5,
+                "discovered_obstacle_inflate": 2.0,
+                "ignored_discovered_classes_for_astar": "person,human,blue,red",
                 "replan_period_sec": 0.0,
-                "dynamic_replan_cooldown_sec": 8.0,
+                "dynamic_replan_cooldown_sec": 4.0,
                 "plan_retry_period_sec": 3.0,
-                "path_block_margin": 5.0,
+                "path_block_margin": 7.0,
+                "path_block_required_hits": 2,
+                # 현재 보이는 cluster가 전방 가까운 A* 경로 corridor를 막으면 일반 쿨타임보다 빠르게 재계획한다.
+                "lidar_block_min_distance": 0.5,
+                "lidar_block_max_distance": 80.0,
+                "emergency_cluster_replan_enabled": True,
+                "emergency_replan_cooldown_sec": 0.8,
+                "emergency_replan_front_distance": 24.0,
+                "emergency_replan_min_distance": 0.0,
+                "emergency_replan_margin": 10.0,
+                # Conditional dynamic A*: 현재 보이는 LiDAR cluster가 실제 경로를 막을 때만 재계획한다.
+                "dynamic_replan_max_count": 0,
+                "dynamic_replan_min_progress_m": 0.0,
+                "dynamic_replan_progress_guard_sec": 0.0,
                 "lidar_cluster_eps": 2.0,
                 "lidar_cluster_min_samples": 3,
                 "lidar_history_resolution": 0.5,
                 "max_lidar_history_points": 1500,
-                "lookahead_distance": 8.0,
-                "publish_path_period_sec": 5.0,
+                "lookahead_distance": 13.0,
+                "publish_path_period_sec": 2.0,
                 "goal_tolerance": 10.0,
                 "default_goal_enabled": True,
                 # 주행 목적지 = routes.yaml destination 단일 출처로 통일 (110.0, 276.5).
@@ -145,6 +227,13 @@ def generate_launch_description():
                 #    route_B.json이 영영 안 생긴다)
                 "route_id": LaunchConfiguration("route_id"),
                 "route_map_name": "finalmap",
+                # 정찰 확정 기준 override(-1=yaml). 발견객체 확정 누적 임계.
+                "min_confirm_observations_override": ParameterValue(
+                    LaunchConfiguration("recon_min_confirm_observations"), value_type=int),
+                "min_confirm_age_sec_override": ParameterValue(
+                    LaunchConfiguration("recon_min_confirm_age_sec"), value_type=float),
+                # route_*.json 출력 폴더(시나리오2는 recon_reports/scenario2로 격리).
+                "recon_report_dir": LaunchConfiguration("recon_report_dir"),
             }],
         ),
         Node(
@@ -153,37 +242,77 @@ def generate_launch_description():
             name="tank_team_potential_field_node",
             output="screen",
             parameters=[{
+                # APF가 너무 강하면 제자리에서 빙빙 도는 루프가 생긴다.
+                # A*는 기본 경로만 제공하고, APF는 부드러운 국소 회피 방향만 제공한다.
+                
                 "target_pose_topic": "/tank/path/lookahead_pose",
                 "fallback_goal_topic": "/tank/goal/pose",
                 "hz": 10.0,
-                # APF 게인 재균형(진동 완화): 척력이 인력을 160배 압도해 코리더 밖으로 튕기던 문제.
-                # k_att↑/k_rep↓/tangent↓로 경로 추종 vs 회피 균형, 보는 거리(influence/max_obstacle)도 좁힘.
-                # min_obstacle_distance·위협회피는 유지 → 근접 안전 보장. 실주행 보며 미세조정.
-                "influence_radius": 9.0,
-                "k_att": 3.0,
-                "k_rep": 60.0,
-                "tangent_gain_scale": 1.0,
-                "local_target_distance": 8.0,   # planner lookahead_distance(8m)와 정합
-                "max_repulsive_norm": 20.0,
-                "max_result_norm": 20.0,
-                "min_obstacle_distance": 1.5,
-                "max_obstacle_distance": 9.0,
-                "front_sector_deg": 140.0,
-                "path_corridor_width": 7.0,
-                "obstacle_voxel_resolution": 1.0,
-                "max_obstacle_points": 300,
+
+                # APF 활성 조건
+                # force가 작아도 장애물이 8m 이내면 회피 모드 진입
+                "apf_activate_distance": 7.0,
+                "safety_watch_distance": 9.0,
+                "safety_caution_distance": 5.5,
+                "safety_danger_distance": 3.5,
+                "safety_watch_speed_limit_ws": 0.34,
+                "safety_caution_speed_limit_ws": 0.22,
+                "safety_danger_speed_limit_ws": 0.06,
+                # APF 합벡터 방향과 현재 heading 차이가 크면 controller가 W를 끊는다.
+                "apf_heading_stop_angle_deg": 78.0,
+                "apf_heading_slow_angle_deg": 38.0,
+                "apf_heading_stop_distance": 4.2,
+                "apf_heading_min_result_norm": 0.5,
+                "repulsive_eps": 0.05,
+                "blocked_to_apf_ticks": 1,
+                "clear_to_passthrough_ticks": 3,
+
+                # APF 힘 비율
+                # global path 추종력보다 실시간 장애물 회피력이 우선권을 갖도록 조정
+                "influence_radius": 8.0,
+                "k_att": 4.2,
+                "k_rep": 80.0,
+                "tangent_gain_scale": 0.22,
+
+                # local target
+                "local_target_distance": 5.5,
+                "max_attractive_norm": 16.0,
+                "max_repulsive_norm": 12.0,
+                "max_result_norm": 8.0,
+
+                # 장애물 필터
+                "min_obstacle_distance": 0.3,
+                "max_obstacle_distance": 8.0,
+                "front_sector_deg": 100.0,
+                "path_corridor_width": 4.5,
+                "obstacle_voxel_resolution": 1.5,
+                "max_obstacle_points": 50,
+
+                # LiDAR cluster 기반 회피
+                "use_lidar_clusters": True,
+                "cluster_obstacle_min_count": 2,
+                "cluster_first": True,
+                "use_raw_lidar_fallback": True,
+
+                # 발견 객체 반영
                 "use_discovered_objects": True,
+                "ignored_discovered_classes": "person,human,blue,red",
+
+                # 장애물 없을 때는 A* lookahead 그대로 추종
                 "passthrough_when_clear": True,
-                # clear 판정 임계 상향(0.05→0.5): 노이즈 1~2점으로 직진↔회피 모드가 깜빡이던 채터링 방지.
-                "repulsive_eps": 0.5,
+
+                # 위협 회피
+                # 지금은 네가 finalmap을 계속 쓴다고 했으니 유지
                 "use_threat_avoidance": True,
                 "threat_map_file": recon_map_file,
                 "threat_radius": 25.0,
                 "k_threat_rep": 2000.0,
-                "use_lidar_clusters": True,
-                "cluster_obstacle_min_count": 2,
+
+                # APF weight profile
                 "apf_weights_file": apf_weights_file,
                 "apf_weight_profile": "default",
+
+                # RViz marker
                 "marker_scale": 2.5,
             }],
         ),
@@ -197,19 +326,84 @@ def generate_launch_description():
                 "controller_hz": 10.0,
                 "enable_local_target": True,
                 "target_ttl_sec": 2.0,
+                "enable_safety_speed_limit": True,
+                "safety_status_topic": "/tank/potential/safety_status",
+                "safety_status_ttl_sec": 1.2,
+                # APF 합벡터 기반 W 차단. heading 차이가 크고 장애물이 가까우면 STOP + A/D만 수행.
+                "enable_apf_vector_stop_pivot": True,
+                "apf_stop_angle_deg": 90.0,
+                "apf_slow_angle_deg": 42.0,
+                "apf_stop_distance": 4.2,
+                "apf_ttc_stop_sec": 1.45,
+                "apf_ttc_slow_sec": 2.4,
+                "apf_min_speed_for_ttc": 0.8,
+                "apf_slow_ws_weight": 0.16,
+                # STOP pivot 무한회전 방지: 짧게 차체만 돌린 뒤 저속 W로 빠져나가게 한다.
+                "apf_stop_pivot_max_sec": 0.45,
+                "apf_stop_pivot_release_angle_deg": 24.0,
+                "apf_stop_pivot_cooldown_sec": 1.8,
+                # 장애물 옆 통과 시 A↔D 반복 방지. 장애물 반대 방향을 조금 더 오래 유지한다.
+                "prefer_turn_away_from_nearest_obstacle": True,
+                "away_turn_lock_sec": 1.4,
+                "enable_steering_direction_lock": True,
+                "steering_direction_lock_sec": 1.25,
+                # 장애물 옆 통과: bearing이 큰 side obstacle은 STOP하지 말고 저속 W로 통과
+                "enable_side_pass_forward": True,
+                "side_pass_bearing_deg": 58.0,
+                "side_pass_min_distance": 4.2,
+                "side_pass_ws_weight": 0.18,
+                "front_stop_bearing_deg": 42.0,
+                "hard_stop_distance": 3.8,
+                "turn_away_hard_distance": 4.8,
+                # 지그재그 장애물 중간에서 A/D가 반복되면 한쪽 방향을 잠시 유지
+                "enable_ad_oscillation_guard": True,
+                "ad_flip_window_sec": 3.0,
+                "ad_flip_threshold": 3,
+                "ad_oscillation_hold_sec": 2.0,
+                "ad_oscillation_slow_ws_weight": 0.15,
+                # 경로가 급격히 꺾일 때는 W를 끊고 차체 yaw를 먼저 맞춘다.
+                # 큰 원을 그리며 경로 밖으로 밀려나는 현상을 줄인다.
+                "enable_sharp_turn_stop_pivot": True,
+                "sharp_turn_stop_angle_deg": 105.0,
+                "sharp_turn_release_angle_deg": 55.0,
+                "sharp_turn_min_target_distance": 4.0,
+                "sharp_turn_max_sec": 0.45,
+                "sharp_turn_cooldown_sec": 1.5,
+                "sharp_turn_block_when_apf_side_pass": True,
+                # 실제 속도가 높은 상태에서 급커브/장애물 앞을 W로 밀고 들어가면 관성으로 오버슛한다.
+                # yaw error/장애물 위험도에 따라 STOP/S braking을 걸어 코너 진입 속도를 강제로 낮춘다.
+                "enable_turn_overspeed_guard": True,
+                "turn_overspeed_angle_deg": 35.0,
+                "turn_overspeed_speed_mps": 2.8,
+                "turn_overspeed_hard_angle_deg": 60.0,
+                "turn_overspeed_hard_speed_mps": 4.5,
+                "turn_overspeed_reverse_weight": 0.38,
+                "turn_overspeed_slow_ws_weight": 0.10,
+                "danger_obstacle_brake_speed_mps": 1.0,
+                "danger_obstacle_reverse_weight": 0.50,
+                # local/APF target이 너무 가까운 점에서 좌우로 바뀌며 제자리 회전하는 것을 방지
+                "enable_forward_target_guard": True,
+                "forward_guard_min_target_distance": 6.0,
+                "forward_guard_yaw_error_deg": 85.0,
+                "forward_guard_target_distance": 12.0,
+                "forward_guard_max_search_points": 120,
+                "forward_guard_allow_in_danger": False,
                 "mission_type": LaunchConfiguration("mission_type"),
                 "goal_tolerance": 10.0,
                 "heading_deadband_deg": 5.0,
                 "steering_full_error_deg": 45.0,
                 "min_ad_weight": 0.0,
                 "max_ad_weight": 1.0,
-                # weaving(A↔D 토글) 완화: PD(rate feedback) D 게인. 0이면 기존 순수 P 거동.
-                "steering_kd": 0.2,
-                "straight_ws_weight": 1.0,
-                "turn_ws_weight": 0.4,
-                "rotate_in_place_angle_deg": 60.0,
+                # weaving(A↔D 토글) 완화: PD(rate feedback) D 게인. 주행 파라미터 = 팀원 fix/control 기준.
+                "steering_kd": 0.18,
+                "straight_ws_weight": 0.34,
+                "turn_ws_weight": 0.18,
+                "crawl_pivot_angle_deg": 90.0,
+                "crawl_pivot_ws_weight": 0.06,
+                "crawl_turn_ws_weight": 0.12,
+                "rotate_in_place_angle_deg": 75.0,
                 "slowdown_angle_deg": 30.0,
-                "stop_distance": 10.0,
+                "stop_distance": 12.0,
                 "enable_stuck_escape": True,
                 "stuck_check_period": 5.0,
                 "stuck_min_movement": 1.5,

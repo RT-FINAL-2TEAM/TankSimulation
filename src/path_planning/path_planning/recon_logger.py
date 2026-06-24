@@ -34,6 +34,7 @@ class ReconLogger:
         # 주행 결과
         self.reached: bool = False
         self.collisions: int = 0
+        self.collision_events: list[dict] = []   # [{t,x,z}] 충돌 발생 위치(analyze_run 궤적 오버레이용)
         self.total_sim_time: float = 0.0
         self.total_distance: float = 0.0
 
@@ -56,6 +57,7 @@ class ReconLogger:
         self._latest_lookahead: Optional[Tuple[float, float]] = None
         self._latest_local_target: Optional[Tuple[float, float]] = None
         self._latest_cmd: str = ""
+        self._fusion_rejects: dict = {}               # 융합 드롭 사유 누적 {reason: count} — 왜 확정 안 되나(analyze_run)
         self._last_path_sig = None
         self._last_diag_t: Optional[float] = None
         self._diag_min_dt: float = 0.2
@@ -102,6 +104,10 @@ class ReconLogger:
 
     def set_command(self, cmd: str) -> None:
         self._latest_cmd = cmd
+
+    def set_fusion_rejects(self, counts: dict) -> None:
+        """융합 드롭 사유 누적 {reason: count}. YOLO를 봐도 왜 확정 안 되는지(no_cluster/stale 등) 진단용."""
+        self._fusion_rejects = dict(counts)
 
     def log_planned_path(self, sim_time: float, path_xz: list) -> None:
         """전역 계획경로를 경로가 '실제로 바뀔 때만' 저장(끝점/길이 시그니처로 중복 제거, 다운샘플)."""
@@ -252,6 +258,7 @@ class ReconLogger:
             },
             "trajectory": self.trajectory,
             "obstacles_detected": self.obstacles_detected,
+            "collision_events": self.collision_events,
             "exposure": self._build_exposure_summary(),
             "vision_yolo": self._build_vision_summary(),
             "asset_spotted_gt": self._build_asset_spotted_gt(),
@@ -259,6 +266,10 @@ class ReconLogger:
                 "pitch_std_deg": self._calc_std(self._pitch_samples),
                 "roll_std_deg": self._calc_std(self._roll_samples),
             },
+            # 주행 품질 진단 원자료(공식 리포트 본문엔 미사용 — scripts/analyze_run.py가 소비).
+            # 융합 드롭 사유 히스토그램(프레임당 1건). ok_* = 성공, strict_no_cluster_assignment =
+            # YOLO bbox가 DBSCAN cluster와 매칭 안 됨, stale_async_detection = 비동기 stale 등.
+            "fusion_rejects": self._fusion_rejects,
             # 주행 품질 진단 원자료(공식 리포트 본문엔 미사용 — scripts/analyze_run.py가 소비).
             "diagnostics": {
                 "route_version_final": self.route_version,
@@ -271,6 +282,7 @@ class ReconLogger:
     def save_report(self) -> str:
         """리포트를 JSON 파일로 저장하고 경로를 반환합니다."""
         report = self.build_report()
+        os.makedirs(self.output_dir, exist_ok=True)   # 새 출력폴더(예: 시나리오2 격리 dir) 자동 생성
         path = os.path.join(self.output_dir, f"route_{self.route_id}.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)

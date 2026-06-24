@@ -55,7 +55,7 @@ async_detection:
   max_result_age_ms: 450
 mapping:
   enabled: true
-  merge_radius_m: 3.0
+  merge_radius_m: 8.0
   position_ema_alpha: 0.35
   add_classes:
   - rock

@@ -464,14 +464,110 @@ def compute_desired_motion(
     }
 
 
+def nearest_obstacle_relative_info(
+    pos: Optional[Tuple[float, float]],
+    yaw_rad: Optional[float],
+    obstacles: Iterable[Tuple[float, float]],
+) -> Dict[str, Any]:
+    """가장 가까운 장애물이 차체 기준 좌/우/전방 어디에 있는지 계산한다.
+
+    side 규칙:
+    - bearing_error_deg > +5  : left
+    - bearing_error_deg < -5  : right
+    - 그 외                  : front
+
+    조종 convention은 이 프로젝트의 사용자 입력 기준으로 둔다.
+    - 장애물 right  -> A(좌선회)로 멀어진다.
+    - 장애물 left   -> D(우선회)로 멀어진다.
+    """
+    if pos is None or yaw_rad is None:
+        return {}
+    obs_list = list(obstacles or [])
+    if not obs_list:
+        return {}
+    nearest = min(obs_list, key=lambda o: get_distance(pos, o))
+    dx = float(nearest[0] - pos[0])
+    dy = float(nearest[1] - pos[1])
+    dist = math.hypot(dx, dy)
+    bearing_rad = math.atan2(dy, dx)
+    bearing_error_rad = normalize_angle_rad(bearing_rad - float(yaw_rad))
+    bearing_error_deg = math.degrees(bearing_error_rad)
+    if bearing_error_deg > 5.0:
+        side = "left"
+        turn_away_cmd = "D"
+        turn_toward_cmd = "A"
+    elif bearing_error_deg < -5.0:
+        side = "right"
+        turn_away_cmd = "A"
+        turn_toward_cmd = "D"
+    else:
+        side = "front"
+        turn_away_cmd = ""
+        turn_toward_cmd = ""
+    return {
+        "x": float(nearest[0]),
+        "y": float(nearest[1]),
+        "distance": float(dist),
+        "bearing_deg": float(math.degrees(bearing_rad)),
+        "bearing_error_deg": float(bearing_error_deg),
+        "side": side,
+        "turn_away_cmd": turn_away_cmd,
+        "turn_toward_cmd": turn_toward_cmd,
+    }
+
+
+def lateral_unit_from_heading(yaw_rad: float, side: str) -> Tuple[float, float]:
+    """현재 heading 기준 좌/우 lateral 단위벡터를 반환한다."""
+    if side == "left":
+        return (-math.sin(yaw_rad), math.cos(yaw_rad))
+    if side == "right":
+        return (math.sin(yaw_rad), -math.cos(yaw_rad))
+    return (0.0, 0.0)
+
+
 # =============================================================================
 # 3. 페이로드 파싱 유틸리티
 # =============================================================================
 
 
-def parse_discovered_objects_payload(payload: Any) -> List[Tuple[float, float]]:
-    """/tank/map/discovered/objects를 map x/y 장애물 점으로 파싱한다."""
+def _is_ignored_discovered_label(obj: Dict[str, Any], ignored_classes: Iterable[str]) -> bool:
+    """discovered object 중 APF 장애물로 쓰면 안 되는 class를 걸러낸다."""
+    ignored = {str(item).strip().lower() for item in ignored_classes if str(item).strip()}
+    if not ignored:
+        return False
+    candidates = [
+        obj.get("class_name"),
+        obj.get("class"),
+        obj.get("label"),
+        obj.get("type"),
+        obj.get("name"),
+        obj.get("prefabName"),
+    ]
+    for value in candidates:
+        if value is None:
+            continue
+        label = str(value).strip().lower()
+        if not label:
+            continue
+        if label in ignored:
+            return True
+        # person_1, Human001, blue_team 같은 파생 이름도 제외한다.
+        if any(label.startswith(prefix) for prefix in ignored):
+            return True
+    return False
+
+
+def parse_discovered_objects_payload(
+    payload: Any,
+    ignored_classes: Optional[Iterable[str]] = None,
+) -> List[Tuple[float, float]]:
+    """/tank/map/discovered/objects를 map x/y 장애물 점으로 파싱한다.
+
+    person/human처럼 경로 회피 대상이 아닌 객체가 discovered map에 섞이면
+    APF가 계속 밀려나므로 class 필터를 지원한다.
+    """
     points: List[Tuple[float, float]] = []
+    ignored_classes = ignored_classes or []
     if not isinstance(payload, dict):
         return points
 
@@ -479,6 +575,8 @@ def parse_discovered_objects_payload(payload: Any) -> List[Tuple[float, float]]:
     if isinstance(objects, list):
         for obj in objects:
             if not isinstance(obj, dict):
+                continue
+            if _is_ignored_discovered_label(obj, ignored_classes):
                 continue
             try:
                 if obj.get("map_x") is not None and obj.get("map_y") is not None:
@@ -495,6 +593,8 @@ def parse_discovered_objects_payload(payload: Any) -> List[Tuple[float, float]]:
         for obj in obstacles:
             if not isinstance(obj, dict):
                 continue
+            if _is_ignored_discovered_label(obj, ignored_classes):
+                continue
             pos = obj.get("position") if isinstance(obj.get("position"), dict) else None
             if pos is None:
                 continue
@@ -506,16 +606,25 @@ def parse_discovered_objects_payload(payload: Any) -> List[Tuple[float, float]]:
     return points
 
 
+def parse_lidar_clusters_payload(
+    payload: Any,
+    min_count: int = 2,
+    tank_pos: Optional[Tuple[float, float]] = None,
+) -> List[Tuple[float, float]]:
+    """/tank/visual_perception/lidar_clusters를 map x/y 장애물 점으로 파싱한다.
 
-
-def parse_lidar_clusters_payload(payload: Any, min_count: int = 2) -> List[Tuple[float, float]]:
-    """/tank/visual_perception/lidar_clusters를 map x/y 장애물 점으로 파싱한다."""
+    기존 구현은 cluster centroid만 APF 장애물점으로 사용했다. 큰 차량/건물/나무군집은
+    centroid가 주행 코리더 밖으로 빠져 실제 가장 가까운 모서리를 놓칠 수 있으므로,
+    tank_pos가 있으면 bbox에서 전차에 가장 가까운 점을 대표 장애물점으로 사용한다.
+    bbox가 없거나 tank_pos가 아직 없으면 centroid로 fallback한다.
+    """
     points: List[Tuple[float, float]] = []
     if not isinstance(payload, dict):
         return points
     clusters = payload.get("clusters")
     if not isinstance(clusters, list):
         return points
+
     for c in clusters:
         if not isinstance(c, dict):
             continue
@@ -524,6 +633,27 @@ def parse_lidar_clusters_payload(payload: Any, min_count: int = 2) -> List[Tuple
                 continue
         except Exception:
             continue
+
+        # 1순위: bbox closest point. cluster bbox는 map 평면 x/y 기준이다.
+        bbox = c.get("bbox") if isinstance(c.get("bbox"), dict) else None
+        if bbox is not None and tank_pos is not None:
+            try:
+                x_min = float(bbox.get("x_min", bbox.get("x", 0.0)))
+                x_max = float(bbox.get("x_max", x_min))
+                y_min = float(bbox.get("y_min", bbox.get("z_min", 0.0)))
+                y_max = float(bbox.get("y_max", y_min))
+                if x_min > x_max:
+                    x_min, x_max = x_max, x_min
+                if y_min > y_max:
+                    y_min, y_max = y_max, y_min
+                closest_x = clamp(float(tank_pos[0]), x_min, x_max)
+                closest_y = clamp(float(tank_pos[1]), y_min, y_max)
+                points.append((closest_x, closest_y))
+                continue
+            except Exception:
+                pass
+
+        # 2순위 fallback: centroid
         centroid = c.get("centroid") if isinstance(c.get("centroid"), dict) else None
         if centroid is None:
             continue
@@ -643,7 +773,9 @@ def filter_obstacles_for_apf(
         ux, uy = tx / target_norm, ty / target_norm
 
     half_sector = max(1.0, front_sector_deg) * 0.5
-    min_d = max(0.0, min_distance)
+    # 너무 가까운 장애물을 제외하면 충돌 직전 APF가 오히려 clear로 판단될 수 있다.
+    # singularity만 피하고, 근접 장애물은 반드시 후보로 남긴다.
+    min_d = max(0.05, min_distance)
     max_d = max(max_distance, min_d + 0.1)
     corridor = max(0.1, corridor_width)
     voxel = max(0.05, voxel_resolution)
@@ -653,7 +785,7 @@ def filter_obstacles_for_apf(
         rx = ox - pos[0]
         ry = oy - pos[1]
         d = math.hypot(rx, ry)
-        if d < min_d or d > max_d:
+        if d <= 1e-6 or d > max_d:
             continue
 
         forward = rx * ux + ry * uy
@@ -664,12 +796,23 @@ def filter_obstacles_for_apf(
         cosang = clamp(forward / max(d, 1e-6), -1.0, 1.0)
         angle = math.degrees(math.acos(cosang))
 
-        if angle > half_sector and lateral > corridor:
+        # APF는 “전차 주변 전체 원형 영향권”이 아니라 현재 A* lookahead로 향하는
+        # 경로 corridor 주변 장애물만 강하게 본다. 경로 밖 장애물까지 APF에 넣으면
+        # A*는 직진하라 하고 APF는 옆으로 밀어내는 충돌이 생겨 ADAD/빙글빙글 루프가 난다.
+        # 단, 차체와 너무 가까운 측면 장애물은 safety 목적으로 남긴다.
+        close_side_safety = (
+            d <= min(max_d, max(3.2, min_d + 0.5))
+            and forward >= -0.5
+            and forward <= target_norm + corridor
+        )
+        if lateral > corridor and not close_side_safety:
             continue
-        if lateral > corridor and forward > target_norm + corridor:
+        if angle > half_sector and not close_side_safety:
+            continue
+        if lateral > corridor and forward > target_norm + corridor and not close_side_safety:
             continue
 
-        candidates.append((d, (ox, oy)))
+        candidates.append((max(d, min_d), (ox, oy)))
 
     candidates.sort(key=lambda item: item[0])
     seen = set()
@@ -683,6 +826,97 @@ def filter_obstacles_for_apf(
         if max_points > 0 and len(filtered) >= max_points:
             break
     return filtered
+
+
+def choose_obstacles_for_apf(
+    raw_obstacles: List[Tuple[float, float]],
+    cluster_obstacles: List[Tuple[float, float]],
+    discovered_obstacles: List[Tuple[float, float]],
+    pos: Tuple[float, float],
+    target: Tuple[float, float],
+    min_distance: float,
+    max_distance: float,
+    front_sector_deg: float,
+    corridor_width: float,
+    voxel_resolution: float,
+    max_points: int,
+    use_clusters: bool,
+    cluster_first: bool,
+    use_raw_fallback: bool,
+    use_discovered: bool,
+) -> Tuple[List[Tuple[float, float]], str, Optional[float]]:
+    """APF 입력 장애물을 고른다.
+
+    핵심 정책:
+    - cluster가 유효하면 cluster 중심점을 우선 사용한다.
+    - cluster가 없거나 필터 후 0개면 raw LiDAR를 fallback으로 사용한다.
+    - discovered object는 class 필터 후 추가하되, 동일한 전방/코리더 필터를 거친다.
+    """
+    max_base_points = max(1, int(max_points))
+    base_points: List[Tuple[float, float]] = []
+    source = "none"
+
+    def _filter(points: List[Tuple[float, float]], limit: int) -> List[Tuple[float, float]]:
+        return filter_obstacles_for_apf(
+            points,
+            pos,
+            target,
+            min_distance,
+            max_distance,
+            front_sector_deg,
+            corridor_width,
+            voxel_resolution,
+            limit,
+        )
+
+    if use_clusters and cluster_first:
+        cluster_filtered = _filter(cluster_obstacles, max_base_points)
+        if cluster_filtered:
+            base_points = cluster_filtered
+            source = "cluster"
+        elif use_raw_fallback:
+            raw_filtered = _filter(raw_obstacles, max_base_points)
+            if raw_filtered:
+                base_points = raw_filtered
+                source = "raw_fallback"
+    else:
+        raw_filtered = _filter(raw_obstacles, max_base_points)
+        if raw_filtered:
+            base_points = raw_filtered
+            source = "raw"
+        elif use_clusters:
+            cluster_filtered = _filter(cluster_obstacles, max_base_points)
+            if cluster_filtered:
+                base_points = cluster_filtered
+                source = "cluster_fallback"
+
+    result = list(base_points)
+    if use_discovered and discovered_obstacles:
+        remaining = max(0, max_base_points - len(result))
+        discovered_limit = max(20, remaining) if max_base_points > 0 else 0
+        discovered_filtered = _filter(discovered_obstacles, discovered_limit)
+        if discovered_filtered:
+            result.extend(discovered_filtered)
+            source = f"{source}+discovered" if source != "none" else "discovered"
+
+    # 마지막으로 중복 voxel 제거 및 max_points 제한을 한 번 더 적용한다.
+    if result:
+        result = filter_obstacles_for_apf(
+            result,
+            pos,
+            target,
+            min_distance,
+            max_distance,
+            front_sector_deg,
+            corridor_width,
+            voxel_resolution,
+            max_base_points,
+        )
+
+    nearest = None
+    if result:
+        nearest = min(get_distance(pos, obstacle) for obstacle in result)
+    return result, source, nearest
 
 
 # =============================================================================
@@ -740,6 +974,28 @@ class TeamPotentialFieldNode(Node):
         self.declare_parameter("cluster_obstacle_min_count", CLUSTER_OBSTACLE_MIN_COUNT)
         self.declare_parameter("apf_weights_file", APF_WEIGHTS_FILE)
         self.declare_parameter("apf_weight_profile", APF_WEIGHT_PROFILE)
+        self.declare_parameter("cluster_first", True)
+        self.declare_parameter("use_raw_lidar_fallback", True)
+        self.declare_parameter("blocked_to_apf_ticks", 2)
+        self.declare_parameter("clear_to_passthrough_ticks", 5)
+        self.declare_parameter("ignored_discovered_classes", "person,human,blue,red")
+        self.declare_parameter("apf_activate_distance", 8.0)
+        self.declare_parameter("safety_watch_distance", 12.0)
+        self.declare_parameter("safety_caution_distance", 8.0)
+        self.declare_parameter("safety_danger_distance", 5.5)
+        self.declare_parameter("safety_watch_speed_limit_ws", 0.45)
+        self.declare_parameter("safety_caution_speed_limit_ws", 0.32)
+        self.declare_parameter("safety_danger_speed_limit_ws", 0.08)
+        # APF 합벡터 방향과 차체 heading 차이가 크면 controller가 W를 끊고 A/D pivot을 하도록 권고한다.
+        self.declare_parameter("apf_heading_stop_angle_deg", 50.0)
+        self.declare_parameter("apf_heading_slow_angle_deg", 28.0)
+        self.declare_parameter("apf_heading_stop_distance", 7.5)
+        self.declare_parameter("apf_heading_min_result_norm", 0.5)
+        # 가까운 장애물 좌/우 위치를 기준으로 APF 합벡터를 반대쪽으로 강제 편향한다.
+        # target 정렬 tangential force가 장애물 쪽 회전을 선택해 루프에 빠지는 것을 막는다.
+        self.declare_parameter("enable_side_aware_escape_bias", False)
+        self.declare_parameter("side_aware_escape_distance", 7.0)
+        self.declare_parameter("side_aware_lateral_gain", 6.0)
 
         self.target_pose_topic = str(self.get_parameter("target_pose_topic").value)
         self.fallback_goal_topic = str(self.get_parameter("fallback_goal_topic").value)
@@ -779,6 +1035,28 @@ class TeamPotentialFieldNode(Node):
         self.cluster_obstacle_min_count = int(self.get_parameter("cluster_obstacle_min_count").value)
         self.apf_weights_file = str(self.get_parameter("apf_weights_file").value)
         self.apf_weight_profile_name = str(self.get_parameter("apf_weight_profile").value)
+        self.cluster_first = bool(self.get_parameter("cluster_first").value)
+        self.use_raw_lidar_fallback = bool(self.get_parameter("use_raw_lidar_fallback").value)
+        self.blocked_to_apf_ticks = int(self.get_parameter("blocked_to_apf_ticks").value)
+        self.clear_to_passthrough_ticks = int(self.get_parameter("clear_to_passthrough_ticks").value)
+        self.apf_activate_distance = float(self.get_parameter("apf_activate_distance").value)
+        self.safety_watch_distance = float(self.get_parameter("safety_watch_distance").value)
+        self.safety_caution_distance = float(self.get_parameter("safety_caution_distance").value)
+        self.safety_danger_distance = float(self.get_parameter("safety_danger_distance").value)
+        self.safety_watch_speed_limit_ws = float(self.get_parameter("safety_watch_speed_limit_ws").value)
+        self.safety_caution_speed_limit_ws = float(self.get_parameter("safety_caution_speed_limit_ws").value)
+        self.safety_danger_speed_limit_ws = float(self.get_parameter("safety_danger_speed_limit_ws").value)
+        self.apf_heading_stop_angle_deg = float(self.get_parameter("apf_heading_stop_angle_deg").value)
+        self.apf_heading_slow_angle_deg = float(self.get_parameter("apf_heading_slow_angle_deg").value)
+        self.apf_heading_stop_distance = float(self.get_parameter("apf_heading_stop_distance").value)
+        self.apf_heading_min_result_norm = float(self.get_parameter("apf_heading_min_result_norm").value)
+        self.enable_side_aware_escape_bias = bool(self.get_parameter("enable_side_aware_escape_bias").value)
+        self.side_aware_escape_distance = float(self.get_parameter("side_aware_escape_distance").value)
+        self.side_aware_lateral_gain = float(self.get_parameter("side_aware_lateral_gain").value)
+        ignored_classes_raw = str(self.get_parameter("ignored_discovered_classes").value)
+        self.ignored_discovered_classes = {
+            item.strip().lower() for item in ignored_classes_raw.split(",") if item.strip()
+        }
         self.apf_weight_profile = load_apf_weight_profile(self.apf_weights_file, self.apf_weight_profile_name)
 
         threat_map_file = str(self.get_parameter("threat_map_file").value)
@@ -791,8 +1069,14 @@ class TeamPotentialFieldNode(Node):
         self.raw_obstacles: List[Tuple[float, float]] = []
         self.discovered_obstacles: List[Tuple[float, float]] = []
         self.cluster_obstacles: List[Tuple[float, float]] = []
+        self.latest_clusters_payload: Optional[Dict[str, Any]] = None
         self.obstacles: List[Tuple[float, float]] = []
+        self.obstacle_source = "none"
         self.gt_obstacles: List[Dict[str, float]] = []
+        self.apf_active = False
+        self.clear_count = 0
+        self.blocked_count = 0
+        self.last_nearest_obstacle_distance: Optional[float] = None
 
         self.pub_rep = self.create_publisher(Vector3Stamped, "/tank/potential/repulsive_vector", 10)
         self.pub_att = self.create_publisher(Vector3Stamped, "/tank/potential/attractive_vector", 10)
@@ -802,6 +1086,7 @@ class TeamPotentialFieldNode(Node):
         self.pub_local_target = self.create_publisher(PoseStamped, "/tank/local_target/pose", 10)
         self.pub_desired_motion = self.create_publisher(String, "/tank/potential/desired_motion", 10)
         self.pub_status = self.create_publisher(String, "/tank/potential/status", 10)
+        self.pub_safety_status = self.create_publisher(String, "/tank/potential/safety_status", 10)
         self.pub_markers = self.create_publisher(MarkerArray, "/tank/rviz/potential_field_markers", 10)
 
         self.create_subscription(PoseStamped, PLAYER_POSE_TOPIC, self.player_cb, 10)
@@ -822,7 +1107,8 @@ class TeamPotentialFieldNode(Node):
             f"g*={self.influence_radius}, tangent={self.use_tangential_force}, "
             f"threats={len(self.threats)}, discovered={self.use_discovered_objects}, "
             f"strategy={self.motion_strategy}, lidar_pc2={self.lidar_points_topic}, "
-            f"clusters={self.use_lidar_clusters}, profile={self.apf_weight_profile_name}"
+            f"clusters={self.use_lidar_clusters}, cluster_first={self.cluster_first}, "
+            f"raw_fallback={self.use_raw_lidar_fallback}, profile={self.apf_weight_profile_name}"
         )
 
     # -------------------------------------------------------------------------
@@ -852,13 +1138,21 @@ class TeamPotentialFieldNode(Node):
 
     def lidar_clusters_cb(self, msg: String) -> None:
         try:
-            self.cluster_obstacles = parse_lidar_clusters_payload(json.loads(msg.data), self.cluster_obstacle_min_count)
+            payload = json.loads(msg.data)
+            self.latest_clusters_payload = payload if isinstance(payload, dict) else None
+            self.cluster_obstacles = parse_lidar_clusters_payload(
+                payload,
+                self.cluster_obstacle_min_count,
+                self.player_pos,
+            )
         except Exception as exc:
             self.get_logger().warn(f"failed to parse lidar APF clusters: {exc}")
 
     def discovered_cb(self, msg: String) -> None:
         try:
-            self.discovered_obstacles = parse_discovered_objects_payload(json.loads(msg.data))
+            self.discovered_obstacles = parse_discovered_objects_payload(
+                json.loads(msg.data), self.ignored_discovered_classes
+            )
         except Exception as exc:
             self.get_logger().warn(f"failed to parse discovered APF objects: {exc}")
 
@@ -938,6 +1232,162 @@ class TeamPotentialFieldNode(Node):
         )
         self.pub_markers.publish(arr)
 
+
+
+    def publish_safety_status(
+        self,
+        nearest_distance: Optional[float],
+        source: str,
+        forces: Optional[ForceBreakdown] = None,
+        motion: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """controller가 W를 끊을지 판단할 수 있도록 APF 안전 상태를 발행한다.
+
+        핵심 정책:
+        - 거리만 보지 않는다.
+        - APF 합벡터가 가리키는 이동희망 방향과 현재 차체 heading 차이가 크면
+          controller가 STOP + A/D pivot을 수행할 수 있게 권고한다.
+        """
+        mode = "clear"
+        limit = 1.0
+        if nearest_distance is not None:
+            if nearest_distance <= self.safety_danger_distance:
+                mode = "danger"
+                limit = self.safety_danger_speed_limit_ws
+            elif nearest_distance <= self.safety_caution_distance:
+                mode = "caution"
+                limit = self.safety_caution_speed_limit_ws
+            elif nearest_distance <= self.safety_watch_distance:
+                mode = "watch"
+                limit = self.safety_watch_speed_limit_ws
+
+        result_vec = (0.0, 0.0)
+        result_norm = 0.0
+        if forces is not None:
+            result_vec = (float(forces.result[0]), float(forces.result[1]))
+            result_norm = vector_norm(result_vec)
+
+        nearest_info = nearest_obstacle_relative_info(self.player_pos, self.player_yaw_rad, self.obstacles)
+
+        desired_heading_deg = None
+        theta_error_deg = None
+        if isinstance(motion, dict):
+            try:
+                desired_heading_deg = math.degrees(float(motion.get("theta_desired_rad")))
+            except Exception:
+                desired_heading_deg = None
+            try:
+                theta_error_deg = float(motion.get("theta_error_deg"))
+            except Exception:
+                theta_error_deg = None
+
+        heading_abs_error = abs(theta_error_deg) if theta_error_deg is not None else None
+        bearing_error = nearest_info.get("bearing_error_deg")
+        try:
+            bearing_abs = abs(float(bearing_error)) if bearing_error is not None else None
+        except Exception:
+            bearing_abs = None
+        # 장애물이 이미 차체 옆에 있는 통과 상황이면 STOP pivot 권고를 만들지 않는다.
+        # STOP은 정면 corridor를 막거나 아주 가까운 hard-close에서만 권고한다.
+        hard_close = nearest_distance is not None and nearest_distance <= 3.8
+        side_pass = (
+            nearest_distance is not None
+            and bearing_abs is not None
+            and nearest_distance >= 4.2
+            and bearing_abs >= 58.0
+        )
+        front_blocking = bool(hard_close or bearing_abs is None or bearing_abs <= 42.0)
+        close_for_apf_pivot = (
+            nearest_distance is not None
+            and nearest_distance <= self.apf_heading_stop_distance
+        )
+        apf_vector_valid = result_norm >= self.apf_heading_min_result_norm
+        apf_misaligned_stop = (
+            bool(self.apf_active)
+            and apf_vector_valid
+            and heading_abs_error is not None
+            and heading_abs_error >= self.apf_heading_stop_angle_deg
+        )
+        apf_misaligned_slow = (
+            bool(self.apf_active)
+            and apf_vector_valid
+            and heading_abs_error is not None
+            and heading_abs_error >= self.apf_heading_slow_angle_deg
+        )
+
+        emergency_pivot_recommended = bool(
+            front_blocking
+            and not (side_pass and not hard_close)
+            and (mode == "danger" or (close_for_apf_pivot and apf_misaligned_stop))
+        )
+        if side_pass and not hard_close:
+            # 옆으로 지나가는 장애물은 정지 권고 대신 caution 감속만 둔다.
+            if mode == "danger":
+                mode = "caution"
+            limit = min(limit, self.safety_caution_speed_limit_ws)
+        elif emergency_pivot_recommended:
+            mode = "danger"
+            limit = min(limit, self.safety_danger_speed_limit_ws)
+        elif close_for_apf_pivot and apf_misaligned_slow:
+            mode = "caution" if mode == "clear" else mode
+            limit = min(limit, self.safety_caution_speed_limit_ws)
+
+        # 정지 선회 방향은 APF 각도 부호보다 가장 가까운 장애물의 좌/우 위치를 우선한다.
+        # 예: 장애물이 오른쪽에 있으면 오른쪽으로 말려 들어가지 않도록 A(좌선회)를 권고한다.
+        recommended_turn_cmd = ""
+        if nearest_info.get("side") == "right":
+            recommended_turn_cmd = "A"
+        elif nearest_info.get("side") == "left":
+            recommended_turn_cmd = "D"
+        elif theta_error_deg is not None and abs(theta_error_deg) >= 1.0:
+            recommended_turn_cmd = "D" if theta_error_deg > 0.0 else "A"
+
+        payload = {
+            "ok": True,
+            "mode": mode,
+            "speed_limit_ws": float(clamp(limit, 0.0, 1.0)),
+            "nearest_obstacle_distance": nearest_distance,
+            "nearest_obstacle": nearest_info,
+            "nearest_obstacle_side": nearest_info.get("side"),
+            "nearest_obstacle_bearing_error_deg": nearest_info.get("bearing_error_deg"),
+            "nearest_obstacle_bearing_abs_deg": bearing_abs,
+            "nearest_obstacle_front_blocking": front_blocking,
+            "nearest_obstacle_side_pass": side_pass,
+            "nearest_obstacle_hard_close": hard_close,
+            "nearest_obstacle_turn_away_cmd": nearest_info.get("turn_away_cmd"),
+            "recommended_turn_cmd": recommended_turn_cmd,
+            "obstacle_source": source,
+            "apf_active": bool(self.apf_active),
+            "emergency_pivot_recommended": emergency_pivot_recommended,
+            "apf_heading_stop_recommended": bool(close_for_apf_pivot and apf_misaligned_stop),
+            "apf_heading_slow_recommended": bool(close_for_apf_pivot and apf_misaligned_slow),
+            "apf_desired_heading_deg": desired_heading_deg,
+            "apf_heading_error_deg": theta_error_deg,
+            "apf_heading_abs_error_deg": heading_abs_error,
+            "apf_result_vector": {
+                "x": result_vec[0],
+                "y": result_vec[1],
+                "norm": result_norm,
+            },
+            "apf_policy": {
+                "stop_angle_deg": self.apf_heading_stop_angle_deg,
+                "slow_angle_deg": self.apf_heading_slow_angle_deg,
+                "stop_distance_m": self.apf_heading_stop_distance,
+                "min_result_norm": self.apf_heading_min_result_norm,
+                "front_stop_bearing_deg": 42.0,
+                "side_pass_bearing_deg": 58.0,
+                "side_pass_min_distance": 4.2,
+                "hard_stop_distance": 3.8,
+            },
+            "raw_obstacle_points": len(self.raw_obstacles),
+            "cluster_obstacle_points": len(self.cluster_obstacles),
+            "discovered_obstacle_points": len(self.discovered_obstacles),
+            "obstacle_points": len(self.obstacles),
+        }
+        msg = String()
+        msg.data = json.dumps(payload, ensure_ascii=False)
+        self.pub_safety_status.publish(msg)
+
     # -------------------------------------------------------------------------
     # 메인 APF 사이클
     # -------------------------------------------------------------------------
@@ -948,22 +1398,29 @@ class TeamPotentialFieldNode(Node):
             return
 
         pos = self.player_pos
-        combined_obstacles = list(self.raw_obstacles)
-        if self.use_lidar_clusters:
-            combined_obstacles.extend(self.cluster_obstacles)
-        if self.use_discovered_objects:
-            combined_obstacles.extend(self.discovered_obstacles)
+        if self.latest_clusters_payload is not None:
+            self.cluster_obstacles = parse_lidar_clusters_payload(
+                self.latest_clusters_payload,
+                self.cluster_obstacle_min_count,
+                pos,
+            )
 
-        self.obstacles = filter_obstacles_for_apf(
-            combined_obstacles,
-            pos,
-            target,
-            self.min_obstacle_distance,
-            min(self.max_obstacle_distance, self.influence_radius),
-            self.front_sector_deg,
-            self.path_corridor_width,
-            self.obstacle_voxel_resolution,
-            self.max_obstacle_points,
+        self.obstacles, self.obstacle_source, self.last_nearest_obstacle_distance = choose_obstacles_for_apf(
+            raw_obstacles=self.raw_obstacles,
+            cluster_obstacles=self.cluster_obstacles,
+            discovered_obstacles=self.discovered_obstacles,
+            pos=pos,
+            target=target,
+            min_distance=self.min_obstacle_distance,
+            max_distance=min(self.max_obstacle_distance, self.influence_radius),
+            front_sector_deg=self.front_sector_deg,
+            corridor_width=self.path_corridor_width,
+            voxel_resolution=self.obstacle_voxel_resolution,
+            max_points=self.max_obstacle_points,
+            use_clusters=self.use_lidar_clusters,
+            cluster_first=self.cluster_first,
+            use_raw_fallback=self.use_raw_lidar_fallback,
+            use_discovered=self.use_discovered_objects,
         )
 
         forces = calc_resultant_force(
@@ -985,11 +1442,63 @@ class TeamPotentialFieldNode(Node):
             gt_obstacles=self.gt_obstacles,
         )
 
-        clear = (
+        # Side-aware APF bias:
+        # target 정렬 tangential force가 가끔 장애물이 있는 쪽으로 우회 방향을 잡아
+        # 오른쪽 장애물 앞에서 오른쪽으로 감겨 무한루프에 빠진다.
+        # 가까운 장애물은 좌/우 위치가 더 중요하므로, 차체 기준 장애물 반대쪽 lateral force를 추가한다.
+        nearest_info_for_bias = nearest_obstacle_relative_info(pos, self.player_yaw_rad, self.obstacles)
+        if (
+            self.enable_side_aware_escape_bias
+            and nearest_info_for_bias
+            and nearest_info_for_bias.get("distance") is not None
+            and float(nearest_info_for_bias.get("distance")) <= self.side_aware_escape_distance
+            and nearest_info_for_bias.get("side") in ("left", "right")
+        ):
+            obstacle_side = str(nearest_info_for_bias.get("side"))
+            escape_side = "left" if obstacle_side == "right" else "right"
+            lat = lateral_unit_from_heading(float(self.player_yaw_rad), escape_side)
+            proximity = clamp((self.side_aware_escape_distance - float(nearest_info_for_bias.get("distance"))) / max(self.side_aware_escape_distance, 1e-6), 0.0, 1.0)
+            bias_mag = self.side_aware_lateral_gain * (0.35 + 0.65 * proximity)
+            side_bias = (lat[0] * bias_mag, lat[1] * bias_mag)
+            biased_tan = limit_norm((forces.tangential[0] + side_bias[0], forces.tangential[1] + side_bias[1]), self.max_repulsive_norm)
+            biased_result = limit_norm((forces.result[0] + side_bias[0], forces.result[1] + side_bias[1]), self.max_result_norm)
+            forces = ForceBreakdown(
+                attractive=forces.attractive,
+                repulsive=forces.repulsive,
+                tangential=biased_tan,
+                threat=forces.threat,
+                result=biased_result,
+                attractive_potential=forces.attractive_potential,
+                repulsive_potential=forces.repulsive_potential,
+                threat_potential=forces.threat_potential,
+            )
+
+        raw_clear = (
             vector_norm(forces.repulsive) < self.repulsive_eps
             and vector_norm(forces.tangential) < self.repulsive_eps
             and vector_norm(forces.threat) < self.repulsive_eps
         )
+
+        # force가 아직 작아도, 장애물이 8m 안에 들어오면 APF가 강제로 활성화
+        near_blocked = (
+            self.last_nearest_obstacle_distance is not None
+            and self.last_nearest_obstacle_distance <= self.apf_activate_distance
+        )
+        
+        blocked_now = near_blocked or not raw_clear
+        if blocked_now:
+            self.blocked_count += 1
+            self.clear_count = 0
+        else:
+            self.clear_count += 1
+            self.blocked_count = 0
+
+        if not self.apf_active and self.blocked_count >= max(1, self.blocked_to_apf_ticks):
+            self.apf_active = True
+        if self.apf_active and self.clear_count >= max(1, self.clear_to_passthrough_ticks):
+            self.apf_active = False
+
+        clear = not self.apf_active
 
         motion = compute_desired_motion(
             self.player_yaw_rad,
@@ -1000,6 +1509,13 @@ class TeamPotentialFieldNode(Node):
             self.max_desired_speed,
             self.max_desired_omega,
             self.motion_strategy,
+        )
+
+        self.publish_safety_status(
+            self.last_nearest_obstacle_distance,
+            self.obstacle_source,
+            forces=forces,
+            motion=motion,
         )
 
         if self.passthrough_when_clear and clear:
@@ -1044,6 +1560,7 @@ class TeamPotentialFieldNode(Node):
         self.pub_desired_motion.publish(desired_msg)
 
         status = {
+            "near_blocked": near_blocked,
             "ok": True,
             "model": "lecture_style_apf",
             "source": source,
@@ -1056,16 +1573,39 @@ class TeamPotentialFieldNode(Node):
             "target": {"x": target[0], "y": target[1]},
             "local_target": {"x": local_target[0], "y": local_target[1]},
             "obstacle_points": len(self.obstacles),
+            "obstacle_source": self.obstacle_source,
+            "nearest_obstacle_distance": self.last_nearest_obstacle_distance,
             "raw_obstacle_points": len(self.raw_obstacles),
             "discovered_obstacle_points": len(self.discovered_obstacles),
             "cluster_obstacle_points": len(self.cluster_obstacles),
             "use_lidar_clusters": self.use_lidar_clusters,
+            "cluster_first": self.cluster_first,
+            "use_raw_lidar_fallback": self.use_raw_lidar_fallback,
             "threats": len(self.threats),
             "apf_weight_profile": self.apf_weight_profile_name,
             "apf_weight_profile_loaded": bool(self.apf_weight_profile),
             "apf_weight_profile_config": self.apf_weight_profile,
             "clear": clear,
+            "raw_clear": raw_clear,
+            "apf_active": self.apf_active,
+            "blocked_count": self.blocked_count,
+            "clear_count": self.clear_count,
             "parameters": {
+                "apf_activate_distance": self.apf_activate_distance,
+                "repulsive_eps": self.repulsive_eps,
+                "max_obstacle_distance": self.max_obstacle_distance,
+                "min_obstacle_distance": self.min_obstacle_distance,
+                "safety_watch_distance": self.safety_watch_distance,
+                "safety_caution_distance": self.safety_caution_distance,
+                "safety_danger_distance": self.safety_danger_distance,
+                "safety_watch_speed_limit_ws": self.safety_watch_speed_limit_ws,
+                "safety_caution_speed_limit_ws": self.safety_caution_speed_limit_ws,
+                "safety_danger_speed_limit_ws": self.safety_danger_speed_limit_ws,
+                "apf_heading_stop_angle_deg": self.apf_heading_stop_angle_deg,
+                "apf_heading_slow_angle_deg": self.apf_heading_slow_angle_deg,
+                "apf_heading_stop_distance": self.apf_heading_stop_distance,
+                "apf_heading_min_result_norm": self.apf_heading_min_result_norm,
+                
                 "k_att": self.k_att,
                 "k_rep": self.k_rep,
                 "g_star": self.influence_radius,
@@ -1076,6 +1616,11 @@ class TeamPotentialFieldNode(Node):
                 "local_target_distance": self.local_target_distance,
                 "front_sector_deg": self.front_sector_deg,
                 "path_corridor_width": self.path_corridor_width,
+                "max_obstacle_points": self.max_obstacle_points,
+                "obstacle_voxel_resolution": self.obstacle_voxel_resolution,
+                "blocked_to_apf_ticks": self.blocked_to_apf_ticks,
+                "clear_to_passthrough_ticks": self.clear_to_passthrough_ticks,
+                "ignored_discovered_classes": sorted(self.ignored_discovered_classes),
             },
             "potential": {
                 "u_att": forces.attractive_potential,

@@ -6,17 +6,24 @@ from collections import deque
 # 채널 중심 추종 / 사이드 바이어스 튜닝 상수
 # clearance: 셀에서 가장 가까운 장애물까지 거리(m). 이 값보다 가까우면 비용 가산 → 벽에서 멀어짐
 CLEARANCE_DESIRED = 5      # 이상적 여유공간(m). 채널 폭이 넓으면 중앙으로 정렬
-CLEARANCE_WEIGHT = 0.4     # 여유공간 부족 1m당 추가 비용 (너무 크면 좁은 통로를 회피)
+CLEARANCE_WEIGHT = 0.35    # 여유공간 부족 1m당 추가 비용 (너무 크면 좁은 통로를 회피)
 # side bias: 의도한 채널(A=서쪽 / B=동쪽)을 벗어나면 비용 가산 → 중앙 섬 반대편으로 새지 않음
-SIDE_TOL = 7.0             # 기준선에서 이만큼은 허용(m)
-SIDE_WEIGHT = 2.0          # 기준선 반대편으로 1m 넘어갈 때마다 추가 비용
+SIDE_TOL = 10.0            # 기준선에서 이만큼은 허용(m) - A/B 경로 유지용 허용 폭
+SIDE_WEIGHT = 6.0          # 기준선 반대편으로 1m 넘어갈 때마다 추가 비용 - 반대편 경로 튐 방지
 # 이미 지나친(전차 뒤) 웨이포인트는 버려서 경로가 뒤로 갔다 오는 hook을 막는다.
 # (너무 크면 뒤 웨이포인트로 후진 경로가 생김 — 1m만 허용)
 WAYPOINT_PASSED_TOL = 1.0  # 전차 z보다 이만큼 이상 뒤(z 작음)인 웨이포인트는 통과한 것으로 보고 제외(m)
+# off-route 복귀: 웨이포인트를 z(북향)로 지났어도 측면(루트축 수직=현 N-S 루트에선 x)으로 이만큼 넘게
+# 벗어났으면 '지남'으로 보지 않는다 → 동쪽으로 밀려나도 서쪽 웨이포인트를 유지해 A*가 루트로 되돌아간다.
+# (없으면 z만으로 지남 판정 → 측면 이탈 시 웨이포인트 삭제 → 목적지 최단=중앙 숲 관통.)
+WAYPOINT_LATERAL_TOL = 18.0
 # 전차 차폭 보정: 큰 바위 반경에 소폭 버퍼를 더해 차체 충돌 여유를 준다.
-# (전역값이라 크게 잡으면 B 코리더가 막히므로 작게; 큰 여유는 루트 웨이포인트로 확보)
-TANK_HALF_WIDTH = 1.0      # 바위 반경에 더할 차폭 버퍼(m). 2로 키우면 route B가 막힘
-ROCK_RADIUS = 4.0          # 큰 바위 물리 반경(m)
+# Known map obstacle은 자율주행 전 이미 알고 있는 hard no-go 정보이므로,
+# tree/rock/wall을 너무 얇게 넣으면 A*가 초록점 사이를 가로질러 간다.
+TANK_HALF_WIDTH = 2.0      # 전차 폭 4m 기준 반폭 버퍼(m)
+ROCK_RADIUS = 4.0          # 큰 바위 물리 반경(m). 실제 폭 8m 기준: 중심 반경 4m
+TREE_RADIUS = 4.0          # finalmap Tree hard no-go 반경(m). 과팽창으로 인한 경로 와리가리 완화
+DEFAULT_STATIC_INFLATE = 2.0  # static map obstacle A* hard inflation(m). 실제 반경 + 전차 반폭 + 안전여유
 
 def create_grid(width: int, height: int, resolution: float) -> list[list[int]]:
     """해상도에 맞춘 2차원 빈 격자 맵을 생성합니다."""
@@ -28,10 +35,16 @@ def add_obstacles(grid: list[list[int]], obstacles: list[dict], res: float, infl
     """장애물 영역과 안전 반경(inflate)을 격자에 1로 마킹합니다."""
     rows, cols = len(grid), len(grid[0])
     for obs in obstacles:
-        x_min = max(0, int((obs['x_min'] - inflate) / res))
-        x_max = min(cols - 1, int((obs['x_max'] + inflate) / res))
-        z_min = max(0, int((obs['z_min'] - inflate) / res))
-        z_max = min(rows - 1, int((obs['z_max'] + inflate) / res))
+        # dynamic lidar / discovered / static obstacle이 서로 다른 inflate를 쓸 수 있게 한다.
+        # _inflate_override가 없으면 함수 인자로 받은 기본 inflate를 사용한다.
+        try:
+            obs_inflate = float(obs.get('_inflate_override', inflate)) if isinstance(obs, dict) else float(inflate)
+        except Exception:
+            obs_inflate = float(inflate)
+        x_min = max(0, int((obs['x_min'] - obs_inflate) / res))
+        x_max = min(cols - 1, int((obs['x_max'] + obs_inflate) / res))
+        z_min = max(0, int((obs['z_min'] - obs_inflate) / res))
+        z_max = min(rows - 1, int((obs['z_max'] + obs_inflate) / res))
         for z in range(z_min, z_max + 1):
             for x in range(x_min, x_max + 1):
                 grid[z][x] = 1
@@ -88,11 +101,15 @@ def _x_ref_at(z_real: float, waypoints: list[tuple[float, float]]):
 def _build_cost_map(
     grid: list[list[int]], res: float, clearance_weight: float,
     waypoints: list[tuple[float, float]] = None, side: str = None,
+    terrain_grid: dict = None, terrain_weight: float = 0.0,
 ) -> list[list[float]]:
     """A* 이동 비용에 더할 셀별 추가 비용맵을 생성합니다.
 
     - 채널 중심 비용: 여유공간(clearance)이 부족한 셀(벽 근처)에 비용 가산 → 중앙 정렬
     - 사이드 바이어스: 의도한 채널 반대편(중앙 섬 쪽)으로 새는 셀에 비용 가산
+    - 지형 비용(게이트형): terrain_grid가 주어질 때만 적용. 거친(고도차 큰) 셀일수록 비용 가산
+      → 시나리오2에서 험지 회피. 정찰엔 terrain_grid=None이라 무영향(기존 동작 동일).
+      terrain_grid = {(ix, iy): roughness(dz/m)} — A* 격자 인덱스(ix=열=map x, iy=행=map y) 기준.
     """
     rows, cols = len(grid), len(grid[0])
     cost = [[0.0] * cols for _ in range(rows)]
@@ -126,6 +143,12 @@ def _build_cost_map(
                         over = x * res - bound
                         if over > 0:
                             crow[x] += SIDE_WEIGHT * over
+
+    # 지형 비용(게이트형): terrain_grid 있을 때만. 희소 dict라 셀 단위로만 순회.
+    if terrain_grid and terrain_weight > 0:
+        for (ix, iy), rough in terrain_grid.items():
+            if 0 <= iy < rows and 0 <= ix < cols and grid[iy][ix] == 0:
+                cost[iy][ix] += terrain_weight * float(rough)
     return cost
 
 
@@ -265,8 +288,26 @@ def smooth_path(grid: list[list[int]], path: list[tuple[int, int]]) -> list[tupl
         
     return smoothed
 
+# 정찰(recon) 발견객체 class별 A* 회피 반경(m). 시나리오2 합본맵(scenario2_map.map)에서 사용.
+# tank 포함 — 발견 객체는 종류 불문 전부 회피(사용자 결정). person/human은 제외(저신뢰·설계상 제거).
+# tank는 여기서 회피 장애물이면서, 생성기가 별도 targets 목록에도 위치를 남겨 차후 교전 로직이 쓴다.
+DISCOVERED_CLASS_RADIUS = {
+    'rock': ROCK_RADIUS + TANK_HALF_WIDTH,  # 5.0 (finalmap 바위와 동일 정책)
+    'car': 3.0,
+    'house': 6.0,
+    'tent': 2.5,
+    'tank': 4.0,                            # 차체 + 버퍼
+}
+
+
 def load_static_obstacles_from_map(map_path: str) -> list[dict]:
-    """맵 파일에서 고정된 지형지물(Tree, Rock, Wall 등) 위치를 읽어 bbox 형태로 반환합니다."""
+    """맵 파일에서 정적 장애물(나무/바위/벽 + 정찰 발견객체)을 읽어 bbox 형태로 반환합니다.
+
+    - finalmap 네이티브(Tree/Rock/Wall): 기존 정책 유지 — 동적/위협 Human/Tank/House는 제외.
+    - 정찰 발견객체(`detected_<class>_NNNN` + metadata.class_name): rock/car/house/tent/tank를
+      종류 불문 전부 A* 회피 장애물로 포함(class별 반경). person/human만 제외.
+      → finalmap 동작 불변(finalmap엔 Tree/Rock/Wall만 존재), 시나리오2 합본맵에서만 발견객체가 추가됨.
+    """
     try:
         with open(map_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -274,26 +315,39 @@ def load_static_obstacles_from_map(map_path: str) -> list[dict]:
         return []
     obstacles = []
     for obs in data.get('obstacles', []):
-        prefab = obs.get('prefabName', '')
-        # 동적/위협 객체는 제외
-        if prefab.startswith('Human') or prefab.startswith('Tank') or prefab.startswith('House'):
-            continue
-        
+        prefab = str(obs.get('prefabName', ''))
+        meta = obs.get('metadata', {}) or {}
         pos = obs.get('position', {})
         x, z = pos.get('x', 0.0), pos.get('z', 0.0)
-        
-        # 크기 추정 (프리팹 이름 기반)
-        # 3.5m 반경은 x≈105~110 인접 나무들이 z=15 레벨까지 겹쳐 B루트 통로를 막으므로 2.5m로 축소
-        radius = 2.5
-        obs_type = 'Tree'
-        if 'Rock' in prefab:
-            # 큰 바위: 물리 반경 + 전차 반폭만큼 더 띄워 경로 중심선이 차체를 바위 밖으로 유지
-            # (경로 중심선이 바위 5m 밖이어도 차폭 2m면 차체가 바위에 닿아 끼이던 문제 해결)
-            radius = ROCK_RADIUS + TANK_HALF_WIDTH
-            obs_type = 'Rock'
-        elif 'Wall' in prefab:
-            radius = 2.0
-            obs_type = 'Wall'
+        # 시나리오2 발견객체(detected_*/metadata.class_name)는 class별 반경으로, finalmap 네이티브는
+        # 팀원 fix/control 반경(Tree=TREE_RADIUS, Wall=3.0)으로. 둘을 분기 처리.
+        is_discovered = prefab.startswith('detected_') or bool(meta.get('class_name'))
+        if is_discovered:
+            # 정찰 발견객체: metadata.class_name 우선, 없으면 prefab(detected_<class>_NNNN)에서 추출
+            cls = meta.get('class_name')
+            if not cls and '_' in prefab:
+                parts = prefab.split('_')
+                if len(parts) >= 2:
+                    cls = parts[1]
+            cls = str(cls or '').strip().lower()
+            if cls in ('', 'person', 'human'):
+                continue  # 저신뢰/설계상 제외
+            radius = DISCOVERED_CLASS_RADIUS.get(cls, 3.0)
+            obs_type = cls
+        else:
+            # finalmap 네이티브: 동적/위협 객체(Human/Tank/House)는 제외(정찰 clean-base 원칙)
+            if prefab.startswith('Human') or prefab.startswith('Tank') or prefab.startswith('House'):
+                continue
+            # Tree는 자율주행 전 이미 아는 금지 장애물 → TREE_RADIUS(팀원)로 크게(초록점 밀집 가로지름 방지)
+            radius = TREE_RADIUS
+            obs_type = 'Tree'
+            if 'Rock' in prefab:
+                # 큰 바위: 물리 반경 + 전차 반폭만큼 더 띄워 경로 중심선이 차체를 바위 밖으로 유지
+                radius = ROCK_RADIUS + TANK_HALF_WIDTH
+                obs_type = 'Rock'
+            elif 'Wall' in prefab:
+                radius = 3.0  # Wall류 static obstacle 반경 +1m(팀원)
+                obs_type = 'Wall'
 
         obstacles.append({
             'type': obs_type,
@@ -311,28 +365,32 @@ def plan_global_path(
     obstacles: list[dict],
     inflate: float = 3.0,
     static_obstacles: list[dict] = None,
+    static_inflate: float = DEFAULT_STATIC_INFLATE,
     clearance_weight: float = 0.0,
     waypoints_ref: list[tuple[float, float]] = None,
     side: str = None,
+    terrain_grid: dict = None,
+    terrain_weight: float = 0.0,
 ) -> list[tuple[float, float]]:
     """시작점에서 목표점까지의 전역 경로를 생성합니다.
 
-    static_obstacles: 맵에서 미리 로드한 정적 장애물 (inflate 없이 적용).
+    static_obstacles: 맵에서 미리 로드한 정적 장애물.
+    static_inflate: 이미 알고 있는 static map obstacle을 hard no-go로 부풀리는 반경.
     clearance_weight: >0이면 벽에서 멀어지는(채널 중심) 비용을 추가.
     waypoints_ref/side: 'east'(B)/'west'(A) 채널을 벗어나지 않도록 사이드 바이어스 적용.
+    terrain_grid/terrain_weight: 지형 거칠기 비용(게이트형, 시나리오2). None이면 무영향.
     """
     res = 1.0  # 1m 격자
     grid = create_grid(300, 300, res)
     if static_obstacles:
-        # inflate=1.0: A* 경로가 나무 중심에서 최소 3.5m(bbox 2.5m + 1.0m 여유) 이격
-        # inflate=0으로는 bbox 경계 바로 옆을 지나 실제 주행 편차로 충돌이 발생
-        # B루트 z=15 통로(x=110~121 간격 10.6m)에서 gap=3.6m → 1m 격자에서 통과 가능
-        add_obstacles(grid, static_obstacles, res, inflate=1.0)
+        # Known map obstacle은 APF 회피 대상이 아니라 A*에서 아예 못 지나가야 하는 hard no-go다.
+        add_obstacles(grid, static_obstacles, res, inflate=static_inflate)
     add_obstacles(grid, obstacles, res, inflate=inflate)
 
     cost_map = None
-    if clearance_weight > 0 or side:
-        cost_map = _build_cost_map(grid, res, clearance_weight, waypoints_ref, side)
+    if clearance_weight > 0 or side or terrain_grid:
+        cost_map = _build_cost_map(grid, res, clearance_weight, waypoints_ref, side,
+                                   terrain_grid, terrain_weight)
 
     start_grid = (int(start_pos[0] / res), int(start_pos[1] / res))
     goal_grid = (int(goal_pos[0] / res), int(goal_pos[1] / res))
@@ -356,30 +414,40 @@ def plan_path_through_waypoints(
     dynamic_obstacles: list[dict],
     static_obstacles: list[dict] = None,
     inflate: float = 3.0,
+    static_inflate: float = DEFAULT_STATIC_INFLATE,
     clearance_weight: float = 0.0,
     side: str = None,
+    terrain_grid: dict = None,
+    terrain_weight: float = 0.0,
 ) -> list[tuple[float, float]]:
     """웨이포인트를 순서대로 경유하는 연결 경로를 생성합니다.
 
     clearance_weight/side: 채널 중심 추종 + 사이드 바이어스. 웨이포인트는 x좌표를 강제하는
     통과점이 아니라 '의도한 채널' 힌트로 작동하며, 막힌 웨이포인트는 직진하지 않고 건너뜁니다.
+    terrain_grid/terrain_weight: 지형 거칠기 비용(게이트형, 시나리오2). None이면 무영향.
     """
     # 격자와 비용맵은 세그먼트 간 동일하므로 한 번만 생성해 재사용 (성능: 8x 빠름)
     res = 1.0
     grid = create_grid(300, 300, res)
     if static_obstacles:
-        add_obstacles(grid, static_obstacles, res, inflate=1.0)
+        add_obstacles(grid, static_obstacles, res, inflate=static_inflate)
     add_obstacles(grid, dynamic_obstacles, res, inflate=inflate)
 
     cost_map = None
-    if clearance_weight > 0 or side:
-        cost_map = _build_cost_map(grid, res, clearance_weight, waypoints, side)
+    if clearance_weight > 0 or side or terrain_grid:
+        cost_map = _build_cost_map(grid, res, clearance_weight, waypoints, side,
+                                   terrain_grid, terrain_weight)
 
     full_path: list[tuple[float, float]] = []
     prev = start_pos
-    # 현재 위치보다 z축(북쪽)으로 뒤쳐진 웨이포인트는 이미 지나온 것으로 간주하고 버림 (후진/hook 방지).
+    # 웨이포인트 '지남' 판정 = z(북향)로 뒤쳐짐 AND 측면(x)으로 가까움. 측면으로 크게 벗어났으면(off-route)
+    # 안 버리고 유지 → A*가 그 웨이포인트(루트)로 되돌아간 뒤 진행(중앙 숲 관통 최단경로 방지).
     # 단, 마지막(목적지) 웨이포인트는 항상 남겨 경로가 목적지까지 이어지게 한다.
-    valid_waypoints = [wp for wp in waypoints if wp[1] >= start_pos[1] - WAYPOINT_PASSED_TOL]
+    def _wp_passed(wp):
+        behind_in_z = wp[1] < start_pos[1] - WAYPOINT_PASSED_TOL
+        near_laterally = abs(wp[0] - start_pos[0]) <= WAYPOINT_LATERAL_TOL
+        return behind_in_z and near_laterally
+    valid_waypoints = [wp for wp in waypoints if not _wp_passed(wp)]
     if waypoints and (not valid_waypoints or valid_waypoints[-1] is not waypoints[-1]):
         valid_waypoints.append(waypoints[-1])
     for wp in valid_waypoints:

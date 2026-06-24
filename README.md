@@ -221,8 +221,7 @@ python3 scripts/verify_route_plan.py        # 시뮬 없이 루트 품질 검증
 - **LLM 주행 의사결정 연동**, **HILS**, **RL**
 - **리팩토링 Phase C** — 비대 파일 모듈 분할(무테스트 환경이라 한 번에 한 파일 + 스모크)
 
-> 리팩토링 단계 기준은 [docs/CONVENTIONS.md](docs/CONVENTIONS.md), 전차 동역학 식별 실험은
-> [docs/EXPERIMENT_RESULTS_AND_PLAN.md](docs/EXPERIMENT_RESULTS_AND_PLAN.md) 참고.
+> 전차 동역학 식별 실험은 [docs/EXPERIMENT_RESULTS_AND_PLAN.md](docs/EXPERIMENT_RESULTS_AND_PLAN.md) 참고.
 
 ---
 
@@ -247,13 +246,14 @@ tank_project/
 
 | 문서 | 내용 |
 |---|---|
+| **[docs/TECHNICAL_DEEP_DIVE.md](docs/TECHNICAL_DEEP_DIVE.md)** | **기술 상세 — 센서/주행/LLM/정찰 위험도/시나리오2를 이론·방식·코드·데이터흐름까지(시작점)** |
 | [docs/README_REORGANIZED_STRUCTURE.md](docs/README_REORGANIZED_STRUCTURE.md) | 패키지 구분 + 상세 토픽/데이터흐름 다이어그램 |
 | [docs/SIMULATOR_API.md](docs/SIMULATOR_API.md) | 시뮬 HTTP API 명세(`/init`·`/info`·`/detect`·`/get_action`) |
-| [docs/CONVENTIONS.md](docs/CONVENTIONS.md) | 코딩 컨벤션(주석 한국어 통일·네이밍·리팩토링 단계) |
+| [docs/SCENARIO2_DESIGN.md](docs/SCENARIO2_DESIGN.md) | 시나리오2(교전·복귀) 설계 |
 | [docs/EXPERIMENT_RESULTS_AND_PLAN.md](docs/EXPERIMENT_RESULTS_AND_PLAN.md) | 전차 동역학 식별 실험(속도·회전·정지거리) |
+| [docs/RL_STEP0_RESET_TEST.md](docs/RL_STEP0_RESET_TEST.md) | 시뮬 리셋 검증(RL 선행) |
 | [docs/INTEGRATION_NOTES_VISUAL_PERCEPTION.md](docs/INTEGRATION_NOTES_VISUAL_PERCEPTION.md) | 비주얼 인지 통합 노트 |
 | [docs/REFACTOR_NOTES_LIDAR_CONFIG.md](docs/REFACTOR_NOTES_LIDAR_CONFIG.md) | LiDAR 책임 분리·config 리팩토링 |
-| [docs/implementation_plan.md](docs/implementation_plan.md) | 맵 동기화·검증 마일스톤 계획 |
 | [src/ros_bridge/README.md](src/ros_bridge/README.md) · [src/rviz_visualization/README.md](src/rviz_visualization/README.md) · [src/potential/README_LECTURE_APF_UPDATE.md](src/potential/README_LECTURE_APF_UPDATE.md) | 패키지별 노트 |
 
 ---

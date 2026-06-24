@@ -24,6 +24,7 @@
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -39,6 +40,12 @@ from std_msgs.msg import String
 # 프로젝트 루트 = 이 스크립트의 상위(scripts/)의 상위
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPORT_DIR = os.path.join(PROJECT_ROOT, "recon_reports")
+# 시나리오2 인계 산출물 경로(프로젝트 안). local_path_node/terrain 노드는 ~/tankcc에 저장하므로
+# 정찰 종료 시 여기로 루트별 복사해 보존한다(다음 루트가 latest를 덮어써도 유지).
+RECON_MAP_DIR = os.path.join(REPORT_DIR, "recon_map")
+TERRAIN_DIR = os.path.join(REPORT_DIR, "terrain_maps")
+DISCOVERED_LATEST = os.path.expanduser("~/tankcc/tank_discovered_maps/discovered_objects_latest.map")
+TERRAIN_LATEST = os.path.expanduser("~/tankcc/tank_terrain_maps/terrain_map_latest.npz")
 
 # 출발지(map 좌표). BLUE_START raw (60, 8, 30) → map (x=60, y=z=30)
 START = (60.0, 30.0)
@@ -93,7 +100,62 @@ def is_reached(route_id: str) -> bool:
     return bool(rep and rep.get("result", {}).get("reached"))
 
 
+def finalize_recon_artifacts(route_id: str) -> None:
+    """정찰 발견객체+지형을 디스크에 저장하고 프로젝트 경로(recon_reports/)로 루트별 복사한다.
+
+    ★ 반드시 스택 생존 중(kill_stack 전)에 호출 — local_path_node가 살아있어야 서비스가 응답한다.
+    /tank/map/discovered/save 콜백이 지형 finalize까지 체이닝(local_path_node.py)하므로
+    한 번 호출로 발견객체 + 지형 NPZ를 함께 저장한다(지형 노드가 떠 있을 때).
+    실패해도 정찰 시퀀스엔 영향 없음(graceful) — 시나리오2 빌드는 사후 build_scenario2_map.py로.
+    """
+    print(f"  [Route {route_id}] 발견객체·지형 저장 트리거 (/tank/map/discovered/save)...")
+    try:
+        subprocess.run(
+            ["ros2", "service", "call", "/tank/map/discovered/save", "std_srvs/srv/Trigger", "{}"],
+            cwd=PROJECT_ROOT, check=False, timeout=30,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception as e:
+        print(f"  [Route {route_id}] [경고] save 트리거 실패: {e}")
+        return
+    time.sleep(4.0)  # 지형 finalize는 비동기(서비스 체이닝) → NPZ 기록 시간 여유
+    os.makedirs(RECON_MAP_DIR, exist_ok=True)
+    os.makedirs(TERRAIN_DIR, exist_ok=True)
+    disc_dst = os.path.join(RECON_MAP_DIR, f"discovered_objects_route_{route_id}.map")
+    if os.path.exists(DISCOVERED_LATEST):
+        shutil.copy2(DISCOVERED_LATEST, disc_dst)
+        print(f"  [Route {route_id}] 발견맵 → {disc_dst}")
+    else:
+        print(f"  [Route {route_id}] [경고] 발견맵 미생성: {DISCOVERED_LATEST}")
+    terr_dst = os.path.join(TERRAIN_DIR, f"terrain_map_route_{route_id}.npz")
+    if os.path.exists(TERRAIN_LATEST):
+        shutil.copy2(TERRAIN_LATEST, terr_dst)
+        print(f"  [Route {route_id}] 지형 → {terr_dst}")
+    else:
+        print(f"  [Route {route_id}] [참고] 지형 NPZ 미생성: {TERRAIN_LATEST} "
+              f"(terrain finalize 노드가 안 떠 있으면 정상 — 지형 없이 진행)")
+
+
+def reset_terrain_recording(route_id: str) -> None:
+    """각 루트 시작 시 지형 노드를 reset(점 clear + 녹화 재개)한다.
+
+    이전 루트의 finalize가 녹화를 꺼두므로(terrain node _recording_enable=False), reset 없이는
+    다음 루트(B) 지형이 안 쌓인다. 또 이전 정찰/루트 점이 그 위로 누적되지 않게 clear한다.
+    → 루트별 fresh 지형(route_A=A, route_B=B) + 정찰 간 누적 방지. graceful(노드 없으면 무시)."""
+    try:
+        subprocess.run(
+            ["ros2", "service", "call", "/tank/terrain/reset_map", "std_srvs/srv/Trigger", "{}"],
+            cwd=PROJECT_ROOT, check=False, timeout=15,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        print(f"  [Route {route_id}] 지형 녹화 reset(clear+재개)")
+    except Exception as e:
+        print(f"  [Route {route_id}] [참고] 지형 reset 생략(노드 없을 수 있음): {e}")
+
+
 def launch_route(route_id: str, side: str) -> subprocess.Popen:
+    # 정찰 = 평범 주행 + 발견객체 기록. 포탑 stop-and-aim·차체 weave는 그냥 주행보다 확정을
+    # 깎아먹어 제거함(2026-06-23). 커버리지는 routes.yaml 웨이포인트(사용자 설계)로.
     cmd = [
         "ros2", "launch", "control", "tank_autonomous_control.launch.py",
         "mission_type:=recon", f"route_id:={route_id}", f"route_side:={side}",
@@ -189,6 +251,10 @@ def main() -> int:
             except FileNotFoundError:
                 pass
 
+            # 지형 노드를 루트별로 reset(점 clear + 녹화 재개). 이전 루트 finalize가 녹화를 꺼두므로
+            # 안 하면 B 지형이 안 쌓이고, 이전 점 위에 누적됨. (지형 노드 없으면 graceful 무시)
+            reset_terrain_recording(route_id)
+
             print(f"\n=== [Route {route_id}] 자율주행 시작 (side={side}) ===")
             current_proc = launch_route(route_id, side)
 
@@ -226,6 +292,9 @@ def main() -> int:
                         print(f"  [Route {route_id}] 주행 중... (player pose 수신 대기)")
                 time.sleep(1.0)
             print(f"  [Route {route_id}] 도착감지={arrived} ({arrived_by})")
+            # 스택 죽이기 전에 발견객체·지형을 저장·복사(시나리오2 인계용). 도착 시에만.
+            if arrived:
+                finalize_recon_artifacts(route_id)
             kill_stack(current_proc)
             current_proc = None
             cleanup_stack()

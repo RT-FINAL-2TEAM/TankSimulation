@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>mission</name>
+  <version>0.0.0</version>
+  <description>시나리오2 임무 두뇌 — 전술 decision FSM(돌파/교전/복귀) + 교전 계약 + mock turret.
+  정찰(시1) 산출물(scenario2_map.map) 위에서 임무를 운전한다. 반사층(APF/A*/제어)은 그대로 두고
+  전술층(이벤트 단위)만 담당한다.</description>
+  <maintainer email="wol00107@gmail.com">Jun</maintainer>
+  <license>TODO</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

@@ -128,6 +128,10 @@ class TerrainRecordFinalizeNode(Node):
         self.declare_parameter("wireframe_line_width", 0.04)
         self.declare_parameter("wireframe_max_height_gap", 1.5)
         self.declare_parameter("wireframe_connect_diagonal", False)
+        # 바닥을 점/타일이 아니라 연속 면(TRIANGLE_LIST 메쉬)으로 표시. 색은 기존 height_color 유지.
+        self.declare_parameter("surface_mesh_enabled", True)
+        self.declare_parameter("surface_fill_gaps", True)       # 관측 안 된 셀을 이웃 보간으로 메움
+        self.declare_parameter("surface_max_gap_cells", 2)      # 보간 확장 한계(과한 외삽 방지)
 
         # 장애물 제거용 local low-surface prefilter.
         self.declare_parameter("terrain_prefilter_enabled", True)
@@ -165,6 +169,9 @@ class TerrainRecordFinalizeNode(Node):
         self.wireframe_line_width = float(self.get_parameter("wireframe_line_width").value)
         self.wireframe_max_height_gap = float(self.get_parameter("wireframe_max_height_gap").value)
         self.wireframe_connect_diagonal = bool(self.get_parameter("wireframe_connect_diagonal").value)
+        self.surface_mesh_enabled = bool(self.get_parameter("surface_mesh_enabled").value)
+        self.surface_fill_gaps = bool(self.get_parameter("surface_fill_gaps").value)
+        self.surface_max_gap_cells = int(self.get_parameter("surface_max_gap_cells").value)
         self.terrain_prefilter_enabled = bool(self.get_parameter("terrain_prefilter_enabled").value)
         self.terrain_cell_size = float(self.get_parameter("terrain_cell_size").value)
         self.terrain_low_percentile = float(self.get_parameter("terrain_low_percentile").value)
@@ -393,7 +400,8 @@ class TerrainRecordFinalizeNode(Node):
                 non_ground = non_ground_from_ground_filter.astype(np.float32)
             method = f"local_low_surface+{method}"
 
-        markers = self.make_elevation_markers(ground)
+        markers = (self.make_surface_mesh_markers(ground)
+                   if self.surface_mesh_enabled else self.make_elevation_markers(ground))
         wireframe_markers = self.make_wireframe_markers(ground)
 
         self._final_accumulated = accumulated
@@ -604,6 +612,76 @@ class TerrainRecordFinalizeNode(Node):
         c.a = float(alpha)
         return c
 
+    def _fill_grid_gaps(self, height: Dict[Tuple[int, int], float], max_gap: int) -> Dict[Tuple[int, int], float]:
+        """관측 안 된 셀을 이웃(상하좌우) 평균으로 메운다. max_gap회 반복(과한 외삽 방지).
+        고립점 외삽을 막기 위해 이웃이 2개 이상일 때만 채운다."""
+        filled = dict(height)
+        for _ in range(max(0, int(max_gap))):
+            added: Dict[Tuple[int, int], float] = {}
+            for (ix, iy) in list(filled.keys()):
+                for nb in ((ix + 1, iy), (ix - 1, iy), (ix, iy + 1), (ix, iy - 1)):
+                    if nb in filled or nb in added:
+                        continue
+                    vals = [filled[m] for m in
+                            ((nb[0] + 1, nb[1]), (nb[0] - 1, nb[1]), (nb[0], nb[1] + 1), (nb[0], nb[1] - 1))
+                            if m in filled]
+                    if len(vals) >= 2:
+                        added[nb] = float(sum(vals) / len(vals))
+            if not added:
+                break
+            filled.update(added)
+        return filled
+
+    def make_surface_mesh_markers(self, ground: np.ndarray) -> MarkerArray:
+        """ground grid를 연속 표면(TRIANGLE_LIST 메쉬)으로 렌더. 색은 기존 height_color(초록→빨강) 재사용.
+        인접 4셀(quad)이 모두 있으면 두 삼각형으로 채운다. 구멍은 surface_fill_gaps로 이웃 보간.
+        점/타일(make_elevation_markers) 대비 '진짜 바닥처럼' 보이고 마커 1개라 렉도 가볍다."""
+        arr = MarkerArray()
+        arr.markers.append(self.make_delete_all_marker("final_elevation_grid"))
+        height = self.grid_height_map(ground)
+        if not height:
+            return arr
+        if self.surface_fill_gaps:
+            height = self._fill_grid_gaps(height, self.surface_max_gap_cells)
+        zs = list(height.values())
+        z_min, z_max = min(zs), max(zs)
+        cs = self.grid_cell_size
+
+        marker = Marker()
+        marker.header.frame_id = self.map_frame
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "final_elevation_grid"
+        marker.id = 1
+        marker.type = Marker.TRIANGLE_LIST
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = marker.scale.y = marker.scale.z = 1.0
+        # 전체 material 색/알파. 정점색(marker.colors)이 실제 면 색을 정하지만,
+        # color.a가 0(기본값)이면 RViz2가 TRIANGLE_LIST를 투명 처리해 안 보인다 → 반드시 불투명 지정.
+        marker.color.r = 1.0
+        marker.color.g = 1.0
+        marker.color.b = 1.0
+        marker.color.a = 1.0
+
+        def vtx(ix: int, iy: int):
+            z = height[(ix, iy)]
+            return Point(x=float((ix + 0.5) * cs), y=float((iy + 0.5) * cs), z=float(z)), z
+
+        for (ix, iy) in height.keys():
+            quad = [(ix, iy), (ix + 1, iy), (ix + 1, iy + 1), (ix, iy + 1)]
+            if not all(k in height for k in quad):
+                continue
+            pts = [vtx(*k) for k in quad]
+            for tri in ((0, 1, 2), (0, 2, 3)):
+                for j in tri:
+                    p, z = pts[j]
+                    marker.points.append(p)
+                    marker.colors.append(self.height_color(z, z_min, z_max, self.marker_alpha))
+        if not marker.points:
+            return arr
+        arr.markers.append(marker)
+        return arr
+
     def make_wireframe_markers(self, ground: np.ndarray) -> MarkerArray:
         """ground grid cell 중심을 인접 cell끼리 선으로 연결해 지형 wireframe을 만든다."""
         arr = MarkerArray()
@@ -794,7 +872,8 @@ class TerrainRecordFinalizeNode(Node):
         self._final_accumulated = accumulated
         self._final_ground = ground
         self._final_non_ground = non_ground
-        self._final_markers = self.make_elevation_markers(ground)
+        self._final_markers = (self.make_surface_mesh_markers(ground)
+                               if self.surface_mesh_enabled else self.make_elevation_markers(ground))
         self._final_wireframe_markers = self.make_wireframe_markers(ground)
         self._finalized = True
         self._last_summary = (

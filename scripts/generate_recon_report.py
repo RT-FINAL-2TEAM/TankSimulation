@@ -41,32 +41,38 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_REPORT_DIR = os.path.join(PROJECT_ROOT, "recon_reports")
 DEFAULT_MAP = os.path.join(PROJECT_ROOT, "src", "rviz_visualization", "map", "finalmap.map")
 DEFAULT_ROUTES = os.path.join(PROJECT_ROOT, "src", "path_planning", "config", "routes.yaml")
+# 정찰이 perceive한 위협(센서퓨전 확정 발견객체)의 출처 — 위험도는 이걸로 산정.
+DEFAULT_DISCOVERED_DIR = os.path.join(DEFAULT_REPORT_DIR, "recon_map")
+# 정답맵(GT) — 위험도엔 안 쓰고, "정찰이 얼마나 정확/충분히 찾았나" 검증에만.
+DEFAULT_GT_MAP = os.path.join(PROJECT_ROOT, "src", "rviz_visualization", "map", "final_v3.map")
 
-# 출발/목적 (routes.yaml finalmap 기준). 우회비 직선거리 계산에 사용.
+# 출발/목적 (routes.yaml finalmap 기준). 우회비 직선거리 계산 + 중심선 폴백에 사용.
 START_XY = (60.0, 30.0)
 GOAL_XY = (110.0, 276.5)
 
-# 위험도 가중치 (은밀성 우선: 발견 W1 / 노출 W2 높게). 합 1.0.
-DEFAULT_WEIGHTS = {"W1": 0.35, "W2": 0.30, "W3": 0.10, "W4": 0.15, "W5": 0.10}
+# 위험도 가중치 — perception 기반 3요소(은밀성/위협근접/험지). 합 1.0.
+# 시간/거리/우회는 '위험'이 아니라 '효율'이라 위험도에서 분리(별도 표기).
+DEFAULT_WEIGHTS = {"stealth": 0.5, "proximity": 0.3, "terrain": 0.2}
 
-# W1 프록시: YOLO 위협클래스별 가중. YOLO 클래스 = person/tank/rock/house/car.
-# 위협(시야로 발각): person(병사)/tank(적전차)/house(초소). rock/car는 비위협 장애물 → 제외.
-# (house는 초소로 FOV 보유. 더 위험하게 보려면 가중을 1.0↑로.)
+# YOLO 위협클래스별 가중(정보 섹션 표기용 — 위험도 점수엔 미반영).
+# YOLO 고카운트는 중복 탐지라, 위치 위험도는 센서퓨전 확정 발견객체로만 산정한다.
 THREAT_CLASS_WEIGHTS = {"person": 1.0, "tank": 1.0, "house": 1.0}
 
-# reference 정규화 기준값 (해당 값이면 norm=1.0).
+# 발견객체맵(perception)에서 위협으로 볼 class → 탐지 반경(전방향 가정).
+# perception은 객체 heading을 모르므로 House FOV 콘 대신 반경+LoS로 보수적 판정.
+# person은 fix/fusion에서 ignored 처리라 발견맵엔 안 들어옴.
+PERCEIVED_THREAT_RADII = {"house": tg.HOUSE_RADIUS_M, "tank": tg.TANK_RADIUS_M}
+
+# reference 정규화 기준값. terrain만 위험도에 사용(은밀성/근접은 이미 0~1 길이비).
 REFS = {
-    "threat": 20.0,     # W1 위협 발견 가중합
-    "exposure": 60.0,   # W2 시야 노출시간(s)
-    "detour": 2.0,      # W3 우회비 상한(직선=1.0, 2.0=2배)
-    "terrain": 8.0,     # W4 σPitch+σRoll(deg)
-    "time": 300.0,      # W5 소요시간(s)
+    "terrain": 8.0,     # 험지 σPitch+σRoll(deg)가 이 값이면 norm=1.0
 }
 
 # 데이터 품질 임계
 MIN_VALID_DISTANCE = 5.0   # m 미만 이동이면 무효 런(멈춤/미완주)
 COLLISION_WARN = 10        # 초과 시 충돌 과다 경고
 PERCEPTION_MATCH_TOL = 3.0  # m, LiDAR 탐지↔GT 객체 최근접 매칭 허용오차
+THREAT_MATCH_TOL = 10.0     # m, 발견 위협↔GT 위협 매칭 허용오차(초소/전차는 큰 객체라 centroid 오차 큼)
 
 # YOLO 클래스 → GT prefab 접두사 매핑(센서 정확도 비교용)
 YOLO_TO_GT_PREFAB = {"person": "Human", "tank": "Tank", "rock": "Rock", "house": "House", "car": "Car"}
@@ -192,7 +198,226 @@ def _detour_ratio(distance: float) -> Optional[float]:
 
 
 # --------------------------------------------------------------------------- #
-# 노출/발각 사후 계산 (전차 궤적 + GT 위협)
+# perception(발견객체맵) 위협 파싱 — 위험도 산정의 위협 출처
+# --------------------------------------------------------------------------- #
+def parse_perceived_threats(discovered_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """발견객체맵 dict → 위협 리스트 [{type, x, z, radius, prefabName}].
+
+    센서퓨전으로 확정된 house/tank만 위협으로. metadata.class_name 우선,
+    없으면 prefab 'detected_<class>_' 에서 class 유도. heading은 모르므로 미포함(전방향).
+    """
+    threats: List[Dict[str, Any]] = []
+    for obs in discovered_data.get("obstacles", []):
+        if not isinstance(obs, dict):
+            continue
+        meta = obs.get("metadata") if isinstance(obs.get("metadata"), dict) else {}
+        cls = str(meta.get("class_name", "")).lower()
+        prefab = str(obs.get("prefabName", ""))
+        if not cls and prefab.startswith("detected_"):
+            parts = prefab.split("_")
+            cls = parts[1].lower() if len(parts) > 1 else ""
+        if cls not in PERCEIVED_THREAT_RADII:
+            continue
+        pos = obs.get("position") if isinstance(obs.get("position"), dict) else {}
+        try:
+            x, z = float(pos.get("x", 0.0)), float(pos.get("z", 0.0))
+        except (TypeError, ValueError):
+            continue
+        threats.append({"type": cls, "x": x, "z": z,
+                        "radius": PERCEIVED_THREAT_RADII[cls], "prefabName": prefab})
+    return threats
+
+
+# --------------------------------------------------------------------------- #
+# 클린 루트 중심선 추출 + densify (planned_paths v0, 폴백 routes.yaml)
+# --------------------------------------------------------------------------- #
+def extract_centerline(report: dict, rid: str, routes_path: str) -> Optional[List[Tuple[float, float]]]:
+    """그 루트를 임무에서 따라갈 '깨끗한 중심선' [(x,z)]. weave 궤적이 아님.
+
+    출처: diagnostics.planned_paths 의 v0(version/t 최소 = start→전 waypoint→goal 전체 루트).
+    없으면 routes.yaml 폴백. 좌표계는 map (x,z) = 궤적/위협과 동일.
+    """
+    diag = report.get("diagnostics") if isinstance(report.get("diagnostics"), dict) else {}
+    planned = diag.get("planned_paths") if isinstance(diag.get("planned_paths"), list) else []
+    best: Optional[Tuple[float, list]] = None
+    for pp in planned:
+        if not isinstance(pp, dict):
+            continue
+        path = pp.get("path")
+        if not isinstance(path, list) or len(path) < 2:
+            continue
+        ver = pp.get("version", pp.get("t", 0.0))
+        try:
+            ver = float(ver)
+        except (TypeError, ValueError):
+            ver = 0.0
+        if best is None or ver < best[0]:
+            best = (ver, path)
+    if best is not None:
+        pts: List[Tuple[float, float]] = []
+        for p in best[1]:
+            if isinstance(p, (list, tuple)) and len(p) >= 2:
+                try:
+                    pts.append((float(p[0]), float(p[1])))
+                except (TypeError, ValueError):
+                    continue
+        if len(pts) >= 2:
+            return pts
+    return _centerline_from_routes(rid, routes_path)
+
+
+def _centerline_from_routes(rid: str, routes_path: str) -> Optional[List[Tuple[float, float]]]:
+    """폴백: routes.yaml 의 start→waypoints→destination 폴리라인."""
+    try:
+        import yaml as _yaml
+        with open(routes_path, encoding="utf-8") as f:
+            rd = _yaml.safe_load(f)["finalmap"]
+        poly = [tuple(rd["start"])] + [tuple(p) for p in rd["routes"].get(rid, [])] + [tuple(rd["destination"])]
+        pts = [(float(x), float(z)) for x, z in poly]
+        return pts if len(pts) >= 2 else None
+    except Exception:  # pragma: no cover - 폴백 실패시 노출 N/A
+        return None
+
+
+def densify_polyline(poly: List[Tuple[float, float]], step: float = 0.75) -> List[Tuple[float, float]]:
+    """폴리라인을 ~step(m) 간격으로 균등 보간. 끝점 보존."""
+    if not poly or len(poly) < 2:
+        return [tuple(p) for p in (poly or [])]
+    out: List[Tuple[float, float]] = [tuple(poly[0])]
+    for i in range(1, len(poly)):
+        x0, z0 = poly[i - 1]
+        x1, z1 = poly[i]
+        d = math.hypot(x1 - x0, z1 - z0)
+        n = max(1, int(d / step))
+        for k in range(1, n + 1):
+            t = k / n
+            out.append((x0 + (x1 - x0) * t, z0 + (z1 - z0) * t))
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# 길이 기반 노출(은밀성)·근접 — 클린 중심선 × perception 위협
+# --------------------------------------------------------------------------- #
+def compute_centerline_exposure(centerline: Optional[List[Tuple[float, float]]],
+                                threats: List[Dict[str, Any]],
+                                los_obstacles: List[Dict[str, float]]) -> Optional[dict]:
+    """중심선을 따라 길이 기반 노출/근접 산출(속도 무관, weave 무관).
+
+    - stealth(은밀성): 어느 위협의 반경 내 **AND LoS 트임**(실제로 보임) 구간 길이 비율.
+    - proximity(위협근접): 반경 내(LoS 무관, 막혀도 물리적 근접) 구간 길이 비율.
+    perception 위협엔 heading이 없어 FOV 콘은 적용 안 함(반경+LoS, 보수적).
+    반환 None = 중심선 미수집. 위협 0개면 비율 0으로 정상 반환.
+    """
+    if not centerline or len(centerline) < 2:
+        return None
+    pts = densify_polyline(centerline, 0.75)
+    total_len = 0.0
+    exposed_len = 0.0    # 반경+LoS (any threat)
+    proximity_len = 0.0  # 반경 (any threat)
+    stats = [{"exposed": 0.0, "within": 0.0, "min_dist": float("inf")} for _ in threats]
+
+    for i in range(1, len(pts)):
+        x0, z0 = pts[i - 1]
+        x1, z1 = pts[i]
+        seg = math.hypot(x1 - x0, z1 - z0)
+        if seg <= 0:
+            continue
+        mx, mz = 0.5 * (x0 + x1), 0.5 * (z0 + z1)
+        total_len += seg
+        seg_exposed = False
+        seg_within = False
+        for ti, th in enumerate(threats):
+            r = float(th.get("radius") or tg.threat_radius(th))
+            d = math.hypot(mx - float(th["x"]), mz - float(th["z"]))
+            if d <= r:
+                seg_within = True
+                stats[ti]["within"] += seg
+                if d < stats[ti]["min_dist"]:
+                    stats[ti]["min_dist"] = d
+                if tg.check_los(mx, mz, float(th["x"]), float(th["z"]), los_obstacles):
+                    seg_exposed = True
+                    stats[ti]["exposed"] += seg
+        if seg_exposed:
+            exposed_len += seg
+        if seg_within:
+            proximity_len += seg
+
+    per_threat: List[dict] = []
+    for ti, th in enumerate(threats):
+        st = stats[ti]
+        if st["within"] > 0:
+            per_threat.append({
+                "threat": th.get("prefabName") or f"{th.get('type', 'threat')}#{ti}",
+                "type": th.get("type", "unknown"),
+                "exposed_length_m": round(st["exposed"], 2),
+                "within_radius_length_m": round(st["within"], 2),
+                "min_dist_m": round(st["min_dist"], 2) if st["min_dist"] != float("inf") else None,
+            })
+    per_threat.sort(key=lambda e: e["exposed_length_m"], reverse=True)
+    return {
+        "stealth_ratio": round(exposed_len / total_len, 4) if total_len > 0 else 0.0,
+        "proximity_ratio": round(proximity_len / total_len, 4) if total_len > 0 else 0.0,
+        "exposed_length_m": round(exposed_len, 2),
+        "proximity_length_m": round(proximity_len, 2),
+        "total_length_m": round(total_len, 2),
+        "threat_count": len(threats),
+        "per_threat": per_threat,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# 정찰 정확도 검증 — perception 위협 vs GT(정답맵). 위험도엔 미반영, 신뢰도 지표.
+# --------------------------------------------------------------------------- #
+def _gt_family(g: Dict[str, Any]) -> str:
+    t = str(g.get("type", "")) or str(g.get("prefabName", ""))
+    if t.startswith("House"):
+        return "house"
+    if t.startswith("Tank"):
+        return "tank"
+    return t.lower()
+
+
+def validate_perception_vs_gt(perceived: List[Dict[str, Any]], gt_threats: List[Dict[str, Any]],
+                              tol: float = THREAT_MATCH_TOL) -> dict:
+    """발견 위협 ↔ GT 위협 최근접(동일 class family) 매칭 → 발견/누락/오탐/위치오차/신뢰도."""
+    from collections import Counter
+    matched_gt: set = set()
+    pos_errs: List[float] = []
+    false_pos = 0
+    for pt in perceived:
+        fam = str(pt.get("type", ""))
+        best_i, best_d = -1, float("inf")
+        for gi, g in enumerate(gt_threats):
+            if gi in matched_gt or _gt_family(g) != fam:
+                continue
+            d = math.hypot(float(pt["x"]) - float(g["x"]), float(pt["z"]) - float(g["z"]))
+            if d < best_d:
+                best_d, best_i = d, gi
+        if best_i >= 0 and best_d <= tol:
+            matched_gt.add(best_i)
+            pos_errs.append(best_d)
+        else:
+            false_pos += 1
+    gt_n = len(gt_threats)
+    found = len(matched_gt)
+    gt_fam = Counter(_gt_family(g) for g in gt_threats)
+    pc_fam = Counter(str(p.get("type", "")) for p in perceived)
+    families = sorted(set(gt_fam) | set(pc_fam))
+    return {
+        "gt_total": gt_n,
+        "perceived_total": len(perceived),
+        "found": found,
+        "missed": gt_n - found,
+        "false_pos": false_pos,
+        "mean_pos_err_m": round(sum(pos_errs) / len(pos_errs), 2) if pos_errs else None,
+        "confidence": round(found / gt_n, 3) if gt_n else None,
+        "by_family": [{"family": f, "gt": int(gt_fam.get(f, 0)), "perceived": int(pc_fam.get(f, 0))}
+                      for f in families],
+    }
+
+
+# --------------------------------------------------------------------------- #
+# (legacy) weave 궤적 기반 노출 — 정보/참고용. 위험도엔 미사용(중심선 노출로 대체).
 # --------------------------------------------------------------------------- #
 def compute_exposure(trajectory: Optional[List[Tuple[float, float, float]]],
                      threats: List[Dict[str, Any]],
@@ -284,9 +509,7 @@ def validate_run(m: dict) -> Tuple[bool, List[str]]:
     if m["collisions"] > COLLISION_WARN:
         warnings.append(f"충돌 과다: {m['collisions']}회 — 주행 품질 낮음")
     if not m["yolo_counts"] and m["distance_m"] >= MIN_VALID_DISTANCE:
-        warnings.append("비전(YOLO) 미수집 — W1 위협발견 과소평가 가능")
-    if m["trajectory"] is None:
-        warnings.append("궤적 미수집 — W2 노출시간/발각횟수 N/A (재주행 시 Part B 로깅으로 채워짐)")
+        warnings.append("비전(YOLO) 미수집 — 정찰 인지 데이터 부족")
     return valid, warnings
 
 
@@ -296,22 +519,21 @@ def _clamp01(v: float) -> float:
 
 def normalize(metrics_by_route: Dict[str, dict], exposures: Dict[str, Optional[dict]],
               mode: str) -> Dict[str, dict]:
-    """루트별 위험 항목 raw값 추출 후 0~1 정규화. None 항목은 available=False."""
+    """루트별 위험 3요소 raw값 추출 후 0~1 정규화. None 항목은 available=False.
+
+    은밀성/위협근접은 이미 0~1 길이비(중심선 노출), 험지만 REF 정규화.
+    """
     raw: Dict[str, Dict[str, Optional[float]]] = {}
     for rid, m in metrics_by_route.items():
         exp = exposures.get(rid)
         raw[rid] = {
-            "threat": m["threat_proxy"],
-            "exposure": (exp["total_fov_dwell_s"] if exp else None),
-            "detour": (m["detour_ratio"] if m["detour_ratio"] is not None else None),
+            "stealth": (exp["stealth_ratio"] if exp else None),
+            "proximity": (exp["proximity_ratio"] if exp else None),
             "terrain": m["terrain_sigma"],
-            "time": m["sim_time_s"],
         }
 
-    out: Dict[str, dict] = {}
-    keys = ["threat", "exposure", "detour", "terrain", "time"]
-    for rid in metrics_by_route:
-        out[rid] = {}
+    out: Dict[str, dict] = {rid: {} for rid in metrics_by_route}
+    keys = ["stealth", "proximity", "terrain"]
     for key in keys:
         vals = {rid: raw[rid][key] for rid in raw}
         avail = {rid: v for rid, v in vals.items() if v is not None}
@@ -330,19 +552,18 @@ def _norm_value(key: str, v: float, avail_vals: Dict[str, float], mode: str) -> 
         if hi - lo < 1e-9:
             return 0.5
         return round(_clamp01((v - lo) / (hi - lo)), 3)
-    # reference
-    if key == "detour":
-        ref = REFS["detour"]
-        return round(_clamp01((v - 1.0) / (ref - 1.0)) if ref > 1.0 else 0.5, 3)
+    # reference: 은밀성/근접은 이미 0~1 비율, 험지만 σ/REF
+    if key in ("stealth", "proximity"):
+        return round(_clamp01(v), 3)
     ref = REFS.get(key, 1.0)
     return round(_clamp01(v / ref) if ref > 0 else 0.5, 3)
 
 
 def risk_score(norm_route: Dict[str, dict], weights: Dict[str, float]) -> Tuple[float, List[dict]]:
-    """가중합 위험도 총점 + 항목별 분해."""
-    keymap = [("threat", "W1", "적/초소 발견"), ("exposure", "W2", "시야 노출시간"),
-              ("detour", "W3", "우회/이탈"), ("terrain", "W4", "지형 굴곡도"),
-              ("time", "W5", "소요시간")]
+    """가중합 위험도 총점 + 항목별 분해 (은밀성/위협근접/험지)."""
+    keymap = [("stealth", "stealth", "은밀성(시야 노출 길이비)"),
+              ("proximity", "proximity", "위협 근접(반경내 길이비)"),
+              ("terrain", "terrain", "험지(지형 굴곡 σ)")]
     total = 0.0
     breakdown: List[dict] = []
     for key, wkey, label in keymap:
@@ -359,7 +580,11 @@ def risk_score(norm_route: Dict[str, dict], weights: Dict[str, float]) -> Tuple[
     return round(total, 4), breakdown
 
 
-def recommend(scored: Dict[str, dict], tie_eps: float = 0.05) -> dict:
+def recommend(scored: Dict[str, dict], gt_validation: Optional[Dict[str, dict]] = None,
+              tie_eps: float = 0.05) -> dict:
+    """위험도(perception 기반) 최저 루트 추천. 승자는 위험도로만 정하되, GT 검증상
+    인지 신뢰도가 낮으면(위협 누락 多) 추천 신뢰도를 강등하고 재정찰을 경고한다.
+    (GT로 승자를 바꾸지 않음 — 위험도는 perception, GT는 신뢰도 캡 용도.)"""
     valid = {rid: s for rid, s in scored.items() if s["valid"]}
     if not valid:
         return {"winner": None, "confidence": "none",
@@ -367,15 +592,29 @@ def recommend(scored: Dict[str, dict], tie_eps: float = 0.05) -> dict:
     ranked = sorted(valid.items(), key=lambda kv: kv[1]["risk_total"])
     winner = ranked[0][0]
     if len(valid) == 1:
-        return {"winner": winner, "confidence": "low",
-                "reason": f"유효 루트가 route_{winner} 하나뿐 — 비교군 부재(상대 루트 무효)로 단독 평가."}
-    second = ranked[1]
-    gap = second[1]["risk_total"] - ranked[0][1]["risk_total"]
-    if gap < tie_eps:
-        return {"winner": winner, "confidence": "low",
-                "reason": f"위험도 차 {gap:.3f} < {tie_eps} — 사실상 동률. 보조지표(충돌/지형)로 신중 판단 필요."}
-    return {"winner": winner, "confidence": "medium",
-            "reason": f"route_{winner} 위험도 최저({ranked[0][1]['risk_total']:.3f} vs {second[1]['risk_total']:.3f}, 차 {gap:.3f})."}
+        result = {"winner": winner, "confidence": "low",
+                  "reason": f"유효 루트가 route_{winner} 하나뿐 — 비교군 부재(상대 루트 무효)로 단독 평가."}
+    else:
+        second = ranked[1]
+        gap = second[1]["risk_total"] - ranked[0][1]["risk_total"]
+        if gap < tie_eps:
+            result = {"winner": winner, "confidence": "low",
+                      "reason": f"위험도 차 {gap:.3f} < {tie_eps} — 사실상 동률. 보조지표(충돌/지형)로 신중 판단 필요."}
+        else:
+            result = {"winner": winner, "confidence": "medium",
+                      "reason": f"route_{winner} 위험도 최저({ranked[0][1]['risk_total']:.3f} vs {second[1]['risk_total']:.3f}, 차 {gap:.3f})."}
+
+    # 인지 신뢰도 캡: 승자의 GT 검증 신뢰도가 낮거나 발견 위협 0이면 강등 + 재정찰 경고.
+    # (perception이 위협을 놓쳐 위험도가 과소평가된 '거짓 안전'일 수 있음.)
+    if gt_validation and winner in gt_validation:
+        gv = gt_validation[winner]
+        gconf = gv.get("confidence")
+        if gv.get("perceived_total", 0) == 0 or (gconf is not None and gconf < 0.5):
+            result["confidence"] = "low"
+            result["reason"] += (f" ⚠️ 단, route_{winner} 정찰 인지 신뢰도 낮음"
+                                 f"(GT {gv.get('gt_total', 0)}개 중 {gv.get('found', 0)}개 발견) — "
+                                 "perception 기반 위험도가 위협 누락으로 과소평가됐을 수 있어 **재정찰 권장**.")
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -454,93 +693,85 @@ def _setup_korean_font() -> None:
 
 
 def render_exposure_figure(rid: str,
+                           centerline: Optional[List[Tuple[float, float]]],
                            trajectory: Optional[List[Tuple[float, float, float]]],
                            threats: List[Dict[str, Any]],
-                           gt_objects: List[Dict[str, Any]],
-                           gt_bboxes: List[Dict[str, float]],
+                           los_obstacles: List[Dict[str, float]],
+                           gt_threats: List[Dict[str, Any]],
                            exposure: Optional[dict],
                            out_dir: str) -> Optional[str]:
-    """실제 주행 궤적 + 초소(House002) 시야(FOV)/반경 + 실제 발각 지점을 PNG로 그린다.
+    """채점한 클린 중심선 + 발견 위협(전방향 반경) + 중심선 노출 구간을 PNG로 그린다.
 
-    발각 판정은 보고서 수치와 동일하게 tg.is_threat_active(반경+FOV±30°+LoS)를 그대로 쓴다.
-    matplotlib이 없거나 궤적 미수집이면 None을 반환(보고서는 그림 없이 계속).
+    - 초록 선: 채점한 클린 중심선(planned_paths v0). 옅은 파랑: 실제 weave 궤적(참고).
+    - 빨강 원: 발견 위협 반경(perception, heading 없음→전방향). 회색 ◇: GT 위협(검증용 맥락).
+    - 빨강 점: 중심선에서 반경+LoS로 노출된 구간(보고서 stealth_ratio와 동일 판정).
+    matplotlib이 없거나 중심선 미수집이면 None을 반환(보고서는 그림 없이 계속).
     """
-    if not trajectory:
+    if not centerline or len(centerline) < 2:
         return None
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        from matplotlib.patches import Wedge, Circle
+        from matplotlib.patches import Circle
     except Exception as e:  # pragma: no cover - 환경 의존
         print(f"[경고] matplotlib 미설치 — 노출 지도 생략: {e}", file=sys.stderr)
         return None
     _setup_korean_font()
 
-    xs = [float(p[1]) for p in trajectory]
-    zs = [float(p[2]) for p in trajectory]
+    cl = densify_polyline(centerline, 0.75)
+    cxs = [p[0] for p in cl]
+    czs = [p[1] for p in cl]
 
     fig, ax = plt.subplots(figsize=(10, 10), dpi=130)
 
-    # 1) GT 장애물(맥락) — 위협 아닌 정적객체만 옅은 점으로
-    cls_color = {"Tree": "#7fae7f", "Rock": "#a9742f", "Car": "#ff8c1a",
-                 "Tent": "#c2a36b", "Human": "#cfcfcf"}
-    for o in gt_objects:
-        if o.get("is_threat"):
-            continue
-        name = str(o.get("prefabName", ""))
-        cls = next((k for k in cls_color if name.startswith(k)), None)
-        if cls is None:
-            continue
-        ax.scatter([o["x"]], [o["z"]], s=12, color=cls_color[cls], alpha=0.45, zorder=1)
+    # 1) GT 위협(검증 맥락) — 회색 빈 다이아몬드(위험도엔 미반영)
+    for g in gt_threats:
+        ax.scatter([float(g["x"])], [float(g["z"])], marker="D", s=55, facecolors="none",
+                   edgecolors="#888888", linewidths=1.2, zorder=3)
 
-    # 2) 위협 시야: House002=부채꼴(25m·±30°), 그 외=반경 원
+    # 2) 발견 위협(perception) 반경 — heading 없음 → 전방향 원
     for th in threats:
         tx, tz = float(th["x"]), float(th["z"])
-        if str(th.get("type")) == "House002" or str(th.get("prefabName", "")).startswith("House002"):
-            center_mpl = 90.0 - float(th.get("yaw", 0.0))   # atan2(dx,dz)→matplotlib(+x기준 반시계): 90-yaw
-            ax.add_patch(Wedge((tx, tz), tg.HOUSE_RADIUS_M,
-                               center_mpl - tg.HOUSE_FOV_HALF_DEG, center_mpl + tg.HOUSE_FOV_HALF_DEG,
-                               facecolor="#d62728", alpha=0.13, edgecolor="#d62728", lw=0.8, zorder=2))
-        else:
-            ax.add_patch(Circle((tx, tz), tg.threat_radius(th),
-                                facecolor="#d62728", alpha=0.10, edgecolor="#d62728", lw=0.8, zorder=2))
+        r = float(th.get("radius") or tg.threat_radius(th))
+        ax.add_patch(Circle((tx, tz), r, facecolor="#d62728", alpha=0.12,
+                            edgecolor="#d62728", lw=0.8, zorder=2))
         ax.scatter([tx], [tz], marker="s", s=70, facecolors="none",
                    edgecolors="#d62728", linewidths=1.6, zorder=5)
-        ax.annotate(str(th.get("prefabName", "")), (tx, tz), fontsize=6, color="#a01b1c",
-                    xytext=(3, 3), textcoords="offset points", zorder=6)
+        ax.annotate(str(th.get("prefabName", "") or th.get("type", "")), (tx, tz), fontsize=6,
+                    color="#a01b1c", xytext=(3, 3), textcoords="offset points", zorder=6)
 
-    # 3) 실제 주행 궤적 + 진행 방향 화살표(연속점에서 유도 — 로깅 heading 의존 X)
-    ax.plot(xs, zs, "-", color="#1f6fd6", lw=1.8, alpha=0.9, zorder=4, label="실제 주행 궤적")
-    step = max(1, len(trajectory) // 12)
-    for i in range(step, len(trajectory), step):
-        ax.annotate("", xy=(xs[i], zs[i]), xytext=(xs[i - 1], zs[i - 1]),
-                    arrowprops=dict(arrowstyle="->", color="#1f6fd6", alpha=0.6), zorder=4)
+    # 3) 실제 weave 궤적(옅은 파랑, 참고)
+    if trajectory and len(trajectory) >= 2:
+        ax.plot([float(p[1]) for p in trajectory], [float(p[2]) for p in trajectory],
+                "-", color="#9ec5f0", lw=1.2, alpha=0.8, zorder=3, label="실제 주행(weave, 참고)")
 
-    # 4) 발각 지점(빨강) + 발각 초소로 연결선 — 보고서 노출시간과 동일 판정
+    # 4) 채점한 클린 중심선(초록)
+    ax.plot(cxs, czs, "-", color="#1a9850", lw=2.2, alpha=0.95, zorder=4, label="클린 중심선(채점)")
+
+    # 5) 중심선 노출 구간(빨강) — 반경+LoS, 보고서 stealth_ratio와 동일 판정
     ex, ez = [], []
-    for p in trajectory:
-        x, z = float(p[1]), float(p[2])
+    for (mx, mz) in cl:
         for th in threats:
-            if tg.is_threat_active((x, z), th, gt_bboxes):
-                ex.append(x)
-                ez.append(z)
-                ax.plot([x, float(th["x"])], [z, float(th["z"])],
-                        color="#d62728", lw=0.5, alpha=0.30, zorder=3)
+            r = float(th.get("radius") or tg.threat_radius(th))
+            if math.hypot(mx - float(th["x"]), mz - float(th["z"])) <= r and \
+               tg.check_los(mx, mz, float(th["x"]), float(th["z"]), los_obstacles):
+                ex.append(mx)
+                ez.append(mz)
                 break
     if ex:
-        ax.scatter(ex, ez, s=26, color="#d62728", edgecolors="black", linewidths=0.4,
-                   zorder=7, label=f"발각 샘플({len(ex)})")
+        ax.scatter(ex, ez, s=22, color="#d62728", edgecolors="black", linewidths=0.4,
+                   zorder=7, label=f"노출 구간({len(ex)})")
 
-    # 5) 출발/목적
-    ax.scatter([xs[0]], [zs[0]], marker="o", s=130, color="#1a9850",
+    # 6) 출발/목적
+    ax.scatter([cxs[0]], [czs[0]], marker="o", s=130, color="#1a9850",
                edgecolors="black", zorder=8, label="출발")
     ax.scatter([GOAL_XY[0]], [GOAL_XY[1]], marker="^", s=150, color="black",
                edgecolors="white", zorder=8, label="목적지")
 
-    det = exposure["detection_count"] if exposure else 0
-    dwell = exposure["total_fov_dwell_s"] if exposure else 0.0
-    ax.set_title(f"route_{rid} 실주행·위협 노출 — 발각 {det}회 · 노출 {dwell:.2f}s", fontsize=11)
+    stealth = exposure["stealth_ratio"] if exposure else 0.0
+    prox = exposure["proximity_ratio"] if exposure else 0.0
+    ax.set_title(f"route_{rid} 중심선·위협 노출 — 은밀성 {stealth:.3f} · 근접 {prox:.3f}", fontsize=11)
     ax.set_xlim(0, 300)
     ax.set_ylim(0, 300)
     ax.set_aspect("equal")
@@ -606,6 +837,7 @@ def _pick_better(a: Any, b: Any, lower_better: bool = True) -> Tuple[str, str]:
 def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict[str, Optional[dict]],
                     scored: Dict[str, dict],
                     rec: dict, weights: Dict[str, float], norm_mode: str,
+                    gt_validation: Dict[str, dict],
                     figures: Optional[Dict[str, Optional[str]]] = None,
                     overview_fig: Optional[str] = None) -> str:
     L: List[str] = []
@@ -613,6 +845,8 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
     L.append(f"# 정찰 보고서 — {rk}")
     L.append("")
     L.append("> 정밀 정찰 및 경로 위험도·은밀성 평가 (Scenario 1). 값은 **↓ 낮을수록 안전(은밀)**.")
+    L.append("> 위험도는 **정찰이 perceive한 것(센서퓨전 확정 발견객체)** 으로 산정 — 정답(GT)이 아님. "
+             "GT는 7장에서 정찰 정확도 검증에만 사용.")
     L.append("")
 
     # 1. 임무 개요
@@ -620,14 +854,15 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
     L.append("")
     mp = next((metrics[r]["map"] for r in routes if metrics[r]["map"]), "finalmap")
     L.append(f"- 맵: `{mp}` · 출발 {START_XY} → 목적지 {GOAL_XY}")
-    L.append(f"- 위험도 가중치: " + ", ".join(f"{k}={v}" for k, v in weights.items()) + f" · 정규화: `{norm_mode}`")
+    L.append(f"- 위험도(perception 기반) 가중치: " + ", ".join(f"{k}={v}" for k, v in weights.items()) +
+             f" · 정규화: `{norm_mode}`")
     L.append(f"- 입력 루트: {', '.join('route_' + r for r in routes)}")
     L.append("")
     if overview_fig:
         L.append(f"![A/B 계획 경로 (새 맵)]({os.path.basename(overview_fig)})")
         L.append("")
         L.append("> A(서·파랑)/B(동·초록) **계획 경로**를 맵 위에 표시 (▲=목적지, ★=적전차 리스폰). "
-                 "실제 주행 궤적·발각은 5장 참고.")
+                 "실제 주행 궤적·노출은 6장 참고.")
         L.append("")
 
     # 2. 주행 요약
@@ -639,29 +874,39 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
         return f"| {name} | " + " | ".join(fn(metrics[r]) for r in routes) + " |"
     L.append(row("도착(reached)", lambda m: "✅" if m["reached"] else "❌"))
     L.append(row("유효 런", lambda m: ("✅" if scored[m['route']]['valid'] else "⚠️ 무효")))
-    L.append(row("이동거리 (m)", lambda m: _fmt(m["distance_m"])))
-    L.append(row("소요시간 (s)", lambda m: _fmt(m["sim_time_s"])))
     L.append(row("충돌 횟수", lambda m: _fmt(m["collisions"])))
     L.append(row("장애물 밀도 (/100m)", lambda m: _fmt(m["obstacle_density"])))
     L.append("")
 
-    # 3. 위협·객체 발견
-    L.append("## 3. 위협·객체 발견 (YOLO)")
+    # 3. 효율 (별도 축 — 위험도 점수엔 미포함)
+    L.append("## 3. 효율 (별도 축 — 위험도 미포함)")
     L.append("")
-    all_cls = sorted({c for r in routes for c in metrics[r]["yolo_counts"]})
-    if all_cls:
-        L.append("| 클래스 | " + " | ".join(f"route_{r}" for r in routes) + " | 위협가중 |")
-        L.append("|---|" + "---|" * len(routes) + "---|")
-        for c in all_cls:
-            w = THREAT_CLASS_WEIGHTS.get(c)
-            wtxt = f"×{w}" if w else "(비위협)"
-            L.append(f"| {c} | " + " | ".join(str(metrics[r]["yolo_counts"].get(c, 0)) for r in routes) + f" | {wtxt} |")
-    else:
-        L.append("_YOLO 탐지 데이터 없음._")
+    L.append("> 시간·거리·우회는 '위험'이 아니라 '효율'이라 위험도에서 분리해 참고로만 표기.")
+    L.append("")
+    L.append("| 지표 | " + " | ".join(f"route_{r}" for r in routes) + " |")
+    L.append("|---|" + "---|" * len(routes))
+    L.append(row("이동거리 (m)", lambda m: _fmt(m["distance_m"])))
+    L.append(row("소요시간 (s)", lambda m: _fmt(m["sim_time_s"])))
+    L.append(row("우회비 (실제/직선)", lambda m: _fmt(m["detour_ratio"])))
     L.append("")
 
-    # 4. 정량 비교표
-    L.append("## 4. 정량 비교표 (↓ 낮을수록 좋음)")
+    # 4. 위협·객체 발견 (정보)
+    L.append("## 4. 위협·객체 발견 (정보 — 위험도 미반영)")
+    L.append("")
+    L.append("> YOLO 카운트는 중복 탐지라 위치 위험도엔 안 씀. 위험도는 센서퓨전 **확정 발견객체**(아래) 기반.")
+    L.append("")
+    L.append("| 항목 | " + " | ".join(f"route_{r}" for r in routes) + " |")
+    L.append("|---|" + "---|" * len(routes))
+    L.append(row("확정 위협 수(house/tank)", lambda m: str(gt_validation[m['route']]["perceived_total"])))
+    all_cls = sorted({c for r in routes for c in metrics[r]["yolo_counts"]})
+    for c in all_cls:
+        w = THREAT_CLASS_WEIGHTS.get(c)
+        tag = " (위협클래스)" if w else ""
+        L.append(row(f"YOLO {c}{tag}", lambda m, c=c: str(m["yolo_counts"].get(c, 0))))
+    L.append("")
+
+    # 5. 위험도 비교표 (perception 기반, ↓ 낮을수록 안전)
+    L.append("## 5. 위험도 비교표 (↓ 낮을수록 안전)")
     L.append("")
     if len(routes) == 2:
         a, b = routes
@@ -670,25 +915,22 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
         def cmp_row(name, va, vb, lower=True):
             ma, mb = _pick_better(va, vb, lower)
             return f"| {name} | {_fmt(va)} {ma} | {_fmt(vb)} {mb} |"
-        L.append(cmp_row("위험도 총점", scored[a]["risk_total"], scored[b]["risk_total"]))
-        L.append(cmp_row("위협 발견(W1 가중)", metrics[a]["threat_proxy"], metrics[b]["threat_proxy"]))
         ea, eb = exposures.get(a), exposures.get(b)
-        L.append(cmp_row("시야 노출시간 s(W2)", ea["total_fov_dwell_s"] if ea else None, eb["total_fov_dwell_s"] if eb else None))
-        L.append(cmp_row("발각 횟수", ea["detection_count"] if ea else None, eb["detection_count"] if eb else None))
-        L.append(cmp_row("우회비(W3)", metrics[a]["detour_ratio"], metrics[b]["detour_ratio"]))
-        L.append(cmp_row("지형 굴곡 σ(W4)", metrics[a]["terrain_sigma"], metrics[b]["terrain_sigma"]))
-        L.append(cmp_row("소요시간 s(W5)", metrics[a]["sim_time_s"], metrics[b]["sim_time_s"]))
-        L.append(cmp_row("충돌(참고)", metrics[a]["collisions"], metrics[b]["collisions"]))
+        L.append(cmp_row("위험도 총점", scored[a]["risk_total"], scored[b]["risk_total"]))
+        L.append(cmp_row("은밀성 노출(길이비)", ea["stealth_ratio"] if ea else None, eb["stealth_ratio"] if eb else None))
+        L.append(cmp_row("위협 근접(길이비)", ea["proximity_ratio"] if ea else None, eb["proximity_ratio"] if eb else None))
+        L.append(cmp_row("지형 굴곡 σ", metrics[a]["terrain_sigma"], metrics[b]["terrain_sigma"]))
+        L.append(cmp_row("확정 위협 수(참고)", ea["threat_count"] if ea else None, eb["threat_count"] if eb else None))
     else:
         L.append("_단일 루트 — 비교표 생략._")
     L.append("")
 
-    # 5. 위험도·은밀성 점수 분해
-    L.append("## 5. 위험도·은밀성 점수 분해")
+    # 6. 위험도 분해 (perception 기반)
+    L.append("## 6. 위험도 분해 (perception 기반)")
     L.append("")
     if figures and any(v for v in figures.values()):
-        L.append("> 각 루트 지도: **파란 선** = 실제 주행 궤적, **빨강 부채꼴** = 초소(House002) 시야"
-                 "(반경 25m·정면 ±30°·시선차단 반영), **빨강 점** = 실제로 시야에 들어 발각된 샘플.")
+        L.append("> 각 루트 지도: **초록 선** = 채점한 클린 중심선, **옅은 파랑** = 실제 주행 궤적(weave, 참고), "
+                 "**빨강 원** = 발견 위협 반경(전방향), **빨강 점** = 중심선 노출(반경+LoS) 구간.")
         L.append("")
     for r in routes:
         L.append(f"### route_{r} — 위험도 총점 **{scored[r]['risk_total']:.3f}**" +
@@ -700,25 +942,57 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
             raw = _fmt(b["raw"]) if b["available"] else "**N/A**"
             norm = _fmt(b["norm"]) if b["available"] else "—"
             contrib = _fmt(b["contrib"]) if b["available"] else "0"
-            L.append(f"| {b['key']} {b['label']} | {b['weight']} | {raw} | {norm} | {contrib} |")
+            L.append(f"| {b['label']} | {b['weight']} | {raw} | {norm} | {contrib} |")
         L.append("")
         exp = exposures.get(r)
         if exp and exp["per_threat"]:
-            L.append("발각된 위협(초소/적전차) — 노출시간 상위:")
+            L.append("발견 위협별 노출(클린 중심선 기준) — 노출 길이 상위:")
             L.append("")
-            L.append("| 위협 | 발각횟수 | 노출시간 s | 최대연속 s | 최소거리 m |")
-            L.append("|---|---|---|---|---|")
+            L.append("| 위협 | 노출 길이 m | 반경내 길이 m | 최소거리 m |")
+            L.append("|---|---|---|---|")
             for e in exp["per_threat"][:6]:
-                L.append(f"| {e['threat']} | {e['detections']} | {e['fov_dwell_s']} | {e['max_continuous_s']} | {_fmt(e['min_dist_m'])} |")
+                L.append(f"| {e['threat']} | {e['exposed_length_m']} | {e['within_radius_length_m']} | {_fmt(e['min_dist_m'])} |")
+            L.append("")
+        elif exp is not None and exp.get("threat_count") == 0:
+            L.append("_발견된 위협 없음 → 노출/근접 0 (지형 위주). 7장 GT 검증의 신뢰도 확인._")
             L.append("")
 
         fig = (figures or {}).get(r)
         if fig:
-            L.append(f"![route_{r} 실주행·위협 노출 지도]({os.path.basename(fig)})")
+            L.append(f"![route_{r} 중심선·위협 노출 지도]({os.path.basename(fig)})")
             L.append("")
 
-    # 6. 최종 추천
-    L.append("## 6. 최종 추천")
+    # 7. 정찰 정확도 (GT 검증 — 위험도엔 미반영)
+    L.append("## 7. 정찰 정확도 (GT 검증)")
+    L.append("")
+    L.append("> 발견 위협 ↔ 정답맵(GT) 위협 비교. 누락이 많으면 위험도가 그만큼 **과소평가**됐다는 신호 → 재정찰 권고.")
+    L.append("")
+    def gv(r):
+        return gt_validation[r]
+    L.append("| 항목 | " + " | ".join(f"route_{r}" for r in routes) + " |")
+    L.append("|---|" + "---|" * len(routes))
+    L.append("| GT 위협 총수 | " + " | ".join(str(gv(r)["gt_total"]) for r in routes) + " |")
+    L.append("| 발견(매칭) | " + " | ".join(str(gv(r)["found"]) for r in routes) + " |")
+    L.append("| 누락 | " + " | ".join(str(gv(r)["missed"]) for r in routes) + " |")
+    L.append("| 오탐(false+) | " + " | ".join(str(gv(r)["false_pos"]) for r in routes) + " |")
+    L.append("| 위치오차 평균 m | " + " | ".join(_fmt(gv(r)["mean_pos_err_m"]) for r in routes) + " |")
+    L.append("| 탐지 신뢰도(발견/GT) | " + " | ".join(_fmt(gv(r)["confidence"]) for r in routes) + " |")
+    fams = sorted({f["family"] for r in routes for f in gv(r)["by_family"]})
+    for fam in fams:
+        def famcell(r, fam=fam):
+            e = next((x for x in gv(r)["by_family"] if x["family"] == fam), None)
+            return f"{e['perceived']}/{e['gt']}" if e else "0/0"
+        L.append(f"| {fam} 발견/GT | " + " | ".join(famcell(r) for r in routes) + " |")
+    L.append("")
+    for r in routes:
+        conf = gv(r)["confidence"]
+        if conf is not None and conf < 0.5:
+            L.append(f"- ⚠️ **route_{r}**: 탐지 신뢰도 {conf} (GT {gv(r)['gt_total']}개 중 {gv(r)['found']}개) — "
+                     "정찰이 위협을 많이 놓침 → 위험도 과소평가 가능 → 재정찰 권장.")
+    L.append("")
+
+    # 8. 최종 추천
+    L.append("## 8. 최종 추천")
     L.append("")
     if rec["winner"]:
         L.append(f"### 🏆 권장 루트: **route_{rec['winner']}**  (신뢰도: {rec['confidence']})")
@@ -728,8 +1002,8 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
     L.append(f"- 근거: {rec['reason']}")
     L.append("")
 
-    # 7. 데이터 품질·미구현 경고
-    L.append("## 7. 데이터 품질 · 미구현 경고")
+    # 9. 데이터 품질·방법 주석
+    L.append("## 9. 데이터 품질 · 방법 주석")
     L.append("")
     any_warn = False
     for r in routes:
@@ -740,11 +1014,13 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
             for w in ws:
                 L.append(f"  - {w}")
     if not any_warn:
-        L.append("- (없음)")
+        L.append("- (런 품질 경고 없음)")
     L.append("")
-    L.append("- W3 우회는 재계획 카운트 미로깅으로 `distance/직선거리` **근사**다.")
-    L.append("- 노출/발각은 GT 위협 + 전차 궤적 기반 사후계산이며, House002는 FOV±30°+LoS, Tank001은 반경+LoS 모델을 따른다.")
-    L.append("- 센서 인지 정확도(GT vs 탐지)는 지형 오탐·정적GT 한계로 신뢰도가 낮아 본 리포트에서 제외 — 개발 진단은 `scripts/analyze_run.py` 참고.")
+    L.append("- **위험도 = perception 기반 3요소**(은밀성·위협근접·험지). 시간/거리/우회는 효율 축으로 분리(3장).")
+    L.append("- **노출/근접은 클린 루트 중심선**(planned_paths v0, weave 제외) 길이비. weave 궤적으로 재면 수색행동 때문에 과대평가됨.")
+    L.append("- **발견 위협엔 heading이 없어** House FOV 콘 대신 반경+LoS(전방향) 보수적 판정. LoS 차폐는 주행 base 맵 + 발견 obstacle 기준.")
+    L.append("- **GT(정답맵)는 7장 검증 전용** — 위험도 점수엔 미반영(실무엔 GT 없음).")
+    L.append("- 험지 σ는 실제 주행 body pitch/roll 기반(중심선 아님) — route-inherent 지형 거칠기 근사.")
     L.append("")
     return "\n".join(L)
 
@@ -759,12 +1035,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--route-a", default=None, help="route_A.json 직접 지정(폴백)")
     p.add_argument("--route-b", default=None, help="route_B.json 직접 지정(폴백)")
     p.add_argument("-o", "--output", default=None, help="출력 md 경로 (기본 <input>/recon_report.md)")
-    p.add_argument("--map", default=DEFAULT_MAP, help="GT 맵 파일 (기본 finalmap.map)")
+    p.add_argument("--discovered-dir", default=DEFAULT_DISCOVERED_DIR,
+                   help="발견객체맵 디렉터리 — 위험도 위협 출처 discovered_objects_route_{A,B}.map (기본 recon_reports/recon_map)")
+    p.add_argument("--gt-map", default=DEFAULT_GT_MAP,
+                   help="정답맵(GT) — 위험도엔 미사용, 정찰 정확도 검증 전용 (기본 final_v3.map)")
+    p.add_argument("--map", default=DEFAULT_MAP,
+                   help="주행 base 맵 — 계획경로 오버레이 + LoS 차폐 base obstacle (기본 finalmap.map)")
     p.add_argument("--routes", default=DEFAULT_ROUTES,
-                   help="계획 경로 개요 그림용 routes.yaml (기본 path_planning/config/routes.yaml)")
+                   help="중심선 폴백/계획 경로 그림용 routes.yaml (기본 path_planning/config/routes.yaml)")
     p.add_argument("--norm", choices=["reference", "minmax"], default="reference", help="정규화 방식")
-    for k in ("w1", "w2", "w3", "w4", "w5"):
-        p.add_argument(f"--{k}", type=float, default=None, help=f"가중치 {k.upper()} 오버라이드")
+    for k in ("stealth", "proximity", "terrain"):
+        p.add_argument(f"--w-{k}", type=float, default=None, help=f"가중치 {k} 오버라이드")
     p.add_argument("--stdout", action="store_true", help="파일 대신 표준출력")
     p.add_argument("--no-figures", action="store_true",
                    help="노출 지도 PNG(exposure_*.png) 생성/임베드 생략")
@@ -775,32 +1056,52 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
 
     weights = dict(DEFAULT_WEIGHTS)
-    for i, k in enumerate(("w1", "w2", "w3", "w4", "w5"), start=1):
-        v = getattr(args, k)
+    for k in ("stealth", "proximity", "terrain"):
+        v = getattr(args, f"w_{k}")
         if v is not None:
-            weights[f"W{i}"] = v
+            weights[k] = v
 
     routes_data = load_inputs(args.input, args.route_a, args.route_b)
     if not routes_data:
         print(f"[오류] 입력을 찾지 못함: {args.input} (comparison.json / route_*.json 없음)", file=sys.stderr)
         return EXIT_NO_INPUT
 
-    # GT 맵 로드(없어도 진행 — 노출/센서정확도만 비활성)
+    # GT 위협(정답맵) — 위험도엔 안 쓰고 정찰 정확도 검증에만.
     try:
-        threats, gt_bboxes, gt_objects = tg.load_map(args.map)
+        gt_threats, _gt_bboxes, gt_objects = tg.load_map(args.gt_map)
     except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"[경고] GT 맵 로드 실패({e}) — 노출/센서정확도 생략", file=sys.stderr)
-        threats, gt_bboxes, gt_objects = [], [], []
+        print(f"[경고] GT 맵 로드 실패({e}) — 정찰 정확도 검증 생략", file=sys.stderr)
+        gt_threats, gt_objects = [], []
+
+    # 주행 base 맵(finalmap) — 계획경로 오버레이 + LoS 차폐 base obstacle(알려진 나무 등).
+    try:
+        _, base_bboxes, _ = tg.load_map(args.map)
+    except (FileNotFoundError, json.JSONDecodeError):
+        base_bboxes = []
 
     routes = sorted(routes_data.keys())
     metrics: Dict[str, dict] = {}
     exposures: Dict[str, Optional[dict]] = {}
+    perceived: Dict[str, List[Dict[str, Any]]] = {}
+    centerlines: Dict[str, Optional[List[Tuple[float, float]]]] = {}
+    los_obstacles: Dict[str, List[Dict[str, float]]] = {}
+    gt_validation: Dict[str, dict] = {}
     scored: Dict[str, dict] = {}
 
     for rid in routes:
         m = extract_metrics(routes_data[rid])
         metrics[rid] = m
-        exposures[rid] = compute_exposure(m["trajectory"], threats, gt_bboxes)
+        centerlines[rid] = extract_centerline(routes_data[rid], rid, args.routes)
+        # perception: 센서퓨전 확정 발견객체맵 → 위협 + LoS 차폐 obstacle
+        disc_path = os.path.join(args.discovered_dir, f"discovered_objects_route_{rid}.map")
+        disc_data = _read_json(disc_path) if os.path.isfile(disc_path) else {"obstacles": []}
+        if not os.path.isfile(disc_path):
+            print(f"[경고] 발견객체맵 없음: {disc_path} — route_{rid} 위협 0으로 처리", file=sys.stderr)
+        perceived[rid] = parse_perceived_threats(disc_data)
+        disc_bboxes = [b for b in (tg.obstacle_to_bbox(o) for o in disc_data.get("obstacles", [])) if b]
+        los_obstacles[rid] = base_bboxes + disc_bboxes
+        exposures[rid] = compute_centerline_exposure(centerlines[rid], perceived[rid], los_obstacles[rid])
+        gt_validation[rid] = validate_perception_vs_gt(perceived[rid], gt_threats)
 
     norm = normalize(metrics, exposures, args.norm)
     for rid in routes:
@@ -809,7 +1110,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         scored[rid] = {"risk_total": total, "breakdown": breakdown,
                        "valid": valid, "warnings": warns}
 
-    rec = recommend(scored)
+    rec = recommend(scored, gt_validation)
 
     # 노출 지도(PNG)는 md와 같은 폴더에 생성해 basename으로 임베드한다. stdout/--no-figures면 생략.
     figures: Dict[str, Optional[str]] = {}
@@ -818,17 +1119,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not args.stdout:
         out = args.output or os.path.join(
             args.input if os.path.isdir(args.input) else os.path.dirname(args.input) or ".",
-            "recon_report.md")
+            "analysis", "recon_report.md")   # 파생 리포트/PNG는 analysis/로 분리(입력은 root에서 읽음)
+        os.makedirs(os.path.dirname(out), exist_ok=True)
         if not args.no_figures:
             out_dir = os.path.dirname(out) or "."
             overview_fig = render_route_overview(args.map, args.routes, out_dir)
             for rid in routes:
                 figures[rid] = render_exposure_figure(
-                    rid, metrics[rid]["trajectory"], threats, gt_objects, gt_bboxes,
-                    exposures[rid], out_dir)
+                    rid, centerlines[rid], metrics[rid]["trajectory"], perceived[rid],
+                    los_obstacles[rid], gt_threats, exposures[rid], out_dir)
 
     md = render_markdown(routes, metrics, exposures, scored, rec, weights,
-                         args.norm, figures, overview_fig)
+                         args.norm, gt_validation, figures, overview_fig)
 
     if args.stdout:
         print(md)

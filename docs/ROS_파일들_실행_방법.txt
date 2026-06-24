@@ -15,7 +15,7 @@
 ########################################################################################
 # ~/.bashrc 끝에 아래 4줄을 추가한다 (두 번째 source 경로는 본인 워크스페이스로):
 #   source /opt/ros/humble/setup.bash
-#   source ~/tankcc/install/setup.bash
+#   source ~/tank_project/install/setup.bash
 #   export ROS_LOCALHOST_ONLY=1      # ROS 통신을 localhost로 한정 (팀원 노드와 분리 1차)
 #   export ROS_DOMAIN_ID=42          # ★ 팀원마다 '다른' 값(0~101)! 같은 LAN에서 ROS 그래프 섞임 방지 (2차)
 #                                    #   (안 하면 /tank/player/pose 퍼블리셔 2개 → 전차 순간이동 등 발생)
@@ -27,7 +27,7 @@ source ~/.bashrc
 ########################################################################################
 # 공통 — 새 터미널마다 (위 ~/.bashrc 설정을 했으면 생략 가능)
 ########################################################################################
-cd ~/tankcc
+cd ~/tank_project
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
@@ -61,20 +61,41 @@ ros2 service call /tank/map/discovered/save std_srvs/srv/Trigger "{}"
 #      → A의 개별 노드(T2/T3/T5)를 따로 띄우지 말 것 (중복 기동).
 ########################################################################################
 
-# T1) 브릿지 (auto). .env 에 TANK_MODE=auto.
-ros2 run ros_bridge ros_bridge
+# T1) 브릿지 (auto). .env 가 monitor면 아래처럼 prefix로 강제(명령 prefix가 .env를 이김).
+TANK_MODE=auto ros2 run ros_bridge ros_bridge
 
-# T2) 자율주행 스택 (7개 노드 한 번에). route_id A=서쪽/B=동쪽, mission_type recon|mission|return.
+# T2) 자율주행 스택 (lidar/dbscan/local_path/apf/controller 한 번에). route_id A=서쪽/B=동쪽, mission_type recon|mission|return.
 ros2 launch control tank_autonomous_control.launch.py mission_type:=recon route_id:=A route_side:=west
 
 # T3) RViz (선택)
 ros2 launch rviz_visualization tank_rviz.launch.py
 
-# ── 정찰 A→B 자동 시퀀스 ── (브릿지를 '자동리셋'으로 띄운 뒤, 별도 터미널에서 매니저 실행)
-TANK_EPISODE_CONTROL=true ros2 run ros_bridge ros_bridge
+# ── 정찰 A→B 자동 시퀀스 (권장) ── 브릿지를 auto+자동리셋으로 띄운 뒤, 별도 터미널에서 매니저 실행.
+#   매니저가 stop-and-aim(미지 LiDAR 장애물서 정지+포탑 조준→카메라 분류) + 확정기준 상향을 자동 적용한다.
+TANK_MODE=auto TANK_EPISODE_CONTROL=true ros2 run ros_bridge ros_bridge
 python3 scripts/run_recon_scenario.py
+#   산출물: recon_reports/{route_A,route_B,comparison}.json   (분석 리포트/플롯은 recon_reports/analysis/)
+#   정찰 검증(위빙/멈춰-확정/충돌/인식): python3 scripts/analyze_run.py  → recon_reports/analysis/run_diagnosis.md
+#   시나리오2 입력 생성:                  python3 scripts/build_scenario2_map.py  → recon_reports/recon_map/scenario2_map.map
 
-# ※ 프로젝트 "시나리오 2"(사격 + 복귀)는 아직 미완성(설계 단계) — 별도 실행 절차 없음.
+
+########################################################################################
+# C. 자율주행 — 시나리오 2 (돌파/교전/복귀)   [정찰로 만든 맵 위에서 임무 1회]
+#    전제: 위 B 정찰을 돌려 recon_reports/recon_map/scenario2_map.map 을 먼저 생성.
+#         (python3 scripts/build_scenario2_map.py)
+########################################################################################
+
+# T1) 브릿지 (auto)
+TANK_MODE=auto ros2 run ros_bridge ros_bridge
+
+# T2) 시나리오2 매니저 (자율스택 + decision FSM(돌파/교전/복귀) + mock turret 한 번에)
+python3 scripts/run_scenario2_scenario.py
+#   결과: recon_reports/scenario2/scenario2_result.json  (outcome: success/aborted/timeout)
+#   ※ 실제 포탄은 아직 안 나감(mock이 명중 보고) — 두뇌/복귀/경로만 검증. 실사격은 팀원 turret 후.
+
+# T3) RViz (시나리오2 전용 — 발견 장애물 색칠 + 지형 메쉬 + 라이브 pose/경로)
+ros2 launch rviz_visualization tank_scenario2_map_view.launch.py
+#   FSM 상태 확인: ros2 topic echo /tank/decision/status
 
 
 ########################################################################################

@@ -1,35 +1,75 @@
+# Tank Challenge Simulator 평지 제어 데이터셋 기반 파라미터
+# source: 전차제어_데이터셋_구축_정지거리_최종수정본
+# 좌표/yaw 해석은 기존 컨트롤러와 동일하게 유지한다.
 yaw_axis: body_x
+
+dynamics_model:
+  forward_speed_mps_per_weight: 13.6
+  reverse_speed_mps_per_weight: 8.33
+  yaw_rate_degps_per_ad_weight: 40.0
+  yaw_rate_radps_per_ad_weight: 0.698
+  recommended_local_target_distance: 8.0
+  recommended_turn_ws_weight: 0.4
+  recommended_crawl_pivot_ws_weight: 0.1
+  recommended_crawl_turn_ws_weight: 0.2
+
 steady_state_speed:
-  0.1: 1.9452298482259114
-  0.3: 5.822383960088094
-  0.5: 9.601021448771158
-  0.8: 15.461951414744059
-  1.0: 19.446525891621906
+  0.1: 1.39
+  0.2: 2.73
+  0.3: 4.17
+  0.4: 5.72
+  0.5: 6.98
+  0.6: 8.44
+  0.7: 9.96
+  0.8: 11.41
+  0.9: 12.81
+  1.0: 13.60
+
+reverse_speed:
+  0.1: 0.83
+  0.2: 1.67
+  0.3: 2.50
+  0.4: 3.33
+  0.5: 4.16
+  0.6: 5.00
+  0.7: 5.83
+  0.8: 6.66
+  0.9: 7.50
+  1.0: 8.33
+
 steady_state_yaw_rate:
-  0.1: 4.013483166980376
-  0.3: 12.000793951209987
-  0.5: 20.160206660386844
-  0.8: 32.00151509472804
-  1.0: 38.83878118563751
-acceleration_time_constant: 4.696039915084839
+  0.1: 4.0
+  0.2: 8.0
+  0.3: 12.0
+  0.4: 16.0
+  0.5: 20.0
+  0.6: 24.0
+  0.7: 28.0
+  0.8: 32.0
+  0.9: 36.0
+  1.0: 40.0
+
 stopping:
-  distance: 9.264083862304688
-  time: 1.550079345703125
-turning_radii:
-- w_ws: 0.5
-  w_ad: 0.5
-  radius: 27.95468952543989
-- w_ws: 0.8
-  w_ad: 0.3
-  radius: 74.89815028559707
-- w_ws: 0.3
-  w_ad: 0.7
-  radius: 11.900653778229126
+  nominal_distance: 2.0
+  safety_distance: 3.0
+  controller_goal_margin: 10.0
+
+turning_radii_examples:
+  - w_ws: 1.0
+    w_ad: 1.0
+    radius: 19.47
+  - w_ws: 0.5
+    w_ad: 0.5
+    radius: 19.97
+  - w_ws: 0.3
+    w_ad: 0.8
+    radius: 7.05
+  - w_ws: 0.1
+    w_ad: 1.0
+    radius: 2.00
+
 rough_terrain_factors:
-  speed_reduction_ratio: 1.0000761454674292
-  yaw_rate_reduction_ratio: 1.0138087665827915
-  stopping_distance_multiplier: 0.9768997137871959
-  flat_tilt_variance_Y: 0.0
-  flat_tilt_variance_Z: 0.0
-  rough_tilt_variance_Y: 20.67344280471479
-  rough_tilt_variance_Z: 13.498563223169262
+  # 현재 데이터는 평지 기준이다. 지형 roughness 기반 보정은 추후 terrain costmap과 연동한다.
+  speed_reduction_ratio: 1.0
+  yaw_rate_reduction_ratio: 1.0
+  stopping_distance_multiplier: 1.0

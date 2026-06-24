@@ -72,7 +72,8 @@ from verify_route_plan import (  # noqa: E402
 
 DEFAULT_MAP = os.path.join(PROJECT_ROOT, "src", "rviz_visualization", "map", "finalmap.map")
 DEFAULT_ROUTES = os.path.join(PROJECT_ROOT, "src", "path_planning", "config", "routes.yaml")
-OUT_DIR = os.path.join(PROJECT_ROOT, "recon_reports")
+OUT_DIR = os.path.join(PROJECT_ROOT, "recon_reports", "analysis")   # 파생 플롯은 analysis/로 분리
+os.makedirs(OUT_DIR, exist_ok=True)
 
 # 적전차 리스폰 위치(map 좌표) — ros_bridge RED_START와 동일. 목적지와 별개(정찰 관측 개념).
 ENEMY_RESPAWN = (135.46, 276.87)

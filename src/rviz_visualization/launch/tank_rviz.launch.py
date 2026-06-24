@@ -81,7 +81,9 @@ def generate_launch_description():
                         "save_filename": "terrain_map_latest.npz",
                         "save_csv": False,
                         "save_legacy_split_files": False,
-                        "load_saved_map_on_start": True,
+                        # 정찰 뷰는 깨끗하게: 시작 시 이전 정찰 지형을 불러오지 않고 주행하며 build한다
+                        # ("정찰=모르는 정보" 원칙 일치). 저장된 지형 면을 보려면 tank_recon_apply_terrain.launch.py 사용.
+                        "load_saved_map_on_start": False,
                         "recording_enabled_on_start": True,
                     }
                 ],

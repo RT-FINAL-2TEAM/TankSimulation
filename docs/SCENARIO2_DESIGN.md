@@ -144,3 +144,54 @@
 - 교전 중 위협 척력 모드 전환 방식.
 - 교전 인터페이스 메시지 타입(커스텀 msg vs JSON String) — 팀원과 합의.
 - A 추천을 정찰 평가가 실제로 산출하는지 검증(노출지도 기준).
+
+---
+
+## 12. 구현 준비 노트 (2026-06-22 재검토)
+
+문서↔코드 표류·오늘 정찰 위험도 재설계와의 정합·오프라인 구현 가능성을 코드 대조로 재검토한 결과. **설계는 타당하고
+그대로 구현 가능**하다. 토대는 준비됐고, FSM·교전·복귀는 설계대로 신규 구현(미배선)이다.
+
+### 12.1 현황 (준비됨 vs 미구현)
+
+| 구성요소 | 상태 | 위치 |
+|---|---|---|
+| 적/포탑/임팩트 토픽 발행 | ✅ 준비됨 | `/tank/enemy/{pose,state,heading}`, `/tank/api/update_bullet/*` ([bridge_node.py](../src/ros_bridge/ros_bridge/bridge_node.py)) |
+| 기하 위협 함수(거리+LoS) | ✅ 준비됨 | `check_los`·`is_threat_active`(Tank 20m+LoS) ([potential_field_node.py](../src/potential/potential/potential_field_node.py)), 미러 [threat_geometry.py](../scripts/recon_eval/threat_geometry.py) |
+| goal 변경 구독 → 자동 재계획 | ✅ 준비됨 | [map_astar_planner_node.py](../src/path_planning/path_planning/map_astar_planner_node.py) `goal_pose_cb`(약 558-569) |
+| scenario2_map `targets`(tank) 생성 | ✅ 준비됨 | [build_scenario2_map.py](../scripts/build_scenario2_map.py) 약 175-183 |
+| decision/FSM 노드 | ❌ 미구현 | 신규 |
+| known/new 매칭 | ❌ 미구현 | 신규(아래 재활용) |
+| `/tank/engage/{request,result}` | ❌ 미존재 | 신규 |
+| `targets` 런타임 로드 | ❌ 미구현 | 신규(파일에만 기록) |
+| 복귀 goal 발행 | ❌ 미구현 | 신규(구독측은 준비됨) |
+| turret aim/fire | ⏳ 팀원 | `make_action`의 turret/fire는 no-op |
+
+### 12.2 보정 3가지 (재설계 아님)
+
+1. **⚠️ known-tank 목록이 빈약 — perception이 약해서.** 현재 발견 tank는 2개(route_A 0, route_B 2; obs_count=1, conf~0.7).
+   YOLO는 많이 봤지만 중복이라 **센서퓨전 확정분만** 발견맵에 남는 게 정상. FSM이 "known→교전 / new→위험도평가"인데
+   **known이 비면 주행 중 대부분 tank가 'new'로 분류**돼 위험도 평가만 돈다. ⇒ (a) **제대로 된 정찰 run 뒤에야** known
+   목록이 채워지고(현 데이터는 시뮬 검증 전이라 무의미), (b) FSM은 "known 빈약"에 **강건**해야 한다(known 0이어도 동작).
+2. **교전 메시지 = `std_msgs/String` + JSON.** 이 repo는 커스텀 `.msg`를 안 쓰고 전부 String+JSON 관행. 계약 스키마:
+   - `/tank/engage/request` → `{"target_id": str, "pose": {"x": float, "y": float}, "distance_m": float, "los": bool}`
+   - `/tank/engage/result` → `{"target_id": str, "impact": {"x": float, "y": float}, "success": bool, "dist_to_target_m": float}`
+3. **복귀 goal-swap = `/tank/goal/pose`에 출발지 발행만 하면 됨.** planner가 이미 구독→재계획(12.1). 설계 §8이 우려한 것보다 단순.
+   - (자잘) controller에 `mission_type→fire_cmd` 토글이 있으나 `make_action`에서 미사용(죽은 토글, [tank_controller_node.py](../src/control/control/tank_controller_node.py) 약 305-308) — 교전 배선 때 정리.
+
+**오늘 작업과 정합 ✓:** 위험도는 **perception(탐지된 위협)** 으로 산정하고 GT(정답맵)는 안 쓴다(정찰 위험도 재설계와 동일 원칙).
+Tank는 heading이 없어 **반경+LoS**(FOV 콘 없음)로 판정 — `is_threat_active`의 Tank001 규칙과 일치.
+
+### 12.3 오프라인 구현 순서 (다음 세션, 시뮬 불필요)
+
+① decision 노드 골격(FSM: `FORWARD` / `ENGAGE` / `RETURN`) → ② known/new 매칭(map 좌표, [local_path_node.py](../src/path_planning/path_planning/local_path_node.py)
+`_find_existing_discovered`·`merge_radius_by_class` 패턴 재활용) → ③ 기하 위험도 score(거리+LoS+노출, `threat_geometry`/potential
+함수 재활용, **0~1 정규화**) → ④ engage 계약 + **mock turret 노드**(폐루프 골격 검증) → ⑤ 복귀 goal 발행 → ⑥ 단위테스트.
+**실제 fire·turret 조준·임팩트 피드백만 시뮬+팀원 대기.**
+
+- **패키지 배치(권장):** scenario/통합은 본인 도메인 → 신규 패키지(예 `mission`) 또는 `path_planning`에 decision 노드.
+  ament_python `entry_points` 패턴([path_planning/setup.py](../src/path_planning/setup.py)). launch는 [tank_scenario2.launch.py](../src/control/launch/tank_scenario2.launch.py)에 노드 추가.
+- **교전 중 위협 척력 상충(§6):** decision 노드가 현재 교전 표적 id를 발행 → APF가 그 표적을 위협 목록에서 제외(또는 교전 거리에서 척력 스케일↓).
+- **복귀 임계:** 0~1 위험도 score 기준, 정찰 노출 통계(길이비)로 캘리브레이션.
+
+> 정리: **설계대로 진행 가능.** 12.2의 3보정만 반영하면 됨. 단 known-tank는 **제대로 된 정찰 시뮬 run이 선행**돼야 의미 있음.

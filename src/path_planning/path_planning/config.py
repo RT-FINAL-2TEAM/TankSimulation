@@ -167,5 +167,9 @@ ROUTE_CONFIG_FILE = os.environ.get("TANK_PLANNER_ROUTE_CONFIG_FILE", "")
 # share의 finalmap.map을 자동 해석.
 USE_STATIC_MAP = env_bool("TANK_PLANNER_USE_STATIC_MAP", True)
 STATIC_MAP_FILE = os.environ.get("TANK_PLANNER_STATIC_MAP_FILE", "")
+# 지형 거칠기 비용 레이어(게이트형, 시나리오2 전용). 빈 파일이면 비활성 → 정찰 동작 불변.
+# 시나리오2 launch가 정찰로 생성한 scenario2_terrain.json(셀별 roughness 격자) 경로를 준다.
+TERRAIN_COST_FILE = os.environ.get("TANK_PLANNER_TERRAIN_COST_FILE", "")
+TERRAIN_WEIGHT = env_float("TANK_PLANNER_TERRAIN_WEIGHT", 0.6)
 USE_LIDAR_CLUSTER_BBOXES = env_bool("TANK_PLANNER_USE_LIDAR_CLUSTER_BBOXES", True)
 LIDAR_CLUSTER_BBOX_MARGIN = env_float("TANK_PLANNER_LIDAR_CLUSTER_BBOX_MARGIN", 1.0)

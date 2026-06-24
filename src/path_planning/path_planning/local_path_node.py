@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ament_index_python.packages import get_package_share_directory
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PoseStamped, Vector3Stamped, Point
+from geometry_msgs.msg import PoseStamped, Point
 from nav_msgs.msg import Path as NavPath
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -71,7 +71,6 @@ from path_planning.config import (
     TOPIC_PLAYER_POSE,
     TOPIC_PLAYER_STATE,
     TOPIC_RECON_RAW,
-    TOPIC_TURRET,
 )
 from tank_visual_perception.projection import (
     compute_camera_pose,
@@ -151,7 +150,6 @@ class LocalPathNode(Node):
         self.default_image_width = int(self._cfg(["camera", "default_image_width"], 1920))
         self.default_image_height = int(self._cfg(["camera", "default_image_height"], 1057))
         self.heading_source = str(self._cfg(["camera", "heading_source"], "body"))
-
         self.fusion_method = str(self._cfg(["fusion", "method"], "projection_then_cluster_then_angle"))
         self.angle_gate_extra_deg = float(self._cfg(["fusion", "angle_gate_extra_deg"], 4.0))
         self.max_fusion_range_m = float(self._cfg(["fusion", "max_fusion_range_m"], 45.0))
@@ -199,6 +197,16 @@ class LocalPathNode(Node):
         self.save_confirmed_only = bool(self._cfg(["mapping", "save_confirmed_only"], True))
         self.min_confirm_observations = int(self._cfg(["mapping", "min_confirm_observations"], 5))
         self.min_confirm_age_sec = float(self._cfg(["mapping", "min_confirm_age_sec"], 1.0))
+        # 정찰 stop-to-confirm: 확정 기준을 정찰에서만 상향(ROS 파라미터 override; <0이면 yaml값 유지).
+        # 시나리오2 새 적탱크 감지는 빠르게 유지해야 하므로 launch에서 recon만 올린다.
+        self.declare_parameter("min_confirm_observations_override", -1)
+        self.declare_parameter("min_confirm_age_sec_override", -1.0)
+        _mco = int(self.get_parameter("min_confirm_observations_override").value)
+        if _mco >= 0:
+            self.min_confirm_observations = _mco
+        _mca = float(self.get_parameter("min_confirm_age_sec_override").value)
+        if _mca >= 0.0:
+            self.min_confirm_age_sec = _mca
         self.merge_across_classes = bool(self._cfg(["mapping", "merge_across_classes"], True))
         self.track_id_merge_enabled = bool(self._cfg(["mapping", "track_id_merge_enabled"], True))
         self.track_id_merge_radius_m = float(self._cfg(["mapping", "track_id_merge_radius_m"], 10.0))
@@ -236,6 +244,7 @@ class LocalPathNode(Node):
         self.fused_current: List[Dict[str, Any]] = []
         self._next_id = 1
         self._last_fusion_debug: Optional[Dict[str, Any]] = None
+        self._fusion_reject_counts: Dict[str, int] = {}   # 융합 결과 사유 누적(프레임당 1건) — 왜 확정 안 되나 진단
         self._last_cluster_assignment_stats: Dict[str, Any] = {}
 
         transient_qos = QoSProfile(
@@ -251,7 +260,6 @@ class LocalPathNode(Node):
         self.create_subscription(String, TOPIC_LIDAR_CLUSTERS, self.lidar_clusters_cb, 10)
         self.create_subscription(PoseStamped, TOPIC_PLAYER_POSE, self.player_pose_cb, 10)
         self.create_subscription(String, TOPIC_PLAYER_STATE, self.player_state_cb, 10)
-        self.create_subscription(Vector3Stamped, TOPIC_TURRET, self.turret_cb, 10)
         self.create_subscription(String, TOPIC_RECON_RAW, self.recon_raw_cb, transient_qos)
 
         self.fused_pub = self.create_publisher(String, TOPIC_FUSED_OBJECTS, 10)
@@ -396,6 +404,13 @@ class LocalPathNode(Node):
     def collision_cb(self, msg: String) -> None:
         with self._lock:
             self.recon_logger.collisions += 1
+            # 충돌 위치(현재 전차 pose) 기록 → analyze_run이 궤적에 충돌 지점 오버레이.
+            if self.player_pose is not None:
+                self.recon_logger.collision_events.append({
+                    "t": round(float(self.sim_time), 2),
+                    "x": round(float(self.player_pose.pose.position.x), 2),
+                    "z": round(float(self.player_pose.pose.position.y), 2),
+                })
 
     # -- 주행 품질 진단 구독 콜백 (읽기만) ----------------------------------
     def _diag_planner_status_cb(self, msg: String) -> None:
@@ -444,14 +459,6 @@ class LocalPathNode(Node):
         except Exception:
             pass
 
-    def turret_cb(self, msg: Vector3Stamped) -> None:
-        try:
-            with self._lock:
-                self.turret_heading_deg = float(msg.vector.x)
-        except Exception:
-            with self._lock:
-                self.turret_heading_deg = None
-
     def recon_raw_cb(self, msg: String) -> None:
         try:
             payload = json.loads(msg.data)
@@ -495,6 +502,8 @@ class LocalPathNode(Node):
                 obj for obj in self.discovered
                 if obj.is_confirmed or (now - obj.last_seen_wall) < self.memory_decay_sec
             ]
+
+            self.recon_logger.set_fusion_rejects(self._fusion_reject_counts)  # 융합 드롭 사유 누적(왜 확정 안 되나)
 
             # YOLO detections 로깅
             if self.latest_detections_payload:
@@ -572,6 +581,8 @@ class LocalPathNode(Node):
 
         def finish(reason: str, fused: Optional[List[Dict[str, Any]]] = None, **extra: Any) -> List[Dict[str, Any]]:
             result = fused or []
+            # 사유별 누적(항상) — recon_logger→route_*.json. ok_* 성공 vs strict_no_cluster_assignment/stale 등 실패.
+            self._fusion_reject_counts[reason] = self._fusion_reject_counts.get(reason, 0) + 1
             if self.debug_fusion_enabled:
                 debug.update(extra)
                 debug["reject_reason"] = reason
