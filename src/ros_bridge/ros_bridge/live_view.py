@@ -233,7 +233,7 @@ def _blank_frame(message: str = "Waiting for /detect image...") -> np.ndarray:
     return frame
 
 
-def render_view_page() -> str:
+def render_view_page(poll_ms: int = 1000) -> str:
     html = """
     <!doctype html>
     <html lang="ko">
@@ -1957,6 +1957,11 @@ def render_view_page() -> str:
     </body>
     </html>
     """
+    # 폴링 간격을 설정값으로 주입한다(대시보드는 사람이 보는 화면이라 기본 1초로 완화).
+    html = html.replace(
+        "setInterval(fetchDashboardState, 300)",
+        f"setInterval(fetchDashboardState, {int(poll_ms)})",
+    )
     return render_template_string(html)
 
 

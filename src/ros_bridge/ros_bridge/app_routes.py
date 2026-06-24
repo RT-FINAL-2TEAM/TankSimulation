@@ -28,6 +28,7 @@ import ipaddress
 import json
 import os
 import sys
+import time
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -84,6 +85,8 @@ from .commands import fallback_command, init_config
 # - monitor: trackingMode=False, logMode=True 중심 관측.
 # - auto   : trackingMode=True, logMode=True 중심 자율제어.
 from .config import (
+    DASHBOARD_POLL_MS,
+    DASHBOARD_REFRESH_SEC,
     EPISODE_CONTROL_ENABLED,
     IMAGE_DIR,
     LIVE_VIEW_ENABLED,
@@ -91,6 +94,7 @@ from .config import (
     LIVE_VIEW_JPEG_QUALITY,
     PORT,
     SAVE_IMAGES,
+    STATIC_MAP_CACHE_TTL_SEC,
     TANK_MODE,
     YOLO_ASYNC_ENABLED,
     YOLO_ASYNC_LOG_INTERVAL_SEC,
@@ -444,7 +448,58 @@ def _overview_terrain_zones() -> Dict[str, Any]:
     }
 
 
+_STATIC_MAP_CACHE_LOCK = Lock()
+# key=(경로문자열, mtime). 파일이 그대로면 빌드를 건너뛰고 캐시본의 deepcopy를 돌려준다.
+_STATIC_MAP_CACHE: Dict[str, Any] = {"key": None, "payload": None, "checked_wall": 0.0}
+
+
+def _safe_mtime(path: Path) -> Optional[float]:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
 def _load_static_map_payload() -> Dict[str, Any]:
+    """정적맵 payload를 mtime 기반으로 캐시한다(거의 안 바뀌는데 폴링마다 디스크 재파싱하던 것 제거).
+
+    STATIC_MAP_CACHE_TTL_SEC 안에선 stat()조차 생략하고 캐시본을 그대로 쓴다. TTL이 지나면 mtime을
+    확인해 파일이 그대로면 캐시 재사용, 바뀌었으면 한 번만 다시 빌드한다. 호출자가 payload를 슬라이싱·
+    변형(예: route_dashboard_state의 staticMap 가공)하므로 항상 deepcopy를 반환해 캐시 오염을 막는다.
+    """
+    try:
+        map_path = _resolve_static_map_path()
+        now = now_wall()
+        with _STATIC_MAP_CACHE_LOCK:
+            cached = _STATIC_MAP_CACHE.get("payload")
+            cached_key = _STATIC_MAP_CACHE.get("key")
+            checked_wall = _STATIC_MAP_CACHE.get("checked_wall") or 0.0
+        # TTL 안이고 캐시가 있으면 stat 없이 즉시 반환.
+        if cached is not None and (now - checked_wall) < STATIC_MAP_CACHE_TTL_SEC:
+            return deepcopy(cached)
+        key = (str(map_path), _safe_mtime(map_path))
+        if cached is not None and cached_key == key:
+            with _STATIC_MAP_CACHE_LOCK:
+                _STATIC_MAP_CACHE["checked_wall"] = now
+            return deepcopy(cached)
+    except Exception:
+        # 캐시 경로에서 어떤 이유로든 실패하면 그냥 빌드로 폴백한다.
+        key = None
+
+    payload = _build_static_map_payload()
+    try:
+        with _STATIC_MAP_CACHE_LOCK:
+            _STATIC_MAP_CACHE["payload"] = deepcopy(payload)
+            _STATIC_MAP_CACHE["key"] = key if key is not None else (
+                str(_resolve_static_map_path()), _safe_mtime(_resolve_static_map_path())
+            )
+            _STATIC_MAP_CACHE["checked_wall"] = now_wall()
+    except Exception:
+        pass
+    return payload
+
+
+def _build_static_map_payload() -> Dict[str, Any]:
     map_path = _resolve_static_map_path()
     with map_path.open("r", encoding="utf-8") as f:
         payload = json.load(f)
@@ -2002,9 +2057,80 @@ def route_windows_recon_run():
         return jsonify({"ok": False, "error": str(exc), "status": _windows_recon_status_payload()}), 500
 
 
+_DASHBOARD_CACHE_LOCK = Lock()
+# 무거운 대시보드 payload를 백그라운드에서 만들어 여기에 둔다. HTTP 핸들러는 이걸 복사만 한다.
+_DASHBOARD_CACHE: Dict[str, Any] = {"payload": None, "built_wall": 0.0}
+_DASHBOARD_REFRESHER: Dict[str, Any] = {"running": False}
+# 마지막으로 대시보드를 폴링한 시각(wall). idle이면 리프레셔가 스스로 멈춰 CPU를 0으로 만든다.
+_DASHBOARD_LAST_REQUEST_WALL = 0.0
+# 이 시간(초) 이상 폴링이 없으면 백그라운드 리프레셔가 종료한다(다음 요청이 다시 깨움).
+_DASHBOARD_IDLE_STOP_SEC = 10.0
+
+
+def _dashboard_refresh_loop() -> None:
+    """무거운 대시보드 payload를 DASHBOARD_REFRESH_SEC마다 만들어 캐시에 swap한다.
+
+    빌드는 반드시 락 밖에서 로컬 변수에 만든 뒤, 락을 잡고 '스왑'만 한다 — 그래야 캐시 락 밑에
+    제어 핫패스와 공유하는 bridge._lock(get_latest_snapshot)이 깔리지 않는다. 폴링이 끊긴 지
+    오래면(_DASHBOARD_IDLE_STOP_SEC) 스스로 종료해 idle 시 추가 비용을 0으로 만든다.
+    """
+    try:
+        while True:
+            try:
+                built = _build_dashboard_payload()  # 락 밖에서 빌드
+            except Exception:
+                built = None
+            if built is not None:
+                with _DASHBOARD_CACHE_LOCK:
+                    _DASHBOARD_CACHE["payload"] = built
+                    _DASHBOARD_CACHE["built_wall"] = now_wall()
+            if (now_wall() - _DASHBOARD_LAST_REQUEST_WALL) > _DASHBOARD_IDLE_STOP_SEC:
+                break
+            time.sleep(max(0.05, DASHBOARD_REFRESH_SEC))
+    finally:
+        with _DASHBOARD_CACHE_LOCK:
+            _DASHBOARD_REFRESHER["running"] = False
+
+
+def _maybe_start_dashboard_refresher() -> None:
+    """대시보드 폴링이 처음(또는 idle 후 다시) 들어오면 백그라운드 리프레셔를 띄운다."""
+    if not LIVE_VIEW_ENABLED:
+        return
+    with _DASHBOARD_CACHE_LOCK:
+        if _DASHBOARD_REFRESHER["running"]:
+            return
+        _DASHBOARD_REFRESHER["running"] = True
+    Thread(target=_dashboard_refresh_loop, daemon=True, name="DashboardRefresh").start()
+
+
 @app.route("/api/dashboard/state", methods=["GET"])
 def route_dashboard_state():
-    """browser MFD dashboard용으로 합쳐진 state payload."""
+    """browser MFD dashboard용 state payload.
+
+    무거운 빌드(_build_dashboard_payload)는 백그라운드 리프레셔가 캐시에 채우고, 이 핸들러는
+    캐시본을 복사해 즉시 반환한다 → 제어 핫패스(/get_action)와의 CPU·락 경합을 최소화. 첫 호출
+    (캐시가 아직 비었을 때)만 인라인으로 1회 빌드한다.
+    """
+    global _DASHBOARD_LAST_REQUEST_WALL
+    _DASHBOARD_LAST_REQUEST_WALL = now_wall()
+    _maybe_start_dashboard_refresher()
+
+    with _DASHBOARD_CACHE_LOCK:
+        cached = _DASHBOARD_CACHE.get("payload")
+    if cached is None:
+        cached = _build_dashboard_payload()
+        with _DASHBOARD_CACHE_LOCK:
+            if _DASHBOARD_CACHE.get("payload") is None:
+                _DASHBOARD_CACHE["payload"] = cached
+                _DASHBOARD_CACHE["built_wall"] = now_wall()
+
+    payload = deepcopy(cached)
+    payload["serverTime"] = now_wall()  # 시계/last-update만 항상 신선하게
+    return jsonify(payload)
+
+
+def _build_dashboard_payload() -> Dict[str, Any]:
+    """대시보드용으로 합쳐진 state payload를 만든다(무거움 — 백그라운드 리프레셔에서 호출)."""
     payload: Dict[str, Any] = {
         "serverTime": now_wall(),
         "mode": TANK_MODE,
@@ -2156,7 +2282,7 @@ def route_dashboard_state():
         _load_route_candidates_payload(route_risk_report)
     )
 
-    return jsonify(payload)
+    return payload
 
 
 @app.route("/api/llm/route-risk/status", methods=["GET"])
@@ -2216,7 +2342,7 @@ def route_live_view():
     """최신 /detect image와 detection overlay를 보여주는 browser live view."""
     if not LIVE_VIEW_ENABLED:
         return jsonify({"enabled": False, "error": "TANK_LIVE_VIEW is false"}), 404
-    return live_view.render_view_page()
+    return live_view.render_view_page(poll_ms=DASHBOARD_POLL_MS)
 
 
 @app.route("/video_feed", methods=["GET"])

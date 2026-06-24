@@ -1157,7 +1157,13 @@ class TeamDynamicAStarPlannerNode(Node):
 
         반환 {(ix, iy): roughness(dz/m)}. 빈 경로/없음/파싱실패면 None(게이트 OFF) → 정찰 동작 불변.
         cells의 cell_size는 1.0(생성기가 A* 격자에 맞춰 생성)이라 ix/iy를 그대로 격자 인덱스로 쓴다.
+
+        부수효과: self.terrain_z_grid({(ix,iy): z_median}, 평지 포함 모든 셀)·self.terrain_cell_size를 채운다 —
+        publish_path가 전역경로를 지형 표면 위로 띄울 때 사용. terrain_cost_file이 비면(정찰) 빈 dict라 z=0 유지.
         """
+        # 경로 지형-위 표시용 고도 격자(매 호출 초기화). roughness 게이트와 독립.
+        self.terrain_z_grid: Dict[Tuple[int, int], float] = {}
+        self.terrain_cell_size: float = 1.0
         if not path:
             return None
         try:
@@ -1167,21 +1173,34 @@ class TeamDynamicAStarPlannerNode(Node):
             self.get_logger().warn(f"terrain cost file load failed (게이트 OFF): {path} ({exc})")
             return None
         cells = data.get("cells", []) if isinstance(data, dict) else []
+        cell_size = float(data.get("cell_size", 1.0)) if isinstance(data, dict) else 1.0
+        self.terrain_cell_size = cell_size if cell_size > 0 else 1.0
         grid: Dict[Tuple[int, int], float] = {}
         for c in cells:
             try:
-                rough = float(c.get("roughness", 0.0))
-                if rough <= 0.0:
-                    continue
-                grid[(int(c["ix"]), int(c["iy"]))] = rough
+                ix, iy = int(c["ix"]), int(c["iy"])
             except Exception:
                 continue
-        cell_size = data.get("cell_size", 1.0) if isinstance(data, dict) else 1.0
-        if abs(float(cell_size) - 1.0) > 1e-6:
+            # z_median: 모든 셀(평지 roughness 0 포함) — publish_path가 경로를 지형 표면 위로 lift할 때 사용.
+            zmed = c.get("z_median")
+            if zmed is not None:
+                try:
+                    self.terrain_z_grid[(ix, iy)] = float(zmed)
+                except (TypeError, ValueError):
+                    pass
+            # roughness: A* 지형비용용(>0만 보관; 기존과 동일).
+            try:
+                rough = float(c.get("roughness", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if rough > 0.0:
+                grid[(ix, iy)] = rough
+        if abs(cell_size - 1.0) > 1e-6:
             self.get_logger().warn(
                 f"terrain cell_size={cell_size}≠1.0 — A* 격자와 정렬이 안 맞을 수 있음(생성기 cell_size=1.0 권장)")
         self.get_logger().info(
-            f"terrain cost grid loaded: {len(grid)} cells (weight={self.terrain_weight}) from {path}")
+            f"terrain grid loaded: {len(grid)} rough cells / {len(self.terrain_z_grid)} z cells "
+            f"(weight={self.terrain_weight}) from {path}")
         return grid or None
 
     def _plan_worker(
@@ -1289,6 +1308,16 @@ class TeamDynamicAStarPlannerNode(Node):
         msg.data = json.dumps({"count": len(bboxes), "bboxes": bboxes}, ensure_ascii=False)
         self.pub_lidar_bboxes.publish(msg)
 
+    def _terrain_lift_z(self, x: float, y: float) -> float:
+        """경로점 z를 지형 표면 위로 띄운다. terrain_z_grid가 있으면 해당 셀 z_median+0.4m(메쉬와 z-fighting 방지),
+        없으면(정찰=terrain_cost_file 빈값/지형 없음) 0.0 → 바닥(기존 거동 보존)."""
+        grid = getattr(self, "terrain_z_grid", None)
+        if not grid:
+            return 0.0
+        cs = getattr(self, "terrain_cell_size", 1.0) or 1.0
+        z = grid.get((int(math.floor(x / cs)), int(math.floor(y / cs))))
+        return (float(z) + 0.4) if z is not None else 0.0
+
     def publish_path(self, force: bool = False) -> None:
         if not self.route:
             return
@@ -1310,7 +1339,7 @@ class TeamDynamicAStarPlannerNode(Node):
             ps.header.frame_id = MAP_FRAME
             ps.pose.position.x = float(x)
             ps.pose.position.y = float(y)
-            ps.pose.position.z = 0.0
+            ps.pose.position.z = self._terrain_lift_z(float(x), float(y))  # 지형 표면 위로(시나리오2), 정찰은 0.0
             ps.pose.orientation.w = 1.0
             path_msg.poses.append(ps)
         self.pub_path.publish(path_msg)

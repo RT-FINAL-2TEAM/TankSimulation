@@ -238,6 +238,16 @@ LIVE_VIEW_ENABLED = os.environ.get("TANK_LIVE_VIEW", "true").strip().lower() in 
 LIVE_VIEW_FPS = float(os.environ.get("TANK_LIVE_VIEW_FPS", "8"))
 LIVE_VIEW_JPEG_QUALITY = int(os.environ.get("TANK_LIVE_VIEW_JPEG_QUALITY", "65"))
 
+# 웹 MFD 대시보드 경량화 노브.
+# /api/dashboard/state는 매 폴링마다 무거운 본문(파일 I/O·YAML 파싱·스냅샷 deepcopy·디텍터 조회)을
+# 다시 만든다. 이를 백그라운드 스레드가 DASHBOARD_REFRESH_SEC마다 한 번 만들어 캐시하고, HTTP 핸들러는
+# 캐시만 반환한다(요청은 복사만). 그래서 탭 수·폴링 빈도와 무관하게 무거운 빌드는 1곳에서 ~1/REFRESH Hz만.
+DASHBOARD_REFRESH_SEC = float(os.environ.get("TANK_DASHBOARD_REFRESH_SEC", "0.8"))
+# 브라우저 폴링 간격(ms). 대시보드는 사람이 보는 화면이라 1초면 충분하다(기존 300ms → 요청 수 1/3).
+DASHBOARD_POLL_MS = int(os.environ.get("TANK_DASHBOARD_POLL_MS", "1000"))
+# 정적맵(finalmap)은 거의 안 바뀌므로 파일 mtime 기반으로 캐시한다. 이 TTL 안에선 stat()조차 생략.
+STATIC_MAP_CACHE_TTL_SEC = float(os.environ.get("TANK_STATIC_MAP_CACHE_TTL_SEC", "5.0"))
+
 # TANK_YOLO_ASYNC=true이면 /detect에서 YOLO 완료를 안 기다리고 직전 완료 검출을 반환한다.
 # 기본은 동기(false) — 항상 동작하고 발견객체(discovered) 기록이 확실하다.
 # ★ async(true)는 GPU+engine 빠른 머신 전용. 느린 머신(GPU 없음 등)은 검출이 stale로 처리돼
