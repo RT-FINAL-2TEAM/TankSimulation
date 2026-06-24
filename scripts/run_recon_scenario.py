@@ -295,7 +295,7 @@ def main() -> int:
                     ["python3", os.path.join(scripts_dir, "make_llm_input.py")],
                     cwd=PROJECT_ROOT, check=True, timeout=60,
                 )
-                print("  🧠 ollama 추론 중... (qwen3:0.6b ~15-30초 · 끊지 말고 기다리세요)", flush=True)
+                print("  🧠 ollama 추론 중... (gemma3:4b ~60-120초 · 끊지 말고 기다리세요)", flush=True)
                 subprocess.run(
                     ["ros2", "run", "risk_analysis", "route_risk_node"],
                     cwd=PROJECT_ROOT, timeout=180,

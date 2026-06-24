@@ -554,6 +554,7 @@ class RosBridge(Node):
             "summary": result.get("summary"),
             "decision_reason": result.get("decision_reason"),
             "validated_ok": report.get("validated_ok"),
+            "result": deepcopy(result),
         }
 
         with self._lock:
