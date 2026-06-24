@@ -75,11 +75,11 @@ mapping:
   class_vote_by_confidence: true
   memory_decay_sec: 10.0
   merge_radius_by_class:
-    rock: 1.5
-    car: 2.5
-    tank: 3.0
-    house: 4.0
-    tent: 3.0
+    rock: 8.0
+    car: 8.0
+    tank: 8.0
+    house: 8.0
+    tent: 8.0
 rviz:
   current_object_lifetime_sec: 1.2
   discovered_marker_z_offset: 1.5

@@ -173,6 +173,11 @@ def generate_launch_description():
                 "route_index_never_decrease": True,
                 "dynamic_replan_keep_route_index": True,
                 "route_commit_lock_sec": 6.0,
+                # Checkpoint progress is tracked separately from A* polyline route_index.
+                # Once a route waypoint has been reached/passed in z, dynamic/emergency replan must not target it again.
+                "route_checkpoint_never_decrease": True,
+                "route_checkpoint_reached_radius": 8.0,
+                "route_checkpoint_passed_z_margin": 3.0,
                 # RViz discovered object도 confirmed 이후 A* persistent hard obstacle로 반영한다.
                 "use_discovered_objects_for_astar": True,
                 "discovered_confirmed_only": True,
@@ -236,86 +241,86 @@ def generate_launch_description():
                 "recon_report_dir": LaunchConfiguration("recon_report_dir"),
             }],
         ),
-        Node(
-            package="potential",
-            executable="potential_field_node",
-            name="tank_team_potential_field_node",
-            output="screen",
-            parameters=[{
-                # APF가 너무 강하면 제자리에서 빙빙 도는 루프가 생긴다.
-                # A*는 기본 경로만 제공하고, APF는 부드러운 국소 회피 방향만 제공한다.
+        # Node(
+        #     package="potential",
+        #     executable="potential_field_node",
+        #     name="tank_team_potential_field_node",
+        #     output="screen",
+        #     parameters=[{
+        #         # APF가 너무 강하면 제자리에서 빙빙 도는 루프가 생긴다.
+        #         # A*는 기본 경로만 제공하고, APF는 부드러운 국소 회피 방향만 제공한다.
                 
-                "target_pose_topic": "/tank/path/lookahead_pose",
-                "fallback_goal_topic": "/tank/goal/pose",
-                "hz": 10.0,
+        #         "target_pose_topic": "/tank/path/lookahead_pose",
+        #         "fallback_goal_topic": "/tank/goal/pose",
+        #         "hz": 10.0,
 
-                # APF 활성 조건
-                # force가 작아도 장애물이 8m 이내면 회피 모드 진입
-                "apf_activate_distance": 7.0,
-                "safety_watch_distance": 9.0,
-                "safety_caution_distance": 5.5,
-                "safety_danger_distance": 3.5,
-                "safety_watch_speed_limit_ws": 0.34,
-                "safety_caution_speed_limit_ws": 0.22,
-                "safety_danger_speed_limit_ws": 0.06,
-                # APF 합벡터 방향과 현재 heading 차이가 크면 controller가 W를 끊는다.
-                "apf_heading_stop_angle_deg": 78.0,
-                "apf_heading_slow_angle_deg": 38.0,
-                "apf_heading_stop_distance": 4.2,
-                "apf_heading_min_result_norm": 0.5,
-                "repulsive_eps": 0.05,
-                "blocked_to_apf_ticks": 1,
-                "clear_to_passthrough_ticks": 3,
+        #         # APF 활성 조건
+        #         # force가 작아도 장애물이 8m 이내면 회피 모드 진입
+        #         "apf_activate_distance": 7.0,
+        #         "safety_watch_distance": 9.0,
+        #         "safety_caution_distance": 5.5,
+        #         "safety_danger_distance": 3.5,
+        #         "safety_watch_speed_limit_ws": 0.34,
+        #         "safety_caution_speed_limit_ws": 0.22,
+        #         "safety_danger_speed_limit_ws": 0.06,
+        #         # APF 합벡터 방향과 현재 heading 차이가 크면 controller가 W를 끊는다.
+        #         "apf_heading_stop_angle_deg": 78.0,
+        #         "apf_heading_slow_angle_deg": 38.0,
+        #         "apf_heading_stop_distance": 4.2,
+        #         "apf_heading_min_result_norm": 0.5,
+        #         "repulsive_eps": 0.05,
+        #         "blocked_to_apf_ticks": 1,
+        #         "clear_to_passthrough_ticks": 3,
 
-                # APF 힘 비율
-                # global path 추종력보다 실시간 장애물 회피력이 우선권을 갖도록 조정
-                "influence_radius": 8.0,
-                "k_att": 4.2,
-                "k_rep": 80.0,
-                "tangent_gain_scale": 0.22,
+        #         # APF 힘 비율
+        #         # global path 추종력보다 실시간 장애물 회피력이 우선권을 갖도록 조정
+        #         "influence_radius": 8.0,
+        #         "k_att": 4.2,
+        #         "k_rep": 80.0,
+        #         "tangent_gain_scale": 0.22,
 
-                # local target
-                "local_target_distance": 5.5,
-                "max_attractive_norm": 16.0,
-                "max_repulsive_norm": 12.0,
-                "max_result_norm": 8.0,
+        #         # local target
+        #         "local_target_distance": 5.5,
+        #         "max_attractive_norm": 16.0,
+        #         "max_repulsive_norm": 12.0,
+        #         "max_result_norm": 8.0,
 
-                # 장애물 필터
-                "min_obstacle_distance": 0.3,
-                "max_obstacle_distance": 8.0,
-                "front_sector_deg": 100.0,
-                "path_corridor_width": 4.5,
-                "obstacle_voxel_resolution": 1.5,
-                "max_obstacle_points": 50,
+        #         # 장애물 필터
+        #         "min_obstacle_distance": 0.3,
+        #         "max_obstacle_distance": 8.0,
+        #         "front_sector_deg": 100.0,
+        #         "path_corridor_width": 4.5,
+        #         "obstacle_voxel_resolution": 1.5,
+        #         "max_obstacle_points": 50,
 
-                # LiDAR cluster 기반 회피
-                "use_lidar_clusters": True,
-                "cluster_obstacle_min_count": 2,
-                "cluster_first": True,
-                "use_raw_lidar_fallback": True,
+        #         # LiDAR cluster 기반 회피
+        #         "use_lidar_clusters": True,
+        #         "cluster_obstacle_min_count": 2,
+        #         "cluster_first": True,
+        #         "use_raw_lidar_fallback": True,
 
-                # 발견 객체 반영
-                "use_discovered_objects": True,
-                "ignored_discovered_classes": "person,human,blue,red",
+        #         # 발견 객체 반영
+        #         "use_discovered_objects": True,
+        #         "ignored_discovered_classes": "person,human,blue,red",
 
-                # 장애물 없을 때는 A* lookahead 그대로 추종
-                "passthrough_when_clear": True,
+        #         # 장애물 없을 때는 A* lookahead 그대로 추종
+        #         "passthrough_when_clear": True,
 
-                # 위협 회피
-                # 지금은 네가 finalmap을 계속 쓴다고 했으니 유지
-                "use_threat_avoidance": True,
-                "threat_map_file": recon_map_file,
-                "threat_radius": 25.0,
-                "k_threat_rep": 2000.0,
+        #         # 위협 회피
+        #         # 지금은 네가 finalmap을 계속 쓴다고 했으니 유지
+        #         "use_threat_avoidance": True,
+        #         "threat_map_file": recon_map_file,
+        #         "threat_radius": 25.0,
+        #         "k_threat_rep": 2000.0,
 
-                # APF weight profile
-                "apf_weights_file": apf_weights_file,
-                "apf_weight_profile": "default",
+        #         # APF weight profile
+        #         "apf_weights_file": apf_weights_file,
+        #         "apf_weight_profile": "default",
 
-                # RViz marker
-                "marker_scale": 2.5,
-            }],
-        ),
+        #         # RViz marker
+        #         "marker_scale": 2.5,
+        #     }],
+        # ),
         Node(
             package="control",
             executable="tank_controller_node",
@@ -324,13 +329,13 @@ def generate_launch_description():
             parameters=[{
                 "tank_param_file": tank_param_file,
                 "controller_hz": 10.0,
-                "enable_local_target": True,
+                "enable_local_target": False,
                 "target_ttl_sec": 2.0,
-                "enable_safety_speed_limit": True,
+                "enable_safety_speed_limit": False,
                 "safety_status_topic": "/tank/potential/safety_status",
                 "safety_status_ttl_sec": 1.2,
                 # APF 합벡터 기반 W 차단. heading 차이가 크고 장애물이 가까우면 STOP + A/D만 수행.
-                "enable_apf_vector_stop_pivot": True,
+                "enable_apf_vector_stop_pivot": False,
                 "apf_stop_angle_deg": 90.0,
                 "apf_slow_angle_deg": 42.0,
                 "apf_stop_distance": 4.2,

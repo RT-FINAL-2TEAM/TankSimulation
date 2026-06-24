@@ -440,13 +440,11 @@ def plan_path_through_waypoints(
 
     full_path: list[tuple[float, float]] = []
     prev = start_pos
-    # 웨이포인트 '지남' 판정 = z(북향)로 뒤쳐짐 AND 측면(x)으로 가까움. 측면으로 크게 벗어났으면(off-route)
-    # 안 버리고 유지 → A*가 그 웨이포인트(루트)로 되돌아간 뒤 진행(중앙 숲 관통 최단경로 방지).
-    # 단, 마지막(목적지) 웨이포인트는 항상 남겨 경로가 목적지까지 이어지게 한다.
+    # 웨이포인트 '지남' 판정 = z(북향) 기준으로 이미 뒤쪽에 있는 checkpoint는 제거한다.
+    # 장애물 회피로 x가 크게 벌어진 상태에서도 지난 checkpoint를 유지하면 A*가 뒤로 돌아가는
+    # 경로를 생성하므로 lateral 조건을 제거했다. 마지막(목적지)은 항상 남긴다.
     def _wp_passed(wp):
-        behind_in_z = wp[1] < start_pos[1] - WAYPOINT_PASSED_TOL
-        near_laterally = abs(wp[0] - start_pos[0]) <= WAYPOINT_LATERAL_TOL
-        return behind_in_z and near_laterally
+        return wp[1] < start_pos[1] - WAYPOINT_PASSED_TOL
     valid_waypoints = [wp for wp in waypoints if not _wp_passed(wp)]
     if waypoints and (not valid_waypoints or valid_waypoints[-1] is not waypoints[-1]):
         valid_waypoints.append(waypoints[-1])

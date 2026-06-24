@@ -28,7 +28,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Vector3Stamped
 from nav_msgs.msg import Path as NavPath
 from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2
@@ -620,6 +620,12 @@ class TeamDynamicAStarPlannerNode(Node):
         self.declare_parameter("route_index_never_decrease", True)
         self.declare_parameter("dynamic_replan_keep_route_index", True)
         self.declare_parameter("route_commit_lock_sec", 6.0)
+        # Checkpoint progress lock: route waypoint를 한 번 지났으면 dynamic/emergency replan 이후에도
+        # 이미 지난 checkpoint를 through list에 다시 넣지 않는다. route_index는 path point index라
+        # 새 A* 경로마다 의미가 바뀌므로 checkpoint 진행도는 별도로 관리한다.
+        self.declare_parameter("route_checkpoint_never_decrease", True)
+        self.declare_parameter("route_checkpoint_reached_radius", 8.0)
+        self.declare_parameter("route_checkpoint_passed_z_margin", 3.0)
         # Path-block trigger는 현재 보이는 cluster를 주력으로 사용한다.
         # history/discovered는 A* costmap에는 넣되, 반복 replan trigger로 쓰면 경로가 흔들릴 수 있다.
         self.declare_parameter("use_lidar_memory_for_path_block", False)
@@ -631,6 +637,14 @@ class TeamDynamicAStarPlannerNode(Node):
         self.declare_parameter("emergency_replan_front_distance", 16.0)
         self.declare_parameter("emergency_replan_min_distance", 0.0)
         self.declare_parameter("emergency_replan_margin", 8.0)
+
+        # APF를 끈 상태에서도 기존 RViz potential marker 표시를 유지하기 위한 시각화 mirror.
+        # 제어에는 사용하지 않고, rviz_visualizer_node가 구독하던 토픽에 A* lookahead 기반
+        # target 점과 desired heading vector만 발행한다.
+        self.declare_parameter("publish_lookahead_visualization_mirror", True)
+        self.declare_parameter("visualization_local_target_topic", "/tank/local_target/pose")
+        self.declare_parameter("visualization_result_vector_topic", "/tank/potential/result_vector")
+        self.declare_parameter("visualization_attractive_vector_topic", "/tank/potential/attractive_vector")
 
         self.map_width = int(self.get_parameter("map_width").value)
         self.map_height = int(self.get_parameter("map_height").value)
@@ -697,6 +711,9 @@ class TeamDynamicAStarPlannerNode(Node):
         self.route_index_never_decrease = bool(self.get_parameter("route_index_never_decrease").value)
         self.dynamic_replan_keep_route_index = bool(self.get_parameter("dynamic_replan_keep_route_index").value)
         self.route_commit_lock_sec = float(self.get_parameter("route_commit_lock_sec").value)
+        self.route_checkpoint_never_decrease = bool(self.get_parameter("route_checkpoint_never_decrease").value)
+        self.route_checkpoint_reached_radius = float(self.get_parameter("route_checkpoint_reached_radius").value)
+        self.route_checkpoint_passed_z_margin = float(self.get_parameter("route_checkpoint_passed_z_margin").value)
         self.use_lidar_memory_for_path_block = bool(self.get_parameter("use_lidar_memory_for_path_block").value)
         self.use_discovered_objects_for_path_block = bool(self.get_parameter("use_discovered_objects_for_path_block").value)
         self.emergency_cluster_replan_enabled = bool(self.get_parameter("emergency_cluster_replan_enabled").value)
@@ -704,6 +721,12 @@ class TeamDynamicAStarPlannerNode(Node):
         self.emergency_replan_front_distance = float(self.get_parameter("emergency_replan_front_distance").value)
         self.emergency_replan_min_distance = float(self.get_parameter("emergency_replan_min_distance").value)
         self.emergency_replan_margin = float(self.get_parameter("emergency_replan_margin").value)
+        self.enable_lookahead_visualization_mirror = bool(
+            self.get_parameter("publish_lookahead_visualization_mirror").value
+        )
+        self.visualization_local_target_topic = str(self.get_parameter("visualization_local_target_topic").value)
+        self.visualization_result_vector_topic = str(self.get_parameter("visualization_result_vector_topic").value)
+        self.visualization_attractive_vector_topic = str(self.get_parameter("visualization_attractive_vector_topic").value)
         self.emergency_cluster_blocked = False
 
         # 정적 맵(나무 등)을 1회 로드해 보관. use_gt_obstacles/obstacles_cb/replan과 독립.
@@ -741,6 +764,11 @@ class TeamDynamicAStarPlannerNode(Node):
         # 이전보다 뒤쪽 route index를 보지 않게 해 lookahead가 반대방향으로 튀는 것을 막는다.
         self.route_index_floor = 0
         self.route_commit_until_wall = -1e9
+        # Index into configured route waypoints, not into the generated A* polyline.
+        # This prevents dynamic/emergency replan from targeting a checkpoint already passed.
+        self.route_checkpoint_index = 0
+        self.route_checkpoint_total = 0
+        self.route_remaining_waypoints: List[Tuple[float, float]] = []
         # planner 속도 제한엔 monotonic wall time을 쓴다. /clock이 비활성이면 ROS time이 0에 머물 수 있다.
         self.last_plan_wall = -1e9
         self.last_plan_attempt_wall = -1e9
@@ -756,6 +784,11 @@ class TeamDynamicAStarPlannerNode(Node):
 
         self.pub_path = self.create_publisher(NavPath, TOPIC_GLOBAL_PATH, 10)
         self.pub_lookahead = self.create_publisher(PoseStamped, TOPIC_LOOKAHEAD_POSE, 10)
+        # potential_field_node를 끈 경우에도 기존 RViz 설정을 그대로 살리기 위한 mirror publisher.
+        # controller는 enable_local_target=False이면 이 토픽을 무시하므로 제어에는 영향이 없다.
+        self.pub_visual_local_target = self.create_publisher(PoseStamped, self.visualization_local_target_topic, 10)
+        self.pub_visual_result_vector = self.create_publisher(Vector3Stamped, self.visualization_result_vector_topic, 10)
+        self.pub_visual_attractive_vector = self.create_publisher(Vector3Stamped, self.visualization_attractive_vector_topic, 10)
         self.pub_points = self.create_publisher(String, TOPIC_PATH_POINTS, 10)
         self.pub_status = self.create_publisher(String, TOPIC_PLANNER_STATUS, 10)
         self.pub_lidar_bboxes = self.create_publisher(String, TOPIC_LIDAR_BBOXES, 10)
@@ -806,6 +839,9 @@ class TeamDynamicAStarPlannerNode(Node):
                 self.route_index = 0
                 self.route_index_floor = 0
                 self.route_commit_until_wall = -1e9
+                self.route_checkpoint_index = 0
+                self.route_checkpoint_total = 0
+                self.route_remaining_waypoints = []
         self.current_pos = new_pos
 
     def goal_pose_cb(self, msg: PoseStamped) -> None:
@@ -826,6 +862,9 @@ class TeamDynamicAStarPlannerNode(Node):
             self.route_index = 0
             self.route_index_floor = 0
             self.route_commit_until_wall = -1e9
+            self.route_checkpoint_index = 0
+            self.route_checkpoint_total = 0
+            self.route_remaining_waypoints = []
 
     def obstacles_cb(self, msg: String) -> None:
         try:
@@ -1063,6 +1102,56 @@ class TeamDynamicAStarPlannerNode(Node):
             daemon=True
         ).start()
 
+    def _remaining_route_waypoints(self, start_pos: Tuple[float, float], waypoints: Sequence[Tuple[float, float]]) -> List[Tuple[float, float]]:
+        """Return only checkpoints that are still ahead of the tank.
+
+        A* polyline route_index is not stable across replans because a new path is generated
+        from the current pose. Checkpoint progress must therefore be tracked against the
+        configured route waypoints themselves. A waypoint is considered passed if either:
+        - the tank is within route_checkpoint_reached_radius, or
+        - in this northbound map, the tank's z/y is ahead of the waypoint by
+          route_checkpoint_passed_z_margin.
+
+        This prevents emergency/dynamic replans from rebuilding a path back to a checkpoint
+        that the tank already passed while avoiding an obstacle laterally.
+        """
+        pts = [tuple(map(float, wp)) for wp in waypoints]
+        self.route_checkpoint_total = len(pts)
+        if not pts:
+            self.route_checkpoint_index = 0
+            self.route_remaining_waypoints = []
+            return []
+
+        idx = int(self.route_checkpoint_index) if self.route_checkpoint_never_decrease else 0
+        idx = max(0, min(idx, len(pts)))
+        advanced = False
+        while idx < len(pts):
+            wp = pts[idx]
+            reached = get_distance(start_pos, wp) <= max(0.0, self.route_checkpoint_reached_radius)
+            passed_by_z = start_pos[1] >= wp[1] + max(0.0, self.route_checkpoint_passed_z_margin)
+            if reached or passed_by_z:
+                idx += 1
+                advanced = True
+                continue
+            break
+
+        if self.route_checkpoint_never_decrease:
+            self.route_checkpoint_index = max(int(self.route_checkpoint_index), idx)
+        else:
+            self.route_checkpoint_index = idx
+        remaining = pts[self.route_checkpoint_index:]
+        self.route_remaining_waypoints = list(remaining)
+        if advanced:
+            self.get_logger().info(
+                f"route checkpoint advanced: next={self.route_checkpoint_index}/{len(pts)}, "
+                f"remaining={len(remaining)}"
+            )
+        return remaining
+
+    def _is_dynamic_replan_reason(self, reason: str) -> bool:
+        r = str(reason or "")
+        return "path_blocked" in r or r.startswith("emergency_") or r.startswith("lidar_")
+
     def _load_terrain_grid(self, path: str) -> Optional[Dict[Tuple[int, int], float]]:
         """scenario2_terrain.json(셀별 roughness 격자)을 A* 1m 격자 인덱스 dict로 로드한다.
 
@@ -1111,7 +1200,9 @@ class TeamDynamicAStarPlannerNode(Node):
                 try:
                     route_config = self.route_config_file or None
                     waypoints = get_route_waypoints(self.route_map_name, self.route_id, route_config)
-                    through = list(waypoints) + [goal_pos]
+                    remaining_waypoints = self._remaining_route_waypoints(start_pos, waypoints)
+                    # 이미 지난 checkpoint는 through list에서 제외한다. goal은 마지막 목적지로만 유지한다.
+                    through = list(remaining_waypoints) + [goal_pos]
                     route = team_plan_path_through_waypoints(
                         start_pos,
                         through,
@@ -1124,7 +1215,10 @@ class TeamDynamicAStarPlannerNode(Node):
                         terrain_grid=self.terrain_grid,
                         terrain_weight=self.terrain_weight,
                     )
-                    route_mode = f"route_waypoints:{self.route_map_name}/{self.route_id}/{self.route_side}"
+                    route_mode = (
+                        f"route_waypoints:{self.route_map_name}/{self.route_id}/{self.route_side}"
+                        f":next_checkpoint={self.route_checkpoint_index}/{self.route_checkpoint_total}"
+                    )
                 except Exception as exc:
                     self.get_logger().warn(f"route waypoint planning failed, fallback direct A*: {exc}")
                     route = []
@@ -1152,9 +1246,12 @@ class TeamDynamicAStarPlannerNode(Node):
                     # 일반적으로 새 경로는 새 좌표계(route point list)를 갖지만, dynamic replan에서는
                     # 현재 체크포인트 진행 상태를 뒤로 되돌리면 lookahead가 반대방향으로 튄다.
                     # 따라서 이전 route_index를 floor로 보존하고 publish_lookahead에서 일정 시간 강제한다.
-                    if reason == "lidar_path_blocked" and self.dynamic_replan_keep_route_index:
-                        self.route_index_floor = min(max(0, prev_route_index), max(0, len(route) - 1))
-                        self.route_index = self.route_index_floor
+                    if self._is_dynamic_replan_reason(reason) and self.dynamic_replan_keep_route_index:
+                        # Dynamic/emergency replan은 checkpoint 진행도는 유지하되, 새 A* polyline은 현재 위치에서
+                        # 시작하므로 path-point index를 과거 route_index로 강제하지 않는다.
+                        # 이전 polyline index를 보존하면 새 경로의 앞부분을 건너뛰어 오히려 target이 튈 수 있다.
+                        self.route_index = 0
+                        self.route_index_floor = 0
                         self.route_commit_until_wall = now_wall + max(0.0, self.route_commit_lock_sec)
                     else:
                         self.route_index = 0
@@ -1162,7 +1259,7 @@ class TeamDynamicAStarPlannerNode(Node):
                         self.route_commit_until_wall = -1e9
                     self.route_version += 1
                     self.last_plan_wall = now_wall
-                    if reason == "lidar_path_blocked":
+                    if self._is_dynamic_replan_reason(reason):
                         self.last_dynamic_replan_wall = self.last_plan_wall
                         self.last_dynamic_replan_pos = start_pos
                         self.dynamic_replan_count += 1
@@ -1236,6 +1333,53 @@ class TeamDynamicAStarPlannerNode(Node):
         msg.pose.orientation.w = 1.0
         self.pub_goal.publish(msg)
 
+    def publish_lookahead_visualization_mirror(self, target: Tuple[float, float]) -> None:
+        """APF 없이도 기존 RViz potential marker 표시를 유지한다.
+
+        rviz_visualizer_node는 기존에 /tank/local_target/pose와
+        /tank/potential/result_vector를 받아 노란 target 점과 방향 화살표를 그렸다.
+        APF를 launch에서 제외하면 해당 토픽이 끊기므로, planner가 현재 A* lookahead를
+        시각화용 local target과 desired heading vector로 mirror 발행한다.
+
+        주의: controller가 enable_local_target=False이면 /tank/local_target/pose는 제어 입력으로
+        사용되지 않는다. 이 함수는 RViz 표시 유지용이다.
+        """
+        if not self.enable_lookahead_visualization_mirror or self.current_pos is None:
+            return
+
+        stamp = self.get_clock().now().to_msg()
+
+        target_msg = PoseStamped()
+        target_msg.header.stamp = stamp
+        target_msg.header.frame_id = MAP_FRAME
+        target_msg.pose.position.x = float(target[0])
+        target_msg.pose.position.y = float(target[1])
+        target_msg.pose.position.z = 0.0
+        target_msg.pose.orientation.w = 1.0
+        self.pub_visual_local_target.publish(target_msg)
+
+        dx = float(target[0] - self.current_pos[0])
+        dy = float(target[1] - self.current_pos[1])
+        norm = math.hypot(dx, dy)
+        if norm > 1.0e-6:
+            vx = dx / norm
+            vy = dy / norm
+        else:
+            vx = 0.0
+            vy = 0.0
+
+        vec_msg = Vector3Stamped()
+        vec_msg.header.stamp = stamp
+        vec_msg.header.frame_id = MAP_FRAME
+        vec_msg.vector.x = float(vx)
+        vec_msg.vector.y = float(vy)
+        vec_msg.vector.z = 0.0
+        # 기존 RViz에서는 result vector가 보라색/파란색 계열 화살표로 표시된다.
+        self.pub_visual_result_vector.publish(vec_msg)
+        # attractive vector도 같은 방향으로 발행해 기존 초록색 목표방향 표시를 유지한다.
+        self.pub_visual_attractive_vector.publish(vec_msg)
+
+
     def publish_lookahead(self) -> Optional[Tuple[float, float]]:
         if self.current_pos is None or not self.route:
             return None
@@ -1268,6 +1412,7 @@ class TeamDynamicAStarPlannerNode(Node):
         msg.pose.position.z = 0.0
         msg.pose.orientation.w = 1.0
         self.pub_lookahead.publish(msg)
+        self.publish_lookahead_visualization_mirror(target)
         return target
 
     def publish_status(self, lookahead: Optional[Tuple[float, float]]) -> None:
@@ -1317,6 +1462,12 @@ class TeamDynamicAStarPlannerNode(Node):
             "dynamic_replan_keep_route_index": self.dynamic_replan_keep_route_index,
             "route_commit_lock_sec": self.route_commit_lock_sec,
             "route_index_floor": self.route_index_floor,
+            "route_checkpoint_never_decrease": self.route_checkpoint_never_decrease,
+            "route_checkpoint_index": self.route_checkpoint_index,
+            "route_checkpoint_total": self.route_checkpoint_total,
+            "route_remaining_waypoints": [{"x": p[0], "y": p[1]} for p in self.route_remaining_waypoints],
+            "route_checkpoint_reached_radius": self.route_checkpoint_reached_radius,
+            "route_checkpoint_passed_z_margin": self.route_checkpoint_passed_z_margin,
             "route_commit_remaining_sec": max(0.0, self.route_commit_until_wall - self.wall_time()),
             "dynamic_replan": self.enable_dynamic_replan,
             "dynamic_replan_count": self.dynamic_replan_count,
