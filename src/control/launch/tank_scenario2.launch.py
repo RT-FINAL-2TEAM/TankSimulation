@@ -66,9 +66,10 @@ def generate_launch_description():
                 "route_side": "west",
                 "static_map_file": LaunchConfiguration("scenario2_map"),
                 "terrain_cost_file": LaunchConfiguration("scenario2_terrain"),
-                # 험지 회피 가시화: 기본 0.6은 너무 낮아 경로가 직선이 됨(거칠기 mean~0.22). 4.0으로
-                # 올려 급경사(고-거칠기) 셀을 강하게 회피. 평지(거칠기≈0)는 거의 무영향.
-                "terrain_weight": "4.0",
+                # 지형 비용(험지 회피)을 정찰과 동일하게 OFF. 정찰은 terrain_cost_file이 비어 무영향이라,
+                # 시나리오2도 weight=0.0으로 지형 비용을 꺼 주행 거동을 정찰과 일치시킨다(decision_node·맵은 유지).
+                # 재활성화하려면 값만 올리면 됨(예전엔 4.0으로 급경사 셀 강회피).
+                "terrain_weight": "0.0",
                 # 시나리오2 local_path 리포트(route_A.json)를 정찰과 격리 → 정찰 recon_reports/route_A.json 미접촉.
                 "recon_report_dir": os.path.join(_project_root(), "recon_reports", "scenario2"),
             }.items(),
