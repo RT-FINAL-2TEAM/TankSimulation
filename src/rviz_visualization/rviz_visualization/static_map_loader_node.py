@@ -61,7 +61,7 @@ class StaticMapLoaderNode(Node):
 
         pkg_share = Path(get_package_share_directory("rviz_visualization"))
         default_config = pkg_share / "config" / "static_map_costs.yaml"
-        default_recon_map = pkg_share / "map" / "finalmap.map"
+        default_recon_map = pkg_share / "map" / "final_v4.map"
         default_mission_map = pkg_share / "map" / "mission_map.map"
 
         self.declare_parameter("mode", "recon_only")
@@ -187,6 +187,8 @@ class StaticMapLoaderNode(Node):
         objects: List[MapObject] = []
         for obs in map_data.get("obstacles", []):
             prefab = str(obs.get("prefabName", "unknown"))
+            if prefab.lower().startswith(("human", "person", "wall", "tent")):
+                continue
             pos = obs.get("position", {}) or {}
             rot = obs.get("rotation", {}) or {}
             raw_x = float(pos.get("x", 0.0))

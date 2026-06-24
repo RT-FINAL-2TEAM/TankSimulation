@@ -22,7 +22,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     gui_share = get_package_share_directory("rviz_visualization")
     controller_share = get_package_share_directory("control")
-    recon_map_file = os.path.join(gui_share, "map", "finalmap.map")
+    recon_map_file = os.path.join(gui_share, "map", "final_v4.map")
     tank_param_file = os.path.join(controller_share, "config", "tank_parameters.yaml")
     path_planning_share = get_package_share_directory("path_planning")
     potential_share = get_package_share_directory("potential")

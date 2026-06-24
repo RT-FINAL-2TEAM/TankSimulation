@@ -522,11 +522,9 @@ class LocalPathNode(Node):
             # Spotted assets 로깅
             for obj in self.discovered:
                 if obj.is_confirmed:
-                    if obj.class_name == "person":
-                        self.recon_logger.log_spotted_asset("soldiers", obj.object_id)
-                    elif obj.class_name == "tank":
+                    if obj.class_name == "tank":
                         self.recon_logger.log_spotted_asset("tanks", obj.object_id)
-                    elif obj.class_name in ("tent", "house", "outpost"):
+                    elif obj.class_name in ("house", "outpost"):
                         self.recon_logger.log_spotted_asset("outposts", obj.object_id)
 
             self.recon_logger.total_sim_time = self.sim_time
@@ -1754,8 +1752,7 @@ class LocalPathNode(Node):
     @staticmethod
     def _category_for_prefab(prefab: str) -> str:
         name = prefab.lower()
-        if name.startswith("human"): return "person"
-        for prefix, category in (("rock", "rock"), ("wall", "wall"), ("tank", "tank"), ("tent", "tent"), ("tree", "tree"), ("house", "house")):
+        for prefix, category in (("rock", "rock"), ("tank", "tank"), ("tree", "tree"), ("house", "house")):
             if name.startswith(prefix): return category
         return "unknown"
 

@@ -82,15 +82,10 @@ PLANNER_HZ = env_float("TANK_PLANNER_HZ", 10.0)
 
 # /update_obstacle가 bbox 대신 prefabName/position을 줄 때 쓰는 대체(fallback) 크기.
 PREFAB_HALF_SIZES: Dict[str, Tuple[float, float]] = {
-    "Human": (0.5, 0.5),
     "Tree": (1.0, 1.0),
     "Rock": (1.5, 1.5),
     "Tank": (2.0, 4.0),
     "House": (4.0, 4.0),
-    "wall001x5": (8.0, 1.0),
-    "wall002x5": (8.0, 1.0),
-    "Wall001": (3.0, 1.0),
-    "Wall002": (3.0, 1.0),
 }
 
 
@@ -143,11 +138,8 @@ SERVICE_DISCOVERED_SAVE = os.environ.get("TANK_SERVICE_DISCOVERED_SAVE", "/tank/
 SERVICE_DISCOVERED_CLEAR = os.environ.get("TANK_SERVICE_DISCOVERED_CLEAR", "/tank/map/discovered/clear")
 LOCAL_PATH_TIMER_SEC = env_float("TANK_LOCAL_PATH_TIMER_SEC", 0.2)
 CLASS_COLOR_DEFAULTS = {
-    "person": "#00FFFF",
     "rock": "#FFA500",
     "tank": "#FF0000",
-    "wall": "#00FF00",
-    "tent": "#FFFF00",
     "unknown": "#FFFFFF",
 }
 

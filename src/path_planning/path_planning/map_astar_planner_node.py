@@ -468,7 +468,7 @@ class TeamDynamicAStarPlannerNode(Node):
         self.static_obstacles: List[Dict[str, float]] = []
         if self.use_static_map:
             sm_path = self.static_map_file or os.path.join(
-                get_package_share_directory("rviz_visualization"), "map", "finalmap.map")
+                get_package_share_directory("rviz_visualization"), "map", "final_v4.map")
             self.static_obstacles = load_static_obstacles_from_map(sm_path)
             self.get_logger().info(
                 f"static map obstacles loaded: {len(self.static_obstacles)} from {sm_path}")
