@@ -1,0 +1,73 @@
+# APF weight profiles for heuristic tuning now and RL parameter selection later.
+# 현재 active APF 수식은 강의자료 기반이다. 이 파일은 객체/상황/지형별 gain을 코드 밖에서 관리하기 위한 출발점이다.
+# RL 계획: action이 아래 multiplier 또는 base APF 파라미터(k_rep, g_star 등)를 선택/보정하도록 확장한다.
+
+profiles:
+  default:
+    description: "현재 기본 heuristic. 안전성 우선이지만 과도하게 보수적이지 않게 설정."
+    global:
+      k_att: 1.0
+      k_rep: 160.0
+      g_star: 12.0
+      tangent_gain_scale: 1.8
+      k_threat_rep: 2000.0
+      local_target_distance: 6.0
+      path_corridor_width: 7.0
+      max_obstacle_distance: 12.0
+    object_multipliers:
+      unknown: 1.0
+      rock: 1.2
+      tree: 0.8
+      person: 2.0
+      tank: 3.0
+      house: 2.5
+    situation_multipliers:
+      normal: 1.0
+      narrow_corridor: 0.8
+      dense_forest: 0.9
+      enemy_near: 2.0
+      mission_fast_route: 0.7
+      mission_safe_route: 1.3
+    terrain_multipliers:
+      flat: 1.0
+      rough: 1.3
+      slope: 1.2
+      unknown: 1.0
+
+  safe:
+    description: "장애물/위협 회피를 강하게 잡는 실험 profile."
+    global:
+      k_att: 1.0
+      k_rep: 240.0
+      g_star: 16.0
+      tangent_gain_scale: 2.0
+      k_threat_rep: 3200.0
+      local_target_distance: 7.0
+      path_corridor_width: 8.0
+      max_obstacle_distance: 16.0
+    object_multipliers:
+      unknown: 1.0
+      rock: 1.4
+      tree: 1.0
+      person: 2.5
+      tank: 4.0
+      house: 3.0
+
+  fast:
+    description: "빠른 침투/짧은 경로를 우선하는 실험 profile."
+    global:
+      k_att: 1.2
+      k_rep: 110.0
+      g_star: 10.0
+      tangent_gain_scale: 1.4
+      k_threat_rep: 1600.0
+      local_target_distance: 8.0
+      path_corridor_width: 6.0
+      max_obstacle_distance: 10.0
+    object_multipliers:
+      unknown: 1.0
+      rock: 1.0
+      tree: 0.6
+      person: 1.8
+      tank: 2.5
+      house: 2.0

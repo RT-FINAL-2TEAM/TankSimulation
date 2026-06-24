@@ -1,0 +1,124 @@
+# -*- coding: utf-8 -*-
+# Static map / risk-map configuration for Tank Challenge RViz and planning preparation.
+#
+# Purpose
+# - finalmap.map is treated as drone reconnaissance information known before driving.
+# - finalmap.map is also treated as the actual mission world / ground truth for comparison.
+# - Live sensor fusion is intentionally not handled here.
+# - RL-derived weights can later replace the values below without changing code.
+
+terrain:
+  frame_id: tank_map
+  min_x: 0.0
+  max_x: 300.0
+  min_y: 0.0
+  max_y: 300.0
+  resolution: 1.0
+  use_raw_height: true       # RViz z = Unity raw y
+  default_marker_z: 0.3
+
+coordinate_policy:
+  unity_raw: "x=left/right, y=height, z=forward/backward"
+  rviz_tank_map: "x=raw.x, y=raw.z, z=raw.y"
+
+occupancy:
+  free_value: 0
+  occupied_value: 100
+  unknown_value: -1
+  default_inflation_radius_m: 4.0
+
+risk:
+  # All final risk values are clipped to [0.0, 1.0] and published as OccupancyGrid 0~100.
+  default_static_obstacle_risk: 0.30
+  risk_grid_z: 0.15
+  show_sparse_risk_markers: true
+  sparse_marker_stride: 3
+  sparse_marker_threshold: 0.15
+
+categories:
+  tree:
+    prefixes: ["Tree"]
+    marker_type: CYLINDER
+    scale: [1.5, 1.5, 5.0]
+    color_recon: [0.05, 0.75, 0.20, 0.45]
+    color_mission: [0.05, 0.95, 0.25, 0.75]
+    impassable: true
+    inflation_radius_m: 4.0
+    risk:
+      type: constant
+      value: 0.20
+
+  rock:
+    prefixes: ["Rock"]
+    marker_type: SPHERE
+    scale: [2.4, 2.4, 2.0]
+    color_recon: [0.55, 0.55, 0.55, 0.50]
+    color_mission: [0.70, 0.70, 0.70, 0.85]
+    impassable: true
+    inflation_radius_m: 4.0
+    risk:
+      type: constant
+      value: 0.35
+
+  house:
+    prefixes: ["House"]
+    marker_type: CUBE
+    scale: [6.0, 6.0, 5.0]
+    color_recon: [0.55, 0.35, 0.20, 0.55]
+    color_mission: [0.70, 0.42, 0.22, 0.90]
+    impassable: true
+    inflation_radius_m: 5.0
+    risk:
+      type: wedge_if_name_contains
+      name_contains: "House002"
+      fov_deg: 45.0
+      max_dist_m: 50.0
+      max_value: 1.0
+      fallback_constant: 0.40
+
+  human:
+    prefixes: ["Human"]
+    marker_type: CYLINDER
+    scale: [1.0, 1.0, 2.0]
+    color_recon: [1.0, 0.85, 0.05, 0.65]
+    color_mission: [1.0, 0.95, 0.05, 0.95]
+    impassable: false
+    inflation_radius_m: 2.0
+    risk:
+      type: gaussian
+      radius_m: 20.0
+      sigma_m: 7.0
+      max_value: 0.60
+
+  tank:
+    prefixes: ["Tank"]
+    marker_type: CUBE
+    scale: [3.7, 8.1, 2.2]   # Player tank lower-body bounding box approximation in RViz x/y/z.
+    color_recon: [1.0, 0.10, 0.10, 0.65]
+    color_mission: [1.0, 0.00, 0.00, 0.95]
+    impassable: false
+    inflation_radius_m: 4.0
+    risk:
+      type: gaussian
+      radius_m: 30.0
+      sigma_m: 10.0
+      max_value: 1.0
+
+  unknown:
+    prefixes: []
+    marker_type: CUBE
+    scale: [2.0, 2.0, 2.0]
+    color_recon: [1.0, 1.0, 1.0, 0.35]
+    color_mission: [1.0, 1.0, 1.0, 0.75]
+    impassable: false
+    inflation_radius_m: 1.0
+    risk:
+      type: constant
+      value: 0.10
+
+diff:
+  # Objects present in mission_map but absent in recon_map are interpreted as unexpected objects.
+  position_round_m: 1.0
+  mission_only_color: [1.0, 0.0, 0.0, 1.0]
+  recon_only_color: [0.0, 0.7, 1.0, 0.85]
+  marker_scale_multiplier: 1.35

@@ -1,0 +1,24 @@
+<?xml version="1.0" ?>
+<package format="3">
+  <name>control</name>
+  <version>0.1.0</version>
+  <description>PD heading and PID speed controller for Tank Challenge ROS2 bridge.</description>
+  <maintainer email="pnuav@example.com">pnuav</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>path_planning</exec_depend>
+  <exec_depend>potential</exec_depend>
+  <exec_depend>lidar</exec_depend>
+  <exec_depend>tank_visual_perception</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rviz_visualization</exec_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

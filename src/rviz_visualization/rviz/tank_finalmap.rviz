@@ -1,0 +1,123 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 10
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 164
+      Enabled: false
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Name: Terrain Grid
+      Plane: XY
+      Plane Cell Count: 30
+      Reference Frame: tank_map
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Simulator Terrain Boundary
+      Topic:
+        Value: /tank/rviz/terrain_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Static Map (finalmap)
+      Topic:
+        Value: /tank/rviz/recon_map_markers
+      Value: true
+    - Class: rviz_default_plugins/Map
+      Enabled: false
+      Name: Recon Occupancy Grid
+      Topic:
+        Value: /tank/map/recon/occupancy_grid
+      Value: true
+    - Class: rviz_default_plugins/Map
+      Enabled: false
+      Name: Recon Risk Grid
+      Topic:
+        Value: /tank/map/recon/risk_grid
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Tank / Goal Markers
+      Topic:
+        Value: /tank/rviz/object_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Live LiDAR Markers
+      Topic:
+        Value: /tank/rviz/lidar_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Fused YOLO-LiDAR Objects
+      Topic:
+        Value: /tank/rviz/fused_object_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Discovered Runtime Objects
+      Topic:
+        Value: /tank/rviz/discovered_object_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Potential Field Vectors
+      Topic:
+        Value: /tank/rviz/potential_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: LiDAR DBSCAN Clusters
+      Topic:
+        Value: /tank/rviz/lidar_cluster_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Final Terrain Elevation Grid
+      Topic:
+        Value: /tank/terrain/final_elevation_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Final Terrain Wireframe
+      Topic:
+        Value: /tank/terrain/final_wireframe_markers
+      Value: true
+    - Class: rviz_default_plugins/PointCloud2
+      Enabled: false
+      Name: Final Terrain Ground Cloud
+      Topic:
+        Value: /tank/terrain/final_ground_points
+      Value: false
+    - Class: rviz_default_plugins/PointCloud2
+      Enabled: false
+      Name: Final Terrain Non-Ground Cloud
+      Topic:
+        Value: /tank/terrain/final_non_ground_points
+      Value: false
+    - Class: rviz_default_plugins/Image
+      Enabled: false
+      Name: Camera LiDAR Projection
+      Topic:
+        Value: /tank/camera/lidar_projection/image
+      Value: false
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: tank_map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Value: true
+Window Geometry:
+  Height: 900
+  Width: 1400

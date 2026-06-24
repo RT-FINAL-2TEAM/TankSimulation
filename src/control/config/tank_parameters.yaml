@@ -1,0 +1,35 @@
+yaw_axis: body_x
+steady_state_speed:
+  0.1: 1.9452298482259114
+  0.3: 5.822383960088094
+  0.5: 9.601021448771158
+  0.8: 15.461951414744059
+  1.0: 19.446525891621906
+steady_state_yaw_rate:
+  0.1: 4.013483166980376
+  0.3: 12.000793951209987
+  0.5: 20.160206660386844
+  0.8: 32.00151509472804
+  1.0: 38.83878118563751
+acceleration_time_constant: 4.696039915084839
+stopping:
+  distance: 9.264083862304688
+  time: 1.550079345703125
+turning_radii:
+- w_ws: 0.5
+  w_ad: 0.5
+  radius: 27.95468952543989
+- w_ws: 0.8
+  w_ad: 0.3
+  radius: 74.89815028559707
+- w_ws: 0.3
+  w_ad: 0.7
+  radius: 11.900653778229126
+rough_terrain_factors:
+  speed_reduction_ratio: 1.0000761454674292
+  yaw_rate_reduction_ratio: 1.0138087665827915
+  stopping_distance_multiplier: 0.9768997137871959
+  flat_tilt_variance_Y: 0.0
+  flat_tilt_variance_Z: 0.0
+  rough_tilt_variance_Y: 20.67344280471479
+  rough_tilt_variance_Z: 13.498563223169262

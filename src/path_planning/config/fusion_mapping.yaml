@@ -1,0 +1,93 @@
+frame:
+  map_frame: tank_map
+camera:
+  horizontal_fov_deg: 47.81061
+  vertical_fov_deg: 28.0
+  default_image_width: 1920
+  default_image_height: 1057
+  heading_source: body
+fusion:
+  method: projection_then_cluster_then_angle
+  allow_angle_fallback: false
+  angle_gate_extra_deg: 4.0
+  max_fusion_range_m: 45.0
+  min_fusion_range_m: 0.5
+  min_lidar_points_per_object: 3
+  use_nearest_points: 20
+  min_detection_confidence: 0.2
+  semantic_requires_cluster: true
+  cluster_match_max_center_norm: 1.25
+  cluster_match_max_score: 1.55
+  cluster_match_ambiguity_delta: 0.35
+  cluster_match_distance_weight: 0.025
+  cluster_match_bbox_area_weight: 0.45
+  cluster_match_default_anchor_y: 0.5
+  max_sync_diff_sec: 0.45
+  drop_on_sync_mismatch: false
+projection:
+  enabled: true
+  prefer_dbscan_clusters: true
+  bbox_margin_px: 16.0
+  cluster_bbox_margin_px: 35.0
+  min_projected_lidar_points: 2
+  min_cluster_points: 2
+  use_only_detected_points: true
+  params:
+    tx: 0.28
+    ty: 0.02
+    tz: 11.8
+    yaw_offset: -0.9
+    pitch_offset: 1.5
+    roll_offset: -0.3
+    hfov: 86.0
+    vfov: 60.2
+    body_pitch_gain: 1.0
+    body_roll_gain: 1.0
+static_matching:
+  add_only_unmatched_to_recon: true
+  static_match_radius_m: 5.0
+  same_category_only: false
+async_detection:
+  drop_stale: true
+  max_result_age_ms: 450
+mapping:
+  enabled: true
+  merge_radius_m: 3.0
+  position_ema_alpha: 0.35
+  add_classes:
+  - tank
+  - rock
+  - house
+  - car
+  save_directory: ~/tankcc/tank_discovered_maps
+  save_latest_filename: discovered_objects_latest.map
+  save_timestamped_copy: true
+  save_confirmed_only: true
+  min_confirm_observations: 1
+  min_confirm_age_sec: 0.0
+  track_id_merge_enabled: true
+  track_id_merge_radius_m: 10.0
+  merge_across_classes: true
+  class_vote_by_confidence: true
+  memory_decay_sec: 10.0
+  merge_radius_by_class:
+    rock: 1.5
+    car: 2.5
+    tank: 3.0
+    house: 4.0
+rviz:
+  current_object_lifetime_sec: 1.2
+  discovered_marker_z_offset: 1.5
+  current_marker_z_offset: 2.0
+  line_width: 0.12
+  text_height: 1.2
+  sphere_scale: 1.5
+  discovered_cube_scale: 2.0
+  colors:
+    rock: '#FFA500'
+    tank: '#FF0000'
+    car: '#FF66CC'
+    house: '#AA66FF'
+    unknown: '#FFFFFF'
+debug:
+  fusion_status: true

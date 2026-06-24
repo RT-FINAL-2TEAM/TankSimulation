@@ -1,0 +1,73 @@
+# YOLO detection configuration for Tank Challenge /detect endpoint.
+# 0615 final model: car, tank, rock, house. person is ignored.
+model:
+  default_filename: best_final.engine
+  imgsz: 416
+  iou: 0.70
+  max_det: 20
+  max_return: 5
+  model_confidence: 0.50
+  fallback_model_confidence: 0.50
+  enable_low_conf_fallback: false
+  enable_cache: true
+  min_interval_sec: 0.12
+  half_if_cuda: true
+  warmup_runs: 2
+
+tracking:
+  # Fusion/discovered-map 중복 방지는 trackId가 아니라 tank_map 좌표 기준으로 처리한다.
+  # 따라서 frame 끊김/지연 진단 단계에서는 tracking을 OFF한다.
+  enabled: false
+  tracker: bytetrack.yaml
+  persist: false
+
+classes:
+  canonical:
+    - tank
+    - rock
+    - house
+    - car
+  fixed_ids:
+    car: 0
+    tank: 2
+    rock: 3
+    house: 4
+  aliases:
+    tank: tank
+    rock: rock
+    house: house
+    car: car
+  ignored:
+    - person
+  default_box_color: '#00FF00'
+  colors:
+    tank: '#FF0000'
+    rock: '#FFA500'
+    house: '#AA66FF'
+    car: '#FF66CC'
+  default_confidence: 0.50
+  confidence_thresholds:
+    tank: 0.50
+    rock: 0.50
+    house: 0.50
+    car: 0.50
+
+bbox_distance:
+  enabled: false
+  publish_metadata: false
+
+preprocess:
+  shadow_filter_enabled: false
+  shadow_sigma: 35.0
+  shadow_strength: 0.75
+  shadow_work_scale: 0.35
+  shadow_max_side: 960
+  clahe_enabled: false
+  clahe_clip: 1.5
+
+runtime:
+  recognition_log: false
+  recognition_log_cache: false
+  recognition_log_empty: false
+  timing_log: false
+  debug_detections: false

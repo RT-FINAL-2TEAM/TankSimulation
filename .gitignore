@@ -1,0 +1,37 @@
+# ROS2 Build artifacts
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+
+# IDEs
+.vscode/
+.idea/
+
+# Trash and backup
+trash/
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+.agents/
+.claude
+CLAUDE.md
+
+# Ignore recon outputs but keep folder
+recon_reports/*
+!recon_reports/.gitkeep
+
+# 출력 디렉터리(런타임에 코드가 자동 생성) — 추적 안 함
+tank_logs/
+reports/
