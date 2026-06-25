@@ -1329,7 +1329,7 @@ def render_view_page() -> str:
             function renderReadouts(items) {
                 if (!items.length) return '<div class="empty">No data</div>';
                 return `<div class="readout-list">${items.map((item) => `
-                    <div class="readout"><div class="label">${escapeHtml(item.label)}</div><div class="value">${escapeHtml(item.value)}</div></div>
+                    <div class="readout"><div class="label">${escapeHtml(item.label)}</div><div class="value">${item.rawHtml ? item.value : escapeHtml(String(item.value ?? "-"))}</div></div>
                 `).join("")}</div>`;
             }
             function routeCandidateData(state) {
@@ -1436,15 +1436,6 @@ def render_view_page() -> str:
                 }
                 if (activeTab === "ai") {
                     const ai = state?.aiLog || latest.ai_log || latest.llm_log || latest.decision;
-                    const values = Array.isArray(ai) ? ai : ai ? [ai] : [];
-                    byId("leftContent").innerHTML = values.length
-                        ? renderReadouts(values.slice(-8).map((entry, index) => ({
-                            label: `AI ${index + 1}`,
-                            value: typeof entry === "string" ? entry : JSON.stringify(entry)
-                        })))
-                        : '<div class="empty">AI explanation is not connected yet.</div>';
-                    return;
-                    /*
                     const entry = Array.isArray(ai) ? ai[ai.length - 1] : ai;
                     if (!entry) {
                         byId("leftContent").innerHTML = '<div class="empty">AI explanation is not connected yet.</div>';
@@ -1454,17 +1445,21 @@ def render_view_page() -> str:
                         byId("leftContent").innerHTML = renderReadouts([{ label: "AI", value: entry }]);
                         return;
                     }
-                    const res = entry.result || {};
+                    const res = entry.result || entry;
                     const rl = res.risk_level || {};
                     const rb = res.recommended_behavior || {};
                     const kr = res.key_risks || {};
                     const arr = (v) => Array.isArray(v) ? v.join(" / ") : safe(v, "-");
+                    const routeColor = (r) => r === "A" ? "#00ff88" : r === "B" ? "#ffaa00" : "#ffffff";
+                    const riskColor = (r) => r === "low" ? "#00ff88" : r === "medium" ? "#ffaa00" : r === "high" ? "#ff4444" : "#ffffff";
+                    const sel = res.selected_route || entry.selected_route;
                     byId("leftContent").innerHTML = renderReadouts([
-                        { label: "추천 루트", value: safe(res.selected_route, "-") },
+                        { label: "모델", value: safe(entry.model || res.model, "-") },
+                        { label: "추천 루트", value: safe(sel, "-") },
                         { label: "위험도 A/B", value: `${safe(rl.A, "-")} / ${safe(rl.B, "-")}` },
-                        { label: "확신도", value: safe(res.confidence, "-") },
+                        { label: "확신도", value: safe(res.confidence || entry.confidence, "-") },
                         { label: "요약", value: safe(res.summary || entry.summary, "-") },
-                        { label: "판단 근거", value: safe(res.decision_reason, "-") },
+                        { label: "판단 근거", value: safe(res.decision_reason || entry.decision_reason, "-") },
                         { label: "속도 정책", value: safe(rb.speed_policy, "-") },
                         { label: "주의 지점", value: arr(rb.caution_points) },
                         { label: "전술 코멘트", value: safe(rb.tactical_note, "-") },
@@ -1472,7 +1467,6 @@ def render_view_page() -> str:
                         { label: "B 위험요인", value: arr(kr.B) },
                     ]);
                     return;
-                    */
                 }
                 if (activeTab === "recon") {
                     const detections = getDetections(state);
