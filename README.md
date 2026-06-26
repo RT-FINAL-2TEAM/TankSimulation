@@ -45,11 +45,11 @@
 ## 핵심 기능
 
 - **인지** — LiDAR 지형/장애물 분리(0.5m 격자 높이차), DBSCAN 클러스터링, 카메라–LiDAR 융합, YOLO 4클래스(`car/tank/rock/house`; person은 fix/fusion에서 ignored).
-- **판단** — A* 전역경로 + 비동기 재탐색, FOV콘·시선차단(LoS)·타입별 위협 반경(House 25m / Tank 20m).
-- **회피** — APF 국소 회피(목적지 인력 + 장애물 척력 + 접선력 + 위협 척력).
-- **제어** — PD(비례+rate feedback) 헤딩 제어 → W/A/S/D, 끼임 탈출, 순간이동/재시작 감지.
+- **판단** — A* 전역경로 + 비동기 재탐색 + route checkpoint 진행도 추적(replan 시 역행 방지), FOV콘·시선차단(LoS)·타입별 위협 반경(House 25m / Tank 20m).
+- **회피** — APF 국소 회피(인력+척력+접선력+위협 척력). *※ 현재 launch에서 비활성(fix/control2) → 회피=A\* 전역 only. 재활성화는 launch 주석 해제.*
+- **제어** — PD(비례+rate feedback) 헤딩 제어 → W/A/S/D, 크롤 피벗·끼임 탈출, 순간이동/재시작 감지.
 - **정찰** — A/B 루트 주행·로깅 → 위험도·은밀성 **비교 보고서** + 루트 추천.
-- **LLM** — 로컬 LLM(ollama)으로 정찰 루트 위험도·은밀성 평가 → 콕핏 MFD(웹)에 전술조언 표시.
+- **LLM** — 로컬 LLM(ollama)으로 정찰 루트 위험도·은밀성 평가 → 콕핏 MFD(웹)에 전술조언 표시. *(웹은 백그라운드 캐시·폴링 완화로 경량화 — 제어 경합 ↓.)*
 - **지형** — 주행 중 지면/장애물 점 누적 → 격자 **고도·거칠기 지형맵** 생성·저장.
 
 ---
@@ -87,7 +87,7 @@
 | `vision` | YOLO 추론(4클래스 `car/tank/rock/house`, person 제외). 모델 `best_final.engine`(GPU)/`best_final.pt`(GPU 없을 때). 식별은 지도좌표(`tank_map`) 기반. |
 | `tank_visual_perception` | DBSCAN 클러스터링(eps=1.5) + LiDAR↔카메라 투영·융합. |
 | `path_planning` | A* 전역경로 + 비동기 재탐색; 카메라/LiDAR 융합·발견객체 맵; **정찰 로깅**; 루트 A/B(`routes.yaml`). |
-| `potential` | APF 국소 회피(인력+척력+접선력+위협 척력). |
+| `potential` | APF 국소 회피(인력+척력+접선력+위협 척력). *(현재 launch 비활성 — fix/control2; 코드는 유지)* |
 | `control` | PD 헤딩 제어 → W/A/S/D, 끼임 탈출, 순간이동/재시작 감지. |
 | `ground_division` | 주행 중 지면/장애물 점 누적 → `finalize` 시 voxel 압축 + 고도·거칠기 지형맵 저장. |
 | `risk_analysis` | 로컬 LLM(ollama)으로 정찰 A/B 루트 위험도·은밀성 평가 → `/tank/risk/route_report`. |
@@ -203,9 +203,9 @@ python3 scripts/verify_route_plan.py        # 시뮬 없이 루트 품질 검증
 
 ### ✅ 동작
 - **인지** — 지형/장애물 분리, DBSCAN, 카메라-LiDAR 융합, YOLO 4클래스(person 제외)
-- **판단/회피** — A* 전역 + APF 국소 + FOV콘·시선차단·타입별 위협 반경
-- **제어** — PD 헤딩 + 끼임 탈출 *(완전 PID 아님)*
-- **브릿지** — HTTP ↔ ROS2 중계 + 콕핏 MFD(웹)
+- **판단/회피** — A* 전역 + route checkpoint 추적(역행 방지) + FOV콘·시선차단·타입별 위협 반경. *APF 국소회피는 현재 비활성(A\*-only)*
+- **제어** — PD 헤딩 + 크롤 피벗·끼임 탈출 *(완전 PID 아님)*
+- **브릿지** — HTTP ↔ ROS2 중계 + 콕핏 MFD(웹, 경량화)
 - **정찰** — A/B 루트 로깅·비교 보고서·노출/위험도 시각화
 - **LLM** — 로컬 ollama 루트 위험도 + MFD 전술조언 표시
 - **지형** — 주행 중 누적 → 고도·거칠기 지형맵 기록

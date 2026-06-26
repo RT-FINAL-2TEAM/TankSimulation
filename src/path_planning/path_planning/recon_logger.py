@@ -62,6 +62,12 @@ class ReconLogger:
         self._last_diag_t: Optional[float] = None
         self._diag_min_dt: float = 0.2
 
+        # 정찰 관측 거동(②감속/dwell·③포탑 stare) 진단 — diag_sample에 흘려보내 analyze_run이 소비.
+        # dwell/mode는 컨트롤러 status(speed_mode/recon_observation)에서, 후보요약은 local_path_node에서.
+        self._obs_dwell: bool = False
+        self._obs_mode: str = ""
+        self._obs_candidates: Optional[dict] = None
+
     # -- 장애물 로깅 --------------------------------------------------------
 
     def log_obstacle(self, sim_time: float, x: float, z: float, bbox: list) -> None:
@@ -109,6 +115,15 @@ class ReconLogger:
         """융합 드롭 사유 누적 {reason: count}. YOLO를 봐도 왜 확정 안 되는지(no_cluster/stale 등) 진단용."""
         self._fusion_rejects = dict(counts)
 
+    def set_observe_mode(self, dwell: bool, mode: str) -> None:
+        """컨트롤러 status에서 정찰 관측 거동 상태(dwell 여부 / mode=dwell|slow|turret|"")."""
+        self._obs_dwell = bool(dwell)
+        self._obs_mode = str(mode or "")
+
+    def set_observe_candidates(self, summary: Optional[dict]) -> None:
+        """local_path_node의 미분류 후보 요약(n/n_fov/n_side/by_class)."""
+        self._obs_candidates = summary
+
     def log_planned_path(self, sim_time: float, path_xz: list) -> None:
         """전역 계획경로를 경로가 '실제로 바뀔 때만' 저장(끝점/길이 시그니처로 중복 제거, 다운샘플)."""
         if not path_xz:
@@ -134,14 +149,19 @@ class ReconLogger:
         self._last_diag_t = sim_time
         look = self._latest_lookahead
         ltgt = self._latest_local_target
-        self.diag_samples.append({
+        sample = {
             "t": round(sim_time, 2),
             "p": [round(px, 2), round(pz, 2)],
             "rv": self.route_version,
             "look": [round(look[0], 2), round(look[1], 2)] if look else None,
             "ltgt": [round(ltgt[0], 2), round(ltgt[1], 2)] if ltgt else None,
             "cmd": self._latest_cmd,
-        })
+        }
+        # 정찰 관측 거동: hold(=의도적 dwell, analyze_run이 이미 읽음) + obs(후보요약+mode).
+        if self._obs_mode or self._obs_candidates:
+            sample["hold"] = self._obs_dwell
+            sample["obs"] = {"mode": self._obs_mode, **(self._obs_candidates or {})}
+        self.diag_samples.append(sample)
 
     # -- 발각(노출) 로깅 ----------------------------------------------------
 

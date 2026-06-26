@@ -21,7 +21,7 @@ from typing import Any, Dict, Optional, Tuple, List
 import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Vector3Stamped
 from nav_msgs.msg import Path as NavPath
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -212,6 +212,42 @@ class TeamPathControllerNode(Node):
         self.enable_local_target = bool(self.get_parameter("enable_local_target").value)
         self.target_ttl_sec = float(self.get_parameter("target_ttl_sec").value)
         self.mission_type = str(self.get_parameter("mission_type").value).lower()
+
+        # ── 정찰 전용 "지각 주도 관측" 소비 (mission_type==recon에서만) ──────────
+        # local_path_node의 /tank/recon/observe_request(미분류 후보)를 받아
+        #   ② 전방 후보: 감속/dwell(깨끗한 분류 프레임)  ③ 옆 후보: 포탑 step-stare.
+        # 경로/조향은 안 건드리고 속도(W)와 turret만 만진다.
+        self.declare_parameter("recon_observe_enabled", True)
+        self.declare_parameter("recon_observe_stale_sec", 1.0)
+        self.declare_parameter("recon_observe_ws_weight", 0.25)     # 전방 후보 있을 때 저속(0이면 멈춤 — 진행은 유지)
+        self.declare_parameter("recon_dwell_sec", 1.2)              # 정지관측 길이
+        self.declare_parameter("recon_dwell_cooldown_sec", 2.5)     # dwell 후 재dwell 금지 구간
+        self.declare_parameter("recon_dwell_priority", 0.7)         # dwell 트리거 최소 우선순위
+        self.declare_parameter("recon_dwell_distance_m", 30.0)      # dwell 트리거 최대 거리
+        self.declare_parameter("recon_turret_enable", True)
+        self.declare_parameter("recon_turret_tol_deg", 6.0)         # |오차|<=tol 이면 on-target(응시)
+        self.declare_parameter("recon_turret_max_weight", 0.9)
+        self.declare_parameter("recon_turret_qe_sign", 1)           # Q/E 부호 — 라이브 검증 후 뒤집기 가능
+        self.recon_observe_enabled = bool(self.get_parameter("recon_observe_enabled").value)
+        self.recon_observe_stale_sec = float(self.get_parameter("recon_observe_stale_sec").value)
+        self.recon_observe_ws_weight = float(self.get_parameter("recon_observe_ws_weight").value)
+        self.recon_dwell_sec = float(self.get_parameter("recon_dwell_sec").value)
+        self.recon_dwell_cooldown_sec = float(self.get_parameter("recon_dwell_cooldown_sec").value)
+        self.recon_dwell_priority = float(self.get_parameter("recon_dwell_priority").value)
+        self.recon_dwell_distance_m = float(self.get_parameter("recon_dwell_distance_m").value)
+        # 같은 지점(이 반경 내)에서 이미 dwell했으면 재dwell 금지 — 장애물 앞 무한 dwell 데드락 방지.
+        self.declare_parameter("recon_dwell_spot_radius_m", 8.0)
+        self.recon_dwell_spot_radius_m = float(self.get_parameter("recon_dwell_spot_radius_m").value)
+        self.recon_turret_enable = bool(self.get_parameter("recon_turret_enable").value)
+        self.recon_turret_tol_deg = float(self.get_parameter("recon_turret_tol_deg").value)
+        self.recon_turret_max_weight = float(self.get_parameter("recon_turret_max_weight").value)
+        self.recon_turret_qe_sign = 1 if int(self.get_parameter("recon_turret_qe_sign").value) >= 0 else -1
+        self._observe_payload: Optional[Dict[str, Any]] = None
+        self._observe_wall: float = 0.0
+        self._turret_world_deg: Optional[float] = None
+        self._recon_dwell_until: float = 0.0
+        self._recon_dwell_cooldown_until: float = 0.0
+        self._dwelled_spots: List[Tuple[float, float]] = []   # 이미 dwell(관측)한 지점들 — 재dwell 금지용
         self.slowdown_angle_deg = float(self.get_parameter("slowdown_angle_deg").value)
         self.stop_distance = float(self.get_parameter("stop_distance").value)
         self.enable_stuck_escape = bool(self.get_parameter("enable_stuck_escape").value)
@@ -342,6 +378,9 @@ class TeamPathControllerNode(Node):
         self.create_subscription(NavPath, "/tank/global_path", self.global_path_cb, 10)
         self.create_subscription(String, TOPIC_COLLISION_EVENT, self.collision_cb, 10)
         self.create_subscription(String, self.safety_status_topic, self.safety_status_cb, 10)
+        # 정찰 관측요청(미분류 후보) + 포탑 현재각 피드백(step-stare 폐루프용).
+        self.create_subscription(String, "/tank/recon/observe_request", self.observe_request_cb, 10)
+        self.create_subscription(Vector3Stamped, "/tank/api/get_action/turret", self.turret_feedback_cb, 10)
         hz = float(self.get_parameter("controller_hz").value)
         self.create_timer(1.0 / max(1.0, hz), self.timer_cb)
         self.get_logger().info(
@@ -1196,6 +1235,12 @@ class TeamPathControllerNode(Node):
     def escape_command_if_needed(self, target: Optional[Tuple[float, float]] = None) -> Optional[Tuple[Dict[str, Any], str]]:
         if not self.enable_stuck_escape or self.current_pos is None:
             return None
+        # 정찰 의도적 dwell(정지관측) 중에는 stuck-escape를 끈다 — 의도 정지를 끼임으로 오인 방지.
+        # 베이스라인을 현재 위치/시각으로 리셋해 dwell 종료 후 stuck 윈도가 새로 시작하게 한다.
+        if self.mission_type == "recon" and not self.is_escaping and time.time() < self._recon_dwell_until:
+            self.last_stuck_check_pos = self.current_pos
+            self.last_stuck_check_time = self.current_sim_time if self.current_sim_time > 0.0 else time.time()
+            return None
         t = self.current_sim_time if self.current_sim_time > 0.0 else time.time()
         if self.is_escaping:
             elapsed = t - self.escape_start_time
@@ -1238,6 +1283,92 @@ class TeamPathControllerNode(Node):
             self.last_stuck_check_pos = self.current_pos
             self.last_stuck_check_yaw = self.current_yaw
         return None
+
+    def observe_request_cb(self, msg: String) -> None:
+        try:
+            self._observe_payload = json.loads(msg.data)
+            self._observe_wall = time.time()
+        except Exception:
+            pass
+
+    def turret_feedback_cb(self, msg: Vector3Stamped) -> None:
+        self._turret_world_deg = float(msg.vector.x)
+
+    @staticmethod
+    def _normalize_180(angle: float) -> float:
+        return (float(angle) + 180.0) % 360.0 - 180.0
+
+    def _near_dwelled_spot(self) -> bool:
+        """현재 위치가 이미 dwell(관측)한 지점 반경 내인가 — 같은 곳 무한 재dwell 방지."""
+        if self.current_pos is None:
+            return False
+        cx, cy = self.current_pos[0], self.current_pos[1]
+        r2 = self.recon_dwell_spot_radius_m ** 2
+        return any((cx - sx) ** 2 + (cy - sy) ** 2 <= r2 for sx, sy in self._dwelled_spots)
+
+    def apply_recon_observation(
+        self, cmd_ws: str, w_ws: float, speed_mode: str
+    ) -> Tuple[str, float, str, Dict[str, Any], Dict[str, Any]]:
+        """정찰 전용: observe_request(미분류 후보) 기반 ②감속/dwell + ③포탑 step-stare.
+        경로/조향은 안 건드리고 속도(W)와 turret만 만진다. 반환:
+        (cmd_ws, w_ws, speed_mode, turret_qe, status)."""
+        turret_qe = {"command": "", "weight": 0.0}
+        status: Dict[str, Any] = {"active": False}
+        if not self.recon_observe_enabled:
+            return cmd_ws, w_ws, speed_mode, turret_qe, status
+        payload = self._observe_payload
+        now = time.time()
+        if not isinstance(payload, dict) or (now - self._observe_wall) > self.recon_observe_stale_sec:
+            return cmd_ws, w_ws, speed_mode, turret_qe, status
+        has_fov = bool(payload.get("has_pending_fov"))
+        has_side = bool(payload.get("has_pending_side"))
+        cands = payload.get("candidates") or []
+        status = {"active": True, "has_pending_fov": has_fov, "has_pending_side": has_side}
+
+        # ② 전방 미분류 후보 → 감속(깨끗한 프레임), 고우선·근접이면 잠깐 정지(dwell).
+        if has_fov:
+            fov_cands = [c for c in cands if c.get("in_forward_fov")]
+            best = max(fov_cands, key=lambda c: c.get("priority", 0.0)) if fov_cands else None
+            dwelling = now < self._recon_dwell_until
+            if (best is not None and not dwelling and now >= self._recon_dwell_cooldown_until
+                    and not self._near_dwelled_spot()           # 같은 지점 재dwell 금지 — 장애물 앞 무한 dwell 데드락 방지
+                    and float(best.get("priority", 0.0)) >= self.recon_dwell_priority
+                    and float(best.get("distance_m", 1e9)) <= self.recon_dwell_distance_m):
+                self._recon_dwell_until = now + self.recon_dwell_sec
+                if self.current_pos is not None:
+                    self._dwelled_spots.append((self.current_pos[0], self.current_pos[1]))
+                dwelling = True
+            if dwelling:
+                cmd_ws, w_ws, speed_mode = "STOP", 1.0, "recon_dwell"
+                status["mode"] = "dwell"
+            else:
+                if self._recon_dwell_until and now >= self._recon_dwell_until:
+                    self._recon_dwell_cooldown_until = now + self.recon_dwell_cooldown_sec
+                    self._recon_dwell_until = 0.0
+                if cmd_ws == "W" and w_ws > self.recon_observe_ws_weight:
+                    w_ws = self.recon_observe_ws_weight
+                    speed_mode = f"{speed_mode}|recon_observe_slow"
+                    status["mode"] = "slow"
+
+        # ③ 전방이 비었을 때만(전방 우선) 옆(전방-대각) 미분류 후보로 포탑을 폐루프로 돌려 응시.
+        if self.recon_turret_enable and has_side and not has_fov:
+            g = payload.get("best_side_bearing_global_deg")
+            if g is not None and self._turret_world_deg is not None:
+                err = self._normalize_180(float(g) - float(self._turret_world_deg))
+                tw = round(float(self._turret_world_deg), 1)
+                if abs(err) > self.recon_turret_tol_deg:
+                    direction = "E" if (err * self.recon_turret_qe_sign) > 0 else "Q"
+                    w = clamp(abs(err) / 30.0, 0.2, 1.0) * self.recon_turret_max_weight
+                    turret_qe = {"command": direction, "weight": float(w)}
+                    # 포탑이 슬루 중이면 차체 감속 — 포탑이 따라잡기 전에 후보가 뒤로 빠지지 않게(능동지각엔 시간 필요).
+                    if cmd_ws == "W" and w_ws > self.recon_observe_ws_weight:
+                        w_ws = self.recon_observe_ws_weight
+                        speed_mode = f"{speed_mode}|recon_turret_pursue_slow"
+                        status["mode"] = status.get("mode") or "turret_slow"
+                    status["turret"] = {"err_deg": round(err, 1), "cmd": direction, "w": round(w, 2), "world_deg": tw}
+                else:
+                    status["turret"] = {"on_target": True, "err_deg": round(err, 1), "world_deg": tw}
+        return cmd_ws, w_ws, speed_mode, turret_qe, status
 
     def make_action(self, cmd_ws: str, w_ws: float, cmd_ad: str, w_ad: float) -> Dict[str, Any]:
         return {
@@ -1349,7 +1480,16 @@ class TeamPathControllerNode(Node):
         cmd_ws, w_ws, speed_mode, turn_overspeed_guard_status = self.apply_turn_overspeed_guard(
             cmd_ws, w_ws, yaw_error, speed_mode, safety_mode, apf_vector_control
         )
+        # 정찰 전용: 미분류 후보 관측을 위한 ②감속/dwell + ③포탑 step-stare (recon에서만, 마지막에 적용).
+        recon_turret_qe: Dict[str, Any] = {"command": "", "weight": 0.0}
+        recon_obs_status: Dict[str, Any] = {"active": False}
+        if self.mission_type == "recon":
+            cmd_ws, w_ws, speed_mode, recon_turret_qe, recon_obs_status = self.apply_recon_observation(
+                cmd_ws, w_ws, speed_mode
+            )
         action = self.make_action(cmd_ws, w_ws, cmd_ad, w_ad)
+        if recon_turret_qe.get("command"):
+            action["turretQE"] = recon_turret_qe
         if speed_mode == "goal_reached":
             # 목적지 도달 시 시뮬레이터 일시정지 요청.
             # 브릿지 select_action_command가 latest_command를 그대로 반환하므로
@@ -1379,6 +1519,7 @@ class TeamPathControllerNode(Node):
             "yaw_error_deg": yaw_error,
             "current_speed_mps": self.current_speed,
             "speed_mode": speed_mode,
+            "recon_observation": recon_obs_status,
             "safety": {
                 "enabled": self.enable_safety_speed_limit,
                 "mode": self.safety_mode,

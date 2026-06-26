@@ -92,14 +92,15 @@
 3. **비용맵** `_build_cost_map`:
    - **① clearance**(통로 중앙): BFS로 각 셀→최근접 장애물 거리, `< CLEARANCE_DESIRED(5m)`면 `CLEARANCE_WEIGHT(0.4)·(5−거리)` 가산 → 벽에서 멀어짐.
    - **② side-bias**(루트 유지): 웨이포인트 x 기준선에서 의도 채널 반대로 `SIDE_TOL(7m)` 넘어가면 `SIDE_WEIGHT(2.0)·초과` 가산. A=서/B=동.
-   - **③ 지형 거칠기**(게이트형, 시나리오2): `terrain_grid` 있을 때만 셀별 `terrain_weight·roughness` 가산. 정찰엔 grid 없어 무영향.
+   - **③ 지형 거칠기**(게이트형): `terrain_grid` 있을 때만 셀별 `terrain_weight·roughness` 가산. 정찰엔 grid 없어 무영향. **(2026-06-24: 시나리오2도 `terrain_weight=0.0`으로 off — 주행을 정찰과 일치시킴; 지형격자는 경로 z-lift·시각화용으로만 로드. 험지 회피 재활성화는 launch에서 값↑.)**
 4. **A\* 탐색** `astar_search`: 이동비용 직선1.0/대각1.414 `+ cost_map`, heuristic=대각거리. 막힌 셀 회피.
 5. **스무딩** `smooth_path`: 시야 트인(`has_line_of_sight`) 두 점 직선 단축.
-- **루트 웨이포인트** `plan_path_through_waypoints`: `routes.yaml`의 A/B를 순서 경유(채널 힌트), `valid_waypoints`로 이미 지나친(전차 뒤, z<start−1m) 것 버림. 지형격자/노드 로딩은 [map_astar_planner_node.py](../src/path_planning/path_planning/map_astar_planner_node.py) `_load_terrain_grid:688`.
+- **루트 웨이포인트** `plan_path_through_waypoints`: `routes.yaml`의 A/B를 순서 경유(채널 힌트), `valid_waypoints`로 이미 지나친(전차 뒤, z<start−1m) 것 버림. 지형격자/노드 로딩은 [map_astar_planner_node.py](../src/path_planning/path_planning/map_astar_planner_node.py) `_load_terrain_grid`.
+- **route checkpoint 진행도 추적**(fix/control2 `947d578`): A\* path-point index는 replan마다 의미가 바뀌므로, 전차가 실제로 도달한 웨이포인트를 `route_checkpoint_index`(단조 증가, never_decrease, reach_radius 8m)로 별도 관리 → dynamic/emergency replan 후에도 **지난 checkpoint를 through에 다시 안 넣음**(backward-hook 방지).
 
-**핵심 파라미터**(launch): inflate 5.0, route_clearance_weight 0.4, lookahead_distance 8.0, goal_tolerance 10.0, use_route_waypoints True, use_gt_obstacles False(시뮬 정답 안 씀), enable_dynamic_replan False.
+**핵심 파라미터**(launch): inflate 5.0, route_clearance_weight 0.35, lookahead_distance 13.0, goal_tolerance 10.0, use_route_waypoints True, use_gt_obstacles False, **enable_dynamic_replan True**(emergency cluster replan 포함), straight_ws_weight 0.34(crawl pivot). (fix/control2 기준; 옛 0.8m/APF-on 값은 폐기.)
 
-**③ 어디 쓰이나.** 전역경로 `/tank/global_path` + lookahead → APF·컨트롤러.
+**③ 어디 쓰이나.** 전역경로 `/tank/global_path` + lookahead → 컨트롤러(APF 비활성 시 A\* 직접 추종). **시나리오2에선 경로 점 z를 지형 z_median+0.4m로 lift**(`publish_path`)해 RViz 지형 면 위에 표시; 정찰은 z=0.
 
 ## 2.2 로컬 경로 — lookahead + 정찰 weave
 
@@ -111,6 +112,10 @@
 **③ 어디 쓰이나.** APF의 인력 타깃, 컨트롤러의 목표.
 
 ## 2.3 국소 회피 — APF (Artificial Potential Field)
+
+> **⚠️ 현재 상태(2026-06-24, fix/control2 `947d578`): APF 비활성.** `tank_autonomous_control.launch.py`에서
+> `potential_field_node`를 주석 처리 → 회피는 **A\* 전역경로 only**(APF 합벡터↔heading 충돌로 W를 끊어 멈칫하던 것 제거).
+> 아래 이론·수식·게인은 재활성화(launch 주석 해제) 시 그대로 유효. potential 패키지 코드는 유지됨.
 
 **① 이론.** 전차를 **힘의 장** 위 입자로 본다: 목표는 **당기고(인력)**, 장애물은 **밀고(척력)**, 합력 방향으로 간다. 국소 최소(장애물 뒤 갇힘)는 **접선력**으로 빠져나오고, 적 위협은 **강한 위협 척력**으로 크게 우회.
 

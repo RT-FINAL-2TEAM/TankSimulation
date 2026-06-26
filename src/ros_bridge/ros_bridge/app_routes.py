@@ -87,6 +87,7 @@ from .commands import fallback_command, init_config
 from .config import (
     DASHBOARD_POLL_MS,
     DASHBOARD_REFRESH_SEC,
+    ENABLE_DETECT,
     EPISODE_CONTROL_ENABLED,
     IMAGE_DIR,
     LIVE_VIEW_ENABLED,
@@ -1953,7 +1954,12 @@ def route_detect():
         metadata["image_shape"] = frame_shape
         metadata["image"] = {"height": frame_shape[0], "width": frame_shape[1]}
 
-    if get_detector is None:
+    if not ENABLE_DETECT:
+        # detection 비활성(TANK_ENABLE_DETECT=false): YOLO 스킵 → 빈 검출 즉시 반환.
+        # CPU YOLO가 시뮬 루프(/info→/detect→/get_action)를 throttle하던 것 제거 — 포탑/사격 실험처럼
+        # perception이 필요 없을 때 /get_action 폴링을 빠르게 유지한다.
+        metadata["detect_disabled"] = True
+    elif get_detector is None:
         print(f"[warn] /detect YOLO unavailable: {_YOLO_IMPORT_ERROR}")
     else:
         try:
@@ -1968,7 +1974,7 @@ def route_detect():
             metadata["yolo_error"] = str(exc)
 
     # detector debug metadata가 있으면 추가한다. async 모드에서는 위에서 구한 frame shape를 우선한다.
-    if get_detector is not None:
+    if ENABLE_DETECT and get_detector is not None:
         try:
             debug = get_detector().debug_state()
             debug_shape = debug.get("latestFrameShape")

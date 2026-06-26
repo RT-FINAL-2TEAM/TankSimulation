@@ -8,6 +8,9 @@
    - 윈도우: tank_proxy.py 실행 + UBUNTU_SERVER=http://<우분투IP>:5000   (우분투 IP는 우분투에서  hostname -I )
    - 우분투: .env 의 TANK_ALLOWED_CLIENTS = 허용할 윈도우 PC IP (서브넷 192.168.0.* 권장)
    - 웹 확인:  http://<우분투IP>:5000/view   ·   /debug/live_view   ·   /debug/yolo
+   - 웹 MFD가 제어를 느리게 하면(같은 Flask/GIL 공유) .env의 경량화 노브로 완화:
+       TANK_DASHBOARD_REFRESH_SEC(대시보드 백그라운드 빌드 주기, 기본 0.8)
+       TANK_DASHBOARD_POLL_MS(브라우저 폴링 ms, 기본 1000) · TANK_STATIC_MAP_CACHE_TTL_SEC(정적맵 캐시, 기본 5.0)
 
 
 ########################################################################################

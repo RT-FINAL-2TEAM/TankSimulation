@@ -239,6 +239,8 @@ def generate_launch_description():
                     LaunchConfiguration("recon_min_confirm_age_sec"), value_type=float),
                 # route_*.json 출력 폴더(시나리오2는 recon_reports/scenario2로 격리).
                 "recon_report_dir": LaunchConfiguration("recon_report_dir"),
+                # 정찰 전용 미분류-후보 관측요청(observe_request) 발행은 mission_type==recon에서만.
+                "mission_type": LaunchConfiguration("mission_type"),
             }],
         ),
         # Node(

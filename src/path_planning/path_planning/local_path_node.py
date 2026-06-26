@@ -52,6 +52,9 @@ from tank_common.pointcloud import pointcloud2_to_xyz_array
 
 SERVICE_TERRAIN_FINALIZE = "/tank/terrain/finalize_map"
 TOPIC_FUSION_DEBUG_STATUS = "/tank/debug/fusion/status"
+# 정찰 전용: 미분류 후보(라이다엔 잡혔으나 카메라 분류 안 된 클러스터)를 controller에 알려
+# 감속/dwell(전방 후보) + 포탑 step-stare(옆 후보) 큐로 쓰게 한다. mission_type==recon에서만 발행.
+TOPIC_OBSERVE_REQUEST = "/tank/recon/observe_request"
 
 from lidar.config import TOPIC_LIDAR_DETECTED_MAP
 from path_planning.config import (
@@ -232,6 +235,33 @@ class LocalPathNode(Node):
         self.class_colors = dict(CLASS_COLOR_DEFAULTS)
         self.class_colors.update(dict(self._cfg(["rviz", "colors"], {}) or {}))
 
+        # ── 정찰 전용 "지각 주도 관측" 설정 ────────────────────────────────
+        # mission_type==recon에서만 미분류 후보를 집계해 observe_request로 발행한다.
+        # mission/return은 발행 안 함(현행 주행 거동 불변).
+        self.declare_parameter("mission_type", "mission")
+        self.mission_type = str(self.get_parameter("mission_type").value).lower()
+        # 이미 확정 분류된 객체에서 이 반경 안의 클러스터는 후보 아님(이미 분류됨).
+        self.declare_parameter("observe_classified_radius_m", 8.0)
+        self.observe_classified_radius_m = float(self.get_parameter("observe_classified_radius_m").value)
+        # 맵에 이미 있는 정적 장애물(나무 등)에서 이 반경 안의 클러스터는 후보 아님 — '맵에 없는 것'만 관측.
+        # (안 그러면 숲 나무가 후보를 도배해 포탑이 나무를 응시 → YOLO에 tree 클래스 없어 no_parsed_detection 폭증.)
+        self.declare_parameter("observe_static_exclude_radius_m", 4.0)
+        self.observe_static_exclude_radius_m = float(self.get_parameter("observe_static_exclude_radius_m").value)
+        # 포탑 응시 대상은 전방-대각 arc(FOV밖~이 각도)까지만 — 후방(지나친) 후보는 안 쫓음(포탑이 뒤를 안 보게).
+        self.declare_parameter("observe_turret_max_bearing_deg", 100.0)
+        self.observe_turret_max_bearing_deg = float(self.get_parameter("observe_turret_max_bearing_deg").value)
+        # 라이다 기하 prior: map-frame bbox 치수로 거친 크기 추정(분류 아님, 우선순위용).
+        self.declare_parameter("observe_vehicle_min_size_m", 2.0)   # 전차/차-크기 수평 하한
+        self.declare_parameter("observe_large_min_size_m", 6.0)     # 집/초소-크기 수평 하한
+        self.declare_parameter("observe_min_height_m", 1.0)         # 차량-크기 높이 하한
+        self.declare_parameter("observe_large_min_height_m", 3.0)   # 대형 높이 하한
+        self.observe_vehicle_min_size_m = float(self.get_parameter("observe_vehicle_min_size_m").value)
+        self.observe_large_min_size_m = float(self.get_parameter("observe_large_min_size_m").value)
+        self.observe_min_height_m = float(self.get_parameter("observe_min_height_m").value)
+        self.observe_large_min_height_m = float(self.get_parameter("observe_large_min_height_m").value)
+        self.declare_parameter("observe_max_publish", 12)           # observe_request에 실을 후보 상한
+        self.observe_max_publish = int(self.get_parameter("observe_max_publish").value)
+
         self.latest_detections_payload: Optional[Dict[str, Any]] = None
         self.latest_lidar_payload: Optional[Dict[str, Any]] = None
         self.latest_info: Optional[Dict[str, Any]] = None
@@ -267,6 +297,7 @@ class LocalPathNode(Node):
         self.current_marker_pub = self.create_publisher(MarkerArray, TOPIC_FUSED_OBJECT_MARKERS, 10)
         self.discovered_marker_pub = self.create_publisher(MarkerArray, TOPIC_DISCOVERED_OBJECT_MARKERS, transient_qos)
         self.fusion_debug_pub = self.create_publisher(String, TOPIC_FUSION_DEBUG_STATUS, 10)
+        self.observe_request_pub = self.create_publisher(String, TOPIC_OBSERVE_REQUEST, 10)
 
         self.declare_parameter("route_id", "A")
         self.declare_parameter("route_map_name", "finalmap")
@@ -296,6 +327,8 @@ class LocalPathNode(Node):
         self.create_subscription(PoseStamped, "/tank/path/lookahead_pose", self._diag_lookahead_cb, 10)
         self.create_subscription(PoseStamped, "/tank/local_target/pose", self._diag_local_target_cb, 10)
         self.create_subscription(String, "/tank/control/command", self._diag_command_cb, 10)
+        # 정찰 관측 거동(②dwell·③포탑) 진단: 컨트롤러 status의 speed_mode/recon_observation을 recon_logger로.
+        self.create_subscription(String, "/tank/control/status", self._diag_status_cb, 10)
 
         self.create_service(Trigger, SERVICE_DISCOVERED_SAVE, self.save_service_cb)
         self.create_service(Trigger, SERVICE_DISCOVERED_CLEAR, self.clear_service_cb)
@@ -441,6 +474,28 @@ class LocalPathNode(Node):
         with self._lock:
             self.recon_logger.set_command(str(msg.data))
 
+    def _diag_status_cb(self, msg: String) -> None:
+        """컨트롤러 status에서 정찰 관측 거동(dwell/slow/turret)을 추출해 recon_logger로 흘린다."""
+        try:
+            data = json.loads(msg.data)
+        except Exception:
+            return
+        if not isinstance(data, dict):
+            return
+        speed_mode = str(data.get("speed_mode", ""))
+        ro = data.get("recon_observation") if isinstance(data.get("recon_observation"), dict) else {}
+        dwell = ("recon_dwell" in speed_mode) or (ro.get("mode") == "dwell")
+        if ro.get("mode"):
+            mode = str(ro.get("mode"))            # dwell|slow
+        elif ro.get("turret"):
+            mode = "turret"
+        elif "recon_observe_slow" in speed_mode:
+            mode = "slow"
+        else:
+            mode = ""
+        with self._lock:
+            self.recon_logger.set_observe_mode(dwell, mode)
+
     def player_state_cb(self, msg: String) -> None:
         try:
             data = json.loads(msg.data)
@@ -570,11 +625,27 @@ class LocalPathNode(Node):
             fused_to_pub = list(fused)
             discovered_to_pub = list(self.discovered)
             fusion_debug_to_pub = dict(self._last_fusion_debug) if self._last_fusion_debug else None
+            # 정찰 전용: 미분류 후보 집계(읽기만; 주행/경로 거동은 안 건드림). recon에서만.
+            observe_candidates = (
+                self.compute_observe_candidates_locked() if self.mission_type == "recon" else []
+            )
+            if self.mission_type == "recon":
+                by_class: Dict[str, int] = {}
+                for c in observe_candidates:
+                    by_class[c["size_class"]] = by_class.get(c["size_class"], 0) + 1
+                self.recon_logger.set_observe_candidates({
+                    "n": len(observe_candidates),
+                    "n_fov": sum(1 for c in observe_candidates if c["in_forward_fov"]),
+                    "n_side": sum(1 for c in observe_candidates if not c["in_forward_fov"]),
+                    "by_class": by_class,
+                })
 
         self.publish_fused(fused_to_pub)
         self.publish_current_markers(fused_to_pub)
         self.publish_discovered(discovered_to_pub)
         self.publish_fusion_debug(fusion_debug_to_pub)
+        if self.mission_type == "recon":
+            self.publish_observe_request(observe_candidates)
 
     def compute_fused_objects_locked(self) -> List[Dict[str, Any]]:
         debug = self._make_fusion_debug_base_locked()
@@ -1699,6 +1770,119 @@ class LocalPathNode(Node):
         if self.heading_source == "body_plus_turret" and self.turret_heading_deg is not None:
             return self._normalize_angle_360(float(self.player_heading_deg) + float(self.turret_heading_deg))
         return float(self.player_heading_deg)
+
+    # ------------------------------------------------------------------
+    # 정찰 전용: 미분류 후보 집계 → controller가 감속/dwell·포탑 step-stare로 쓸 관측요청 발행
+    # ------------------------------------------------------------------
+    def compute_observe_candidates_locked(self) -> List[Dict[str, Any]]:
+        """사거리 내 LiDAR 클러스터 중 '아직 확정 분류 안 된 것'(=미분류 후보)을 집계한다.
+        각 후보에 bearing/in_forward_fov/라이다 크기 prior/우선순위를 매겨, controller가
+        전방 후보엔 감속·dwell, 옆 후보엔 포탑 step-stare 큐로 쓰게 한다. 위치는 안 바꾼다(읽기만)."""
+        if self.player_pose is None or not isinstance(self.latest_clusters_payload, dict):
+            return []
+        clusters = self.latest_clusters_payload.get("clusters", [])
+        if not isinstance(clusters, list):
+            return []
+        px = float(self.player_pose.pose.position.x)
+        py = float(self.player_pose.pose.position.y)
+        cam_heading = self._camera_heading_deg()
+        half_fov = max(1.0, self.hfov_deg * 0.5)
+        out: List[Dict[str, Any]] = []
+        for c in clusters:
+            if not isinstance(c, dict):
+                continue
+            centroid = c.get("centroid")
+            if not isinstance(centroid, dict):
+                continue
+            x = self._as_float(centroid.get("x"))
+            y = self._as_float(centroid.get("y"))
+            z = self._as_float(centroid.get("z"))
+            dx, dy = x - px, y - py
+            dist = math.hypot(dx, dy)
+            if dist < self.min_fusion_range_m or dist > self.max_fusion_range_m:
+                continue
+            if self._near_confirmed_classified(x, y):   # 이미 분류·확정됨 → 후보 아님
+                continue
+            if self._near_static_obstacle(x, y):        # 맵에 이미 있는 장애물(나무 등) → 후보 아님
+                continue
+            size_class, width_m, height_m = self._cluster_size_prior(c.get("bbox"))
+            global_bearing = math.degrees(math.atan2(dx, dy))
+            rel_bearing = self._normalize_angle_deg(global_bearing - cam_heading)
+            in_fov = abs(rel_bearing) <= half_fov
+            # 포탑 응시 대상 = 전방-대각만(FOV 밖 ~ max_bearing). 후방(지나친) 후보는 제외해 포탑이 뒤를 안 봄.
+            turret_eligible = (not in_fov) and (abs(rel_bearing) <= self.observe_turret_max_bearing_deg)
+            out.append({
+                "x": x, "y": y, "z": z,
+                "distance_m": round(dist, 2),
+                "bearing_global_deg": round(global_bearing, 1),
+                "bearing_relative_deg": round(rel_bearing, 1),
+                "in_forward_fov": bool(in_fov),
+                "turret_eligible": bool(turret_eligible),
+                "size_class": size_class,
+                "width_m": round(width_m, 2),
+                "height_m": round(height_m, 2),
+                "priority": round(self._observe_priority(size_class, dist), 3),
+            })
+        out.sort(key=lambda d: d["priority"], reverse=True)
+        return out
+
+    def _near_confirmed_classified(self, x: float, y: float) -> bool:
+        for obj in self.discovered:
+            if not obj.is_confirmed:
+                continue
+            if math.hypot(obj.map_x - x, obj.map_y - y) <= self.observe_classified_radius_m:
+                return True
+        return False
+
+    def _near_static_obstacle(self, x: float, y: float) -> bool:
+        """맵에 이미 있는 정적 장애물(나무 등)에 가까운가 — recon 관측 후보에서 제외('맵에 없는 것'만 관측)."""
+        r = self.observe_static_exclude_radius_m
+        for obj in self.static_objects:
+            if math.hypot(obj.map_x - x, obj.map_y - y) <= r:
+                return True
+        return False
+
+    def _cluster_size_prior(self, bbox: Any) -> Tuple[str, float, float]:
+        """라이다 map-frame bbox(z=높이)로 거친 크기 추정 → 위협-크기 prior(분류 아님, 우선순위용)."""
+        if not isinstance(bbox, dict):
+            return "unknown", 0.0, 0.0
+        wx = abs(self._as_float(bbox.get("x_max")) - self._as_float(bbox.get("x_min")))
+        wy = abs(self._as_float(bbox.get("y_max")) - self._as_float(bbox.get("y_min")))
+        width = max(wx, wy)
+        height = abs(self._as_float(bbox.get("z_max")) - self._as_float(bbox.get("z_min")))
+        if width >= self.observe_large_min_size_m or height >= self.observe_large_min_height_m:
+            return "large", width, height      # 집/초소-크기
+        if width >= self.observe_vehicle_min_size_m and height >= self.observe_min_height_m:
+            return "vehicle", width, height    # 전차/차-크기
+        return "small", width, height          # 바위-크기
+
+    def _observe_priority(self, size_class: str, dist: float) -> float:
+        threat_w = {"large": 1.0, "vehicle": 0.9, "unknown": 0.5, "small": 0.3}.get(size_class, 0.5)
+        prox = 1.0 - min(1.0, dist / max(1.0, self.max_fusion_range_m))   # 가까울수록 ↑
+        return threat_w * (0.5 + 0.5 * prox)
+
+    def publish_observe_request(self, candidates: List[Dict[str, Any]]) -> None:
+        if self.observe_request_pub is None:
+            return
+        pending_fov = [c for c in candidates if c["in_forward_fov"]]
+        # 포탑은 전방-대각(turret_eligible)만 응시 — 후방(지나친) 후보 제외. candidates는 priority 내림차순.
+        pending_turret = [c for c in candidates if c.get("turret_eligible")]
+        side_total = sum(1 for c in candidates if not c["in_forward_fov"])
+        payload = {
+            "timestamp_wall": time.time(),
+            "frame_id": self.map_frame,
+            "mission_type": self.mission_type,
+            "count": len(candidates),
+            "has_pending_fov": bool(pending_fov),       # controller: 감속/dwell
+            "has_pending_side": bool(pending_turret),   # controller: 포탑 step-stare (전방-대각만)
+            "side_total": side_total,                   # 진단: 전체 옆 후보(후방 포함)
+            "best_side_bearing_rel_deg": pending_turret[0]["bearing_relative_deg"] if pending_turret else None,
+            "best_side_bearing_global_deg": pending_turret[0]["bearing_global_deg"] if pending_turret else None,
+            "candidates": candidates[: self.observe_max_publish],
+        }
+        msg = String()
+        msg.data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        self.observe_request_pub.publish(msg)
 
     def _median_xyz(self, items: List[Dict[str, Any]]) -> Tuple[float, float, float]:
         xs = sorted(float(i["x"]) for i in items)

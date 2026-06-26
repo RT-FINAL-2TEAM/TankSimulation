@@ -287,15 +287,59 @@ def analyze_recon(d):
         speed = {"mean": round(sum(vs) / n, 1), "median": round(vs[n // 2], 1),
                  "p90": round(vs[int(n * 0.9)], 1), "max": round(max(vs), 1),
                  "near_collision_mean": (round(sum(col_vs) / len(col_vs), 1) if col_vs else None)}
+    # 정찰 관측 거동(②감속/dwell · ③포탑 step-stare) — diag sample의 obs/cmd에서 집계.
+    observe = analyze_observe(samples)
     return {
         "weave": {"amp_mean_m": weave_amp, "amp_max_m": weave_max, "dir_changes": dir_changes, "n": len(cts)},
         "stop_confirm": {"hold_logged": hold_logged,
                          "hold_episodes": episodes, "hold_time_s": round(hold_time, 1),
                          "stop_cmds": stop_cmds, "samples": len(samples)},
+        "observe": observe,
         "speed": speed,
         "collisions_count": (d.get("result") or {}).get("collisions"),
         "collision_pts": d.get("collision_events") or [],
         "fusion_rejects": d.get("fusion_rejects") or {},
+    }
+
+
+def analyze_observe(samples):
+    """정찰 관측 거동 집계: 미분류 후보 통계 + ②감속/dwell + ③포탑 stare.
+    obs(local_path_node 후보요약+mode) 미기록이면 None(구버전 로그 — 재주행 필요)."""
+    obs_samples = [s for s in samples if isinstance(s.get("obs"), dict)]
+    if not obs_samples:
+        return None
+    ns = [s["obs"].get("n", 0) for s in obs_samples]
+    fov = [s["obs"].get("n_fov", 0) for s in obs_samples]
+    side = [s["obs"].get("n_side", 0) for s in obs_samples]
+    modes = {}
+    cls_max = {}
+    for s in obs_samples:
+        m = s["obs"].get("mode") or ""
+        if m:
+            modes[m] = modes.get(m, 0) + 1
+        for k, v in (s["obs"].get("by_class") or {}).items():
+            cls_max[k] = max(cls_max.get(k, 0), int(v))
+    # ③ 포탑 stare 에피소드: cmd의 turretQE!="" 또는 obs.mode==turret 연속구간
+    turret_eps, in_t = 0, False
+    for s in samples:
+        try:
+            qe = json.loads(s.get("cmd", "{}")).get("turretQE", {}).get("command", "")
+        except Exception:
+            qe = ""
+        t_on = bool(qe) or (isinstance(s.get("obs"), dict) and s["obs"].get("mode") == "turret")
+        if t_on and not in_t:
+            turret_eps += 1
+            in_t = True
+        elif not t_on and in_t:
+            in_t = False
+    return {
+        "samples_with_obs": len(obs_samples),
+        "cand_mean": round(sum(ns) / len(ns), 2) if ns else 0.0,
+        "cand_fov_mean": round(sum(fov) / len(fov), 2) if fov else 0.0,
+        "cand_side_mean": round(sum(side) / len(side), 2) if side else 0.0,
+        "by_class_max": cls_max,
+        "slow_samples": modes.get("slow", 0),
+        "turret_stare_episodes": turret_eps,
     }
 
 
@@ -553,6 +597,10 @@ def render_md(results, gt, out_dir, figs, recon=None):
         L.append(f"| 멈춰-확정 정지횟수/시간(s) | {rcg('A','stop_confirm','hold_episodes')}/{rcg('A','stop_confirm','hold_time_s')} | "
                  f"{rcg('B','stop_confirm','hold_episodes')}/{rcg('B','stop_confirm','hold_time_s')} | 후보서 **의도적 정지**(hold) |")
         L.append(f"| 전체 STOP cmd(yaw 포함) | {rcg('A','stop_confirm','stop_cmds')} | {rcg('B','stop_confirm','stop_cmds')} | hold보다 훨씬 크면 떨림성 정지 |")
+        # 정찰 관측 거동(②감속/dwell · ③포탑 step-stare) — obs 미기록(구버전)이면 '—'.
+        L.append(f"| ②미분류 후보(평균 전방/옆) | {rcg('A','observe','cand_fov_mean')}/{rcg('A','observe','cand_side_mean')} | "
+                 f"{rcg('B','observe','cand_fov_mean')}/{rcg('B','observe','cand_side_mean')} | 사거리내 미분류 후보(라이다 prior) |")
+        L.append(f"| ③포탑 stare 횟수 | {rcg('A','observe','turret_stare_episodes')} | {rcg('B','observe','turret_stare_episodes')} | 옆 후보 폐루프 응시(0이면 미작동) |")
         L.append(f"| 확정 인식(센서퓨전) | {reco_str('A')} | {reco_str('B')} | class별 확정 수(raw=YOLO 프레임) |")
 
         def fr_str(rid):
@@ -591,6 +639,12 @@ def render_md(results, gt, out_dir, figs, recon=None):
                 msgs.append("**후보서 멈춤 0회** — stop-to-confirm 미작동(후보 미관측/즉시확정/조건 확인 필요)")
             else:
                 msgs.append(f"멈춰-확정 {sc.get('hold_episodes')}회/{sc.get('hold_time_s')}s")
+            ob = r.get("observe")
+            if ob is None:
+                msgs.append("⚠ obs 미기록(구버전 — ②③ 검증하려면 재주행)")
+            else:
+                msgs.append(f"②감속/dwell {sc.get('hold_episodes', 0)}회 · ③포탑 stare {ob.get('turret_stare_episodes', 0)}회"
+                            f"(미분류후보 평균 전방{ob.get('cand_fov_mean')}/옆{ob.get('cand_side_mean')})")
             L.append(f"- **route_{rid}**: " + " · ".join(msgs))
         L.append("")
 
@@ -694,6 +748,11 @@ def main(argv=None):
                 nc = f", 충돌진입 {sp['near_collision_mean']}" if sp.get("near_collision_mean") is not None else ""
                 print(f"  └ 속도(m/s): mean {sp['mean']} p90 {sp['p90']} max {sp['max']}{nc}")
             print(f"  └ 융합: {fmt_fusion_rejects(rc.get('fusion_rejects') or {})}")
+            ob = rc.get("observe")
+            if ob is not None:
+                print(f"  └ 관측거동(②③): 미분류후보 평균 {ob['cand_mean']}(전방{ob['cand_fov_mean']}/옆{ob['cand_side_mean']}), "
+                      f"②dwell {rc['stop_confirm']['hold_episodes']}회, ③포탑 stare {ob['turret_stare_episodes']}회, "
+                      f"slow {ob['slow_samples']}샘플, 크기 {ob['by_class_max']}")
             gd = rc.get("gt_detect")
             if gd:
                 miss = (" 놓침=" + ", ".join(gd["missed"])) if gd["missed"] else ""
