@@ -47,18 +47,12 @@ class LLMReporter:
         입력에 없는 숫자나 항목을 만들지 마라.
 
         판단 기준:
-        - reached=false이면 매우 불리하다.
-        - distance_m와 sim_time_s는 실제 정찰 주행 결과이며 값이 과도하게 크면 이동 부담이 크다.
-        - collision_count가 많을수록 불리하다.
-        - enemy_count가 많을수록 적 접촉/피탐지 위험이 크다.
-        - closest_enemy_distance_m가 0이면 거리 정보가 없는 것으로 보고 판단 근거에서 제외한다.
-        - closest_enemy_distance_m가 0보다 크면 값이 작을수록 위험하다.
-        - enemy_visible_time_s가 길수록 위험하다.
-        - max_continuous_visible_time_s가 길수록 지속 노출 위험이 크다.
-        - obstacle_count가 많을수록 이동 부담이 크다.
-        - obstacle_density_per_100m가 높으면 동일 거리 대비 장애물이 밀집된 것으로 본다.
-        - blocked_segment_count가 많을수록 우회/정체/매복 위험이 크다.
-        - pitch_std_deg와 roll_std_deg가 클수록 지형 주행 안정성이 낮다.
+        - reached=false이면 해당 루트는 탈락이다.
+        - collision_count가 많을수록 불리하다. 숫자가 클수록 위험하다.
+        - obstacle_density_per_100m가 높을수록 장애물이 밀집된 위험 구간이다. 숫자가 클수록 위험하다.
+        - pitch_std_deg와 roll_std_deg가 클수록 지형이 불안정하다. 숫자가 클수록 위험하다.
+        - distance_m가 클수록 이동 부담과 노출 시간이 크다.
+        - asset_spotted_gt.outposts와 asset_spotted_gt.tanks는 LiDAR+카메라 센서 퓨전으로 확인된 실제 적 개체 수다. 숫자가 클수록 위험하다.
         - 단일 항목이 아니라 전체 위험 맥락을 비교해 selected_route를 선택하라.
 
         출력 규칙:
@@ -95,39 +89,21 @@ class LLMReporter:
             "route_id": null,
             "reached": null,
             "distance_m": null,
-            "sim_time_s": null,
             "collision_count": null,
-            "enemy_count": null,
-            "closest_enemy_distance_m": null,
-            "enemy_visible_time_s": null,
-            "max_continuous_visible_time_s": null,
-            "obstacle_count": null,
             "obstacle_density_per_100m": null,
-            "blocked_segment_count": null,
             "pitch_std_deg": null,
             "roll_std_deg": null,
-            "yolo_counts": {{}},
-            "asset_spotted_gt": {{}},
-            "reason": ""
+            "asset_spotted_gt": {{"outposts": null, "tanks": null}}
             }},
             "B": {{
             "route_id": null,
             "reached": null,
             "distance_m": null,
-            "sim_time_s": null,
             "collision_count": null,
-            "enemy_count": null,
-            "closest_enemy_distance_m": null,
-            "enemy_visible_time_s": null,
-            "max_continuous_visible_time_s": null,
-            "obstacle_count": null,
             "obstacle_density_per_100m": null,
-            "blocked_segment_count": null,
             "pitch_std_deg": null,
             "roll_std_deg": null,
-            "yolo_counts": {{}},
-            "asset_spotted_gt": {{}},
-            "reason": ""
+            "asset_spotted_gt": {{"outposts": null, "tanks": null}}
             }}
         }}
         }}

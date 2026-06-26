@@ -123,7 +123,41 @@ def get_closest_enemy_distance(route_data: Dict[str, Any]) -> Optional[float]:
 def summarize_route(route_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     route_A / route_B 하나를 LLM 입력용으로 최소 요약.
+    경로 선택에 필요한 핵심 데이터만 포함.
     """
+    result = route_data.get("result", {})
+    if not isinstance(result, dict):
+        result = {}
+
+    obstacle = route_data.get("obstacle_summary", {})
+    if not isinstance(obstacle, dict):
+        obstacle = {}
+
+    terrain = route_data.get("terrain_roughness", {})
+    if not isinstance(terrain, dict):
+        terrain = {}
+
+    asset_gt = route_data.get("asset_spotted_gt", {})
+    if not isinstance(asset_gt, dict):
+        asset_gt = {}
+
+    return {
+        "route_id": route_data.get("route"),
+        "reached": bool(result.get("reached", False)),
+        "distance_m": round_float(result.get("distance_m"), 2, 0.0),
+        "collision_count": safe_int(result.get("collisions"), 0),
+        "obstacle_density_per_100m": round_float(obstacle.get("density_per_100m"), 2, 0.0),
+        "pitch_std_deg": round_float(terrain.get("pitch_std_deg"), 3, 0.0),
+        "roll_std_deg": round_float(terrain.get("roll_std_deg"), 3, 0.0),
+        "asset_spotted_gt": {
+            "outposts": safe_int(asset_gt.get("outposts"), 0),
+            "tanks": safe_int(asset_gt.get("tanks"), 0),
+        },
+    }
+
+
+def _unused_summarize_route(route_data: Dict[str, Any]) -> Dict[str, Any]:
+    """기존 코드 보존용 (미사용)"""
     result = route_data.get("result", {})
     if not isinstance(result, dict):
         result = {}
@@ -145,17 +179,9 @@ def summarize_route(route_data: Dict[str, Any]) -> Dict[str, Any]:
         "reached": bool(result.get("reached", False)),
         "distance_m": round_float(result.get("distance_m"), 3, 0.0),
         "sim_time_s": round_float(result.get("sim_time_s"), 3, 0.0),
-
-        # result.collisions -> collision_count로 이름 통일
         "collision_count": safe_int(result.get("collisions"), 0),
-
-        # YOLO threat count: tank + house. person is ignored due false positives.
         "enemy_count": get_yolo_enemy_count(route_data),
-
-        # 현재 comparison.json에 없으면 0.0
         "closest_enemy_distance_m": get_closest_enemy_distance(route_data),
-
-        # exposure 값
         "enemy_visible_time_s": round_float(
             exposure.get("total_dwell_s"),
             3,
