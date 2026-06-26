@@ -188,6 +188,10 @@ from .config import (
     HEADING_ARROW_Z_OFFSET,
     HEADING_DEGREE_KEY_PLAYER,
     HEADING_DEGREE_KEY_ENEMY,
+    SHOW_TURRET_GUN_ARROW,
+    PLAYER_GUN_ARROW_LENGTH,
+    ENEMY_GUN_ARROW_LENGTH,
+    GUN_ARROW_Z_OFFSET,
 
     ############################################################
     # 입력 topic
@@ -366,6 +370,13 @@ class RvizVisualizerNode(Node):
         #   오른쪽 회전     → degree 증가
         self.player_heading_deg: float = 0.0
         self.enemy_heading_deg: float = 0.0
+
+        # 포신 방향 시각화용 최신 포탑 yaw / 포신 pitch.
+        # turret.x는 포탑 좌우 회전 yaw, turret.y는 포신 상하각이다.
+        self.player_turret_yaw_deg: float = 0.0
+        self.player_gun_pitch_deg: float = 0.0
+        self.enemy_turret_yaw_deg: float = 0.0
+        self.enemy_gun_pitch_deg: float = 0.0
 
         # Potential Field/APF vector topics. 값이 들어오면 RViz arrow로 표시한다.
         self.potential_repulsive_vector: Optional[Vector3Stamped] = None
@@ -636,6 +647,14 @@ class RvizVisualizerNode(Node):
                 ],
                 default=self.player_heading_deg,
             )
+            (
+                self.player_turret_yaw_deg,
+                self.player_gun_pitch_deg,
+            ) = self._extract_turret_yaw_pitch_deg(
+                data,
+                default_yaw=self.player_turret_yaw_deg,
+                default_pitch=self.player_gun_pitch_deg,
+            )
 
         except Exception:
             # state 파싱 실패가 RViz node 전체를 죽이면 안 되므로 무시한다.
@@ -664,6 +683,14 @@ class RvizVisualizerNode(Node):
                     "heading",
                 ],
                 default=self.enemy_heading_deg,
+            )
+            (
+                self.enemy_turret_yaw_deg,
+                self.enemy_gun_pitch_deg,
+            ) = self._extract_turret_yaw_pitch_deg(
+                data,
+                default_yaw=self.enemy_turret_yaw_deg,
+                default_pitch=self.enemy_gun_pitch_deg,
             )
 
         except Exception:
@@ -870,6 +897,68 @@ class RvizVisualizerNode(Node):
         return float(default)
 
     @staticmethod
+    def _extract_turret_yaw_pitch_deg(
+        data: Dict[str, Any],
+        default_yaw: float,
+        default_pitch: float,
+    ) -> Tuple[float, float]:
+        """state JSON에서 포탑 yaw(turret.x), 포신 pitch(turret.y)를 읽는다.
+
+        ros_bridge의 현재 state 구조는 다음과 같다.
+            {"turret": {"x": playerTurretX, "y": playerTurretY}, ...}
+
+        turret.x는 포탑의 좌우 회전 world yaw로 사용한다. turret.y는 포신의
+        상하각이다. 시뮬레이터에서 포신을 위로 들수록 turret.y가 음수 방향으로
+        들어오므로 RViz 고도 계산에서는 -turret.y를 elevation으로 사용한다.
+        """
+        yaw = float(default_yaw)
+        pitch = float(default_pitch)
+
+        turret = data.get("turret")
+        if isinstance(turret, dict):
+            try:
+                if turret.get("x") is not None:
+                    yaw = float(turret.get("x"))
+            except (TypeError, ValueError):
+                pass
+            try:
+                if turret.get("y") is not None:
+                    pitch = float(turret.get("y"))
+            except (TypeError, ValueError):
+                pass
+
+        # schema 변경/직접 payload 대비 fallback.
+        for key in ("playerTurretX", "enemyTurretX", "turretX"):
+            if key in data:
+                try:
+                    yaw = float(data[key])
+                    break
+                except (TypeError, ValueError):
+                    pass
+        for key in ("playerTurretY", "enemyTurretY", "turretY"):
+            if key in data:
+                try:
+                    pitch = float(data[key])
+                    break
+                except (TypeError, ValueError):
+                    pass
+
+        return yaw, pitch
+
+    @staticmethod
+    def _gun_direction_map_vector(turret_yaw_deg: float, gun_pitch_deg: float):
+        """포신의 3D 방향을 tank_map 기준 단위벡터로 반환한다."""
+        yaw_rad = math.radians(float(turret_yaw_deg))
+        # 포신을 위로 올릴 때 turret.y가 음수로 변하는 시뮬레이터 규약 반영.
+        elevation_rad = math.radians(-float(gun_pitch_deg))
+        horizontal = math.cos(elevation_rad)
+        return (
+            math.sin(yaw_rad) * horizontal,
+            math.cos(yaw_rad) * horizontal,
+            math.sin(elevation_rad),
+        )
+
+    @staticmethod
     def _heading_deg_to_map_vector(heading_deg: float):
         """
         시뮬레이터 X Degree를 RViz tank_map 평면 방향 벡터로 변환한다.
@@ -1074,8 +1163,10 @@ class RvizVisualizerNode(Node):
         표시 방식:
             - 아군 전차: 파란색 CUBE
             - 아군 heading: 청록색 ARROW
+            - 아군 포신 방향: 노란색 3D ARROW
             - 적 전차  : 빨간색 CUBE
             - 적 heading: 주황색 ARROW
+            - 적 포신 방향: 연보라색 3D ARROW
             - 목표 지점: 초록색 SPHERE
 
         heading 기준:
@@ -1160,6 +1251,33 @@ class RvizVisualizerNode(Node):
 
                 marker_id += 1
 
+            ####################################################
+            # 8.1.2 아군 포신 방향 arrow
+            ####################################################
+            if SHOW_TURRET_GUN_ARROW:
+                dx, dy, dz = self._gun_direction_map_vector(
+                    self.player_turret_yaw_deg,
+                    self.player_gun_pitch_deg,
+                )
+                start_x = p.x
+                start_y = p.y
+                start_z = max(p.z, 0.0) + GUN_ARROW_Z_OFFSET
+                end_x = start_x + dx * PLAYER_GUN_ARROW_LENGTH
+                end_y = start_y + dy * PLAYER_GUN_ARROW_LENGTH
+                end_z = start_z + dz * PLAYER_GUN_ARROW_LENGTH
+                markers.markers.append(
+                    make_arrow_marker(
+                        MAP_FRAME,
+                        "player_gun_direction_arrow",
+                        marker_id,
+                        start_x, start_y, start_z,
+                        end_x, end_y, end_z,
+                        0.42, 1.15, 1.8,
+                        make_color(1.0, 0.9, 0.0, 0.98),
+                    )
+                )
+                marker_id += 1
+
 
         ########################################################
         # 8.2 적 전차 marker
@@ -1220,6 +1338,33 @@ class RvizVisualizerNode(Node):
                     )
                 )
 
+                marker_id += 1
+
+            ####################################################
+            # 8.2.2 적 포신 방향 arrow
+            ####################################################
+            if SHOW_TURRET_GUN_ARROW:
+                dx, dy, dz = self._gun_direction_map_vector(
+                    self.enemy_turret_yaw_deg,
+                    self.enemy_gun_pitch_deg,
+                )
+                start_x = p.x
+                start_y = p.y
+                start_z = max(p.z, 0.0) + GUN_ARROW_Z_OFFSET
+                end_x = start_x + dx * ENEMY_GUN_ARROW_LENGTH
+                end_y = start_y + dy * ENEMY_GUN_ARROW_LENGTH
+                end_z = start_z + dz * ENEMY_GUN_ARROW_LENGTH
+                markers.markers.append(
+                    make_arrow_marker(
+                        MAP_FRAME,
+                        "enemy_gun_direction_arrow",
+                        marker_id,
+                        start_x, start_y, start_z,
+                        end_x, end_y, end_z,
+                        0.36, 1.0, 1.5,
+                        make_color(0.82, 0.25, 1.0, 0.95),
+                    )
+                )
                 marker_id += 1
 
 

@@ -324,6 +324,22 @@ ENEMY_HEADING_ARROW_LENGTH = 12.0
 # arrow가 지면과 겹치지 않도록 올리는 높이.
 HEADING_ARROW_Z_OFFSET = 2.5
 
+# 포신/포탑 방향 arrow 표시 여부.
+# /tank/player/state의 turret.x/y를 사용한다.
+# turret.x: 포탑 좌우(yaw, world heading)
+# turret.y: 포신 상하(pitch)
+SHOW_TURRET_GUN_ARROW = os.environ.get(
+    "TANK_SHOW_TURRET_GUN_ARROW",
+    "true",
+).strip().lower() in ("1", "true", "yes", "y")
+
+# 포신 방향 arrow 길이. 차체 heading(청록색)보다 살짝 길게 표시한다.
+PLAYER_GUN_ARROW_LENGTH = float(os.environ.get("TANK_PLAYER_GUN_ARROW_LENGTH", "17.0"))
+ENEMY_GUN_ARROW_LENGTH = float(os.environ.get("TANK_ENEMY_GUN_ARROW_LENGTH", "14.0"))
+
+# 포신 arrow 시작 높이. 차체 marker/heading arrow와 겹치지 않도록 조금 더 위에 띄운다.
+GUN_ARROW_Z_OFFSET = float(os.environ.get("TANK_GUN_ARROW_Z_OFFSET", "3.2"))
+
 # 시뮬레이터 기준:
 #   X Degree = 0  → +raw.z 방향
 #   RViz map     → +map.y 방향

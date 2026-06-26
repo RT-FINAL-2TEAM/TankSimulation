@@ -96,6 +96,9 @@ class LidarDbscanClusterNode(Node):
         self.declare_parameter("max_points", 2500)
         self.declare_parameter("bbox_min_thickness", 0.8)
         self.declare_parameter("text_height", 1.0)
+        # Fusion은 centroid뿐 아니라 실제 cluster 표면점의 2-D 투영도 사용한다.
+        # JSON payload 폭을 제한하기 위해 cluster별 균일 샘플만 전송한다.
+        self.declare_parameter("cluster_point_sample_limit", 64)
 
         self.input_topic = str(self.get_parameter("input_topic").value)
         self.pose_topic = str(self.get_parameter("pose_topic").value)
@@ -108,6 +111,7 @@ class LidarDbscanClusterNode(Node):
         self.max_points = int(self.get_parameter("max_points").value)
         self.bbox_min_thickness = float(self.get_parameter("bbox_min_thickness").value)
         self.text_height = float(self.get_parameter("text_height").value)
+        self.cluster_point_sample_limit = max(1, int(self.get_parameter("cluster_point_sample_limit").value))
 
         self.tank_x = 0.0
         self.tank_y = 0.0
@@ -128,7 +132,8 @@ class LidarDbscanClusterNode(Node):
 
         self.get_logger().info(
             f"lidar_dbscan_cluster_node started: input={self.input_topic}(PC2), eps={self.eps}, "
-            f"min_samples={self.min_samples}, min_cluster_size={self.min_cluster_size}"
+            f"min_samples={self.min_samples}, min_cluster_size={self.min_cluster_size}, "
+            f"cluster_point_sample_limit={self.cluster_point_sample_limit}"
         )
 
     def on_pose(self, msg: PoseStamped) -> None:
@@ -179,6 +184,22 @@ class LidarDbscanClusterNode(Node):
         self.publish_clusters(clusters, len(points), int(noise_count))
         self.publish_markers(clusters)
 
+    def _cluster_points_map_sample(self, points: np.ndarray) -> List[Dict[str, float]]:
+        """Uniformly sample observed cluster points for projection fusion.
+
+        The points are already in tank_map coordinates.  ``linspace`` keeps the
+        payload deterministic and avoids random sample-to-sample match jitter.
+        """
+        if points.size == 0:
+            return []
+        n = min(int(points.shape[0]), self.cluster_point_sample_limit)
+        indices = np.linspace(0, int(points.shape[0]) - 1, num=n, dtype=np.int64)
+        indices = np.unique(indices)
+        return [
+            {"x": float(points[i, 0]), "y": float(points[i, 1]), "z": float(points[i, 2])}
+            for i in indices
+        ]
+
     def publish_clusters(self, clusters: List[Cluster], point_count: int, noise_count: int) -> None:
         data = {
             "timestamp_ros_sec": self.get_clock().now().nanoseconds * 1e-9,
@@ -190,6 +211,7 @@ class LidarDbscanClusterNode(Node):
             "input_point_count": point_count,
             "noise_count": noise_count,
             "cluster_count": len(clusters),
+            "cluster_point_sample_limit": self.cluster_point_sample_limit,
             "clusters": [],
         }
         
@@ -217,6 +239,10 @@ class LidarDbscanClusterNode(Node):
                         "z_min": bbox["y_min"], "z_max": bbox["y_max"],
                     },
                     "nearest_tank_distance_m": nearest,
+                    # Actual observed points, not AABB corners.  local_path_node
+                    # projects these to find YOLO-bbox overlap when centroid is
+                    # outside the image or object surface is asymmetric.
+                    "points_map": self._cluster_points_map_sample(c.points),
                 }
             )
             

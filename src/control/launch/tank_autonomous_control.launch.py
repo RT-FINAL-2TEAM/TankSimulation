@@ -28,6 +28,7 @@ def generate_launch_description():
     path_planning_share = get_package_share_directory("path_planning")
     potential_share = get_package_share_directory("potential")
     route_config_file = os.path.join(path_planning_share, "config", "routes.yaml")
+    fusion_mapping_file = os.path.join(path_planning_share, "config", "fusion_mapping.yaml")
     apf_weights_file = os.path.join(potential_share, "config", "apf_weight_profiles.yaml")
 
     mission_type_arg = DeclareLaunchArgument(
@@ -108,6 +109,8 @@ def generate_launch_description():
             executable="lidar_camera_overlay_node",
             name="lidar_camera_overlay_node",
             output="screen",
+            # Overlay and local_path_node must use the same calibration YAML.
+            parameters=[{"config_file": fusion_mapping_file}],
         ),
         Node(
             package="tank_visual_perception",
@@ -223,7 +226,7 @@ def generate_launch_description():
             name="tank_local_path_node",
             output="screen",
             parameters=[{
-                "config_file": os.path.join(path_planning_share, "config", "fusion_mapping.yaml"),
+                "config_file": fusion_mapping_file,
                 # 도착 로깅(route_*.json의 reached) 기준을 컨트롤러 정지 기준(10m)과 일치시킨다.
                 # (불일치 시 컨트롤러는 ~8m에서 종료해도 local_path는 5m 기준이라 reached가 안 찍힘)
                 "goal_tolerance": 10.0,
