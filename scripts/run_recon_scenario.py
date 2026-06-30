@@ -32,6 +32,7 @@ import threading
 import time
 import urllib.request
 
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
@@ -100,15 +101,71 @@ def is_reached(route_id: str) -> bool:
     return bool(rep and rep.get("result", {}).get("reached"))
 
 
+def _validate_npz(path: str, min_size: int = 1024) -> tuple:
+    """terrain NPZ가 정상인지 검증. 반환 (ok, n_points, reason)."""
+    if not os.path.exists(path):
+        return False, 0, "파일 없음"
+    size = os.path.getsize(path)
+    if size < min_size:
+        return False, 0, f"{size}바이트(임계 {min_size}B 미만 — 0바이트/미완성)"
+    try:
+        with np.load(path, allow_pickle=True) as d:
+            if "accumulated" not in d.files:
+                return False, 0, "accumulated 키 없음"
+            n = int(getattr(d["accumulated"], "shape", (0,))[0])
+    except Exception as e:  # zip 깨짐/EOFError 등
+        return False, 0, f"np.load 실패: {type(e).__name__} {e}"
+    if n <= 0:
+        return False, 0, "누적 점 0개"
+    return True, n, "ok"
+
+
+def _atomic_copy(src: str, dst: str) -> None:
+    """src를 dst로 원자적 복사(tmp→os.replace) — 중간 0바이트/부분파일 노출 방지."""
+    tmp = dst + ".tmp"
+    shutil.copy2(src, tmp)
+    os.replace(tmp, dst)
+
+
+def _safe_remove(path: str) -> None:
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except OSError:
+        pass
+
+
+def _service_available(name: str, timeout: float = 10.0) -> bool:
+    """서비스가 그래프에 있는지 빠르게 확인 — 없는 서비스에 call 걸어 길게 멈추는 것 방지."""
+    try:
+        r = subprocess.run(
+            ["ros2", "service", "list"], cwd=PROJECT_ROOT, check=False, timeout=timeout,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        )
+        return name in (r.stdout or "")
+    except Exception:
+        return False
+
+
 def finalize_recon_artifacts(route_id: str) -> None:
     """정찰 발견객체+지형을 디스크에 저장하고 프로젝트 경로(recon_reports/)로 루트별 복사한다.
 
     ★ 반드시 스택 생존 중(kill_stack 전)에 호출 — local_path_node가 살아있어야 서비스가 응답한다.
-    /tank/map/discovered/save 콜백이 지형 finalize까지 체이닝(local_path_node.py)하므로
-    한 번 호출로 발견객체 + 지형 NPZ를 함께 저장한다(지형 노드가 떠 있을 때).
-    실패해도 정찰 시퀀스엔 영향 없음(graceful) — 시나리오2 빌드는 사후 build_scenario2_map.py로.
+    저장은 두 서비스로 명시 트리거한다:
+      1) /tank/map/discovered/save — 발견객체 맵(local_path_node, 동기)
+      2) /tank/terrain/finalize_map — 지형 NPZ. 콜백이 save_outputs까지 콜백 내에서 동기 실행 후
+         응답하므로 `ros2 service call`(동기)이 **저장 완료까지 블록**한다(과거 call_async+4초 sleep
+         레이스로 첫 레그 A가 0바이트로 복사되던 버그 정석 해결).
+    복사 전 NPZ를 검증(크기+np.load+누적점>0)하고 원자적으로 복사하며, 실패 시 깨진 복사본을 남기지
+    않고 시끄럽게 경고한다(다음 build_scenario2_map.py가 0바이트 파일을 만나지 않게).
+    실패해도 정찰 시퀀스엔 영향 없음(graceful).
     """
-    print(f"  [Route {route_id}] 발견객체·지형 저장 트리거 (/tank/map/discovered/save)...")
+    os.makedirs(RECON_MAP_DIR, exist_ok=True)
+    os.makedirs(TERRAIN_DIR, exist_ok=True)
+    t_start = time.time()  # 원본 mtime 신선도 판정(이번 finalize 결과인지 vs 이전 루트 잔재)
+
+    # 1) 발견객체 맵 저장(동기)
+    print(f"  [Route {route_id}] 발견객체 저장 트리거 (/tank/map/discovered/save)...")
     try:
         subprocess.run(
             ["ros2", "service", "call", "/tank/map/discovered/save", "std_srvs/srv/Trigger", "{}"],
@@ -116,24 +173,57 @@ def finalize_recon_artifacts(route_id: str) -> None:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     except Exception as e:
-        print(f"  [Route {route_id}] [경고] save 트리거 실패: {e}")
-        return
-    time.sleep(4.0)  # 지형 finalize는 비동기(서비스 체이닝) → NPZ 기록 시간 여유
-    os.makedirs(RECON_MAP_DIR, exist_ok=True)
-    os.makedirs(TERRAIN_DIR, exist_ok=True)
+        print(f"  [Route {route_id}] [경고] 발견맵 save 트리거 실패: {e}")
+
+    # 2) 지형 finalize — 노드가 떠 있으면 동기 호출(저장 완료까지 블록). 없으면 graceful skip(멈춤 방지).
+    if _service_available("/tank/terrain/finalize_map"):
+        print(f"  [Route {route_id}] 지형 finalize 트리거 (/tank/terrain/finalize_map, 동기 대기)...")
+        try:
+            r = subprocess.run(
+                ["ros2", "service", "call", "/tank/terrain/finalize_map", "std_srvs/srv/Trigger", "{}"],
+                cwd=PROJECT_ROOT, check=False, timeout=90,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            )
+            out = (r.stdout or "").strip()
+            if "success=True" not in out and "success=true" not in out:
+                print(f"  [Route {route_id}] [참고] 지형 finalize 미확정(점 부족 가능): {out[:160]}")
+        except Exception as e:
+            print(f"  [Route {route_id}] [참고] 지형 finalize 호출 실패: {e}")
+    else:
+        print(f"  [Route {route_id}] [참고] /tank/terrain/finalize_map 서비스 없음 — 지형 노드 미기동(지형 없이 진행)")
+
+    # 3) 발견맵 복사(존재+비어있지 않음 검증)
     disc_dst = os.path.join(RECON_MAP_DIR, f"discovered_objects_route_{route_id}.map")
-    if os.path.exists(DISCOVERED_LATEST):
-        shutil.copy2(DISCOVERED_LATEST, disc_dst)
+    if os.path.exists(DISCOVERED_LATEST) and os.path.getsize(DISCOVERED_LATEST) > 0:
+        _atomic_copy(DISCOVERED_LATEST, disc_dst)
         print(f"  [Route {route_id}] 발견맵 → {disc_dst}")
     else:
-        print(f"  [Route {route_id}] [경고] 발견맵 미생성: {DISCOVERED_LATEST}")
+        print(f"  [Route {route_id}] [경고] 발견맵 미생성/0바이트: {DISCOVERED_LATEST}")
+
+    # 4) 지형 NPZ 검증 → 원자적 복사 (0바이트/미완성/이전루트 잔재 차단)
     terr_dst = os.path.join(TERRAIN_DIR, f"terrain_map_route_{route_id}.npz")
-    if os.path.exists(TERRAIN_LATEST):
-        shutil.copy2(TERRAIN_LATEST, terr_dst)
-        print(f"  [Route {route_id}] 지형 → {terr_dst}")
-    else:
+    ok, npts, reason = _validate_npz(TERRAIN_LATEST)
+    fresh = os.path.exists(TERRAIN_LATEST) and os.path.getmtime(TERRAIN_LATEST) >= t_start - 1.0
+    if ok and fresh:
+        _atomic_copy(TERRAIN_LATEST, terr_dst)
+        ok2, npts2, reason2 = _validate_npz(terr_dst)
+        if ok2:
+            print(f"  [Route {route_id}] 지형({npts2:,}점) → {terr_dst}")
+        else:
+            print(f"  [Route {route_id}] [경고] 지형 복사본 검증 실패({reason2}) — 제거")
+            _safe_remove(terr_dst)
+    elif not os.path.exists(TERRAIN_LATEST):
         print(f"  [Route {route_id}] [참고] 지형 NPZ 미생성: {TERRAIN_LATEST} "
               f"(terrain finalize 노드가 안 떠 있으면 정상 — 지형 없이 진행)")
+        _safe_remove(terr_dst)
+    else:
+        why = reason if not ok else f"이번 finalize 결과 아님(stale, mtime<시작 {t_start:.0f})"
+        print("  " + "!" * 64)
+        print(f"  [Route {route_id}] [경고] 지형 NPZ 저장 실패 — 복사 생략: {why}")
+        print(f"           원본: {TERRAIN_LATEST}")
+        print(f"           ⇒ 시나리오2 지형에서 {route_id} 구역이 누락됩니다. 이 루트를 재정찰하세요.")
+        print("  " + "!" * 64)
+        _safe_remove(terr_dst)  # 과거 0바이트 잔재 제거(build가 깨진 파일 안 만나게)
 
 
 def reset_terrain_recording(route_id: str) -> None:
