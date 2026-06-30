@@ -72,6 +72,9 @@ ros2 launch control tank_autonomous_control.launch.py mission_type:=recon route_
 
 # T3) RViz (선택)
 ros2 launch rviz_visualization tank_rviz.launch.py
+# T3') 웹 대시보드(/view) "RViz 3D" 탭에 데스크톱 RViz와 동일한 마커(정적맵·객체·위험·지형 면 메쉬)를
+#      띄우려면, 데스크톱 RViz2 창은 띄우지 말고 마커 발행 노드만 실행한다(웹 RViz 3D 피드):
+ros2 launch rviz_visualization tank_rviz.launch.py use_rviz:=false
 
 # ── 정찰 A→B 자동 시퀀스 (권장) ── 브릿지를 auto+자동리셋으로 띄운 뒤, 별도 터미널에서 매니저 실행.
 #   매니저가 stop-and-aim(미지 LiDAR 장애물서 정지+포탑 조준→카메라 분류) + 확정기준 상향을 자동 적용한다.
@@ -96,9 +99,12 @@ python3 scripts/run_scenario2_scenario.py
 #   결과: recon_reports/scenario2/scenario2_result.json  (outcome: success/aborted/timeout)
 #   ※ 실제 포탄은 아직 안 나감(mock이 명중 보고) — 두뇌/복귀/경로만 검증. 실사격은 팀원 turret 후.
 
-# T3) RViz (시나리오2 전용 — 발견 장애물 색칠 + 지형 메쉬 + 라이브 pose/경로)
+# T3) RViz (시나리오2 전용 — 정찰 합본맵 scenario2_map.map + 발견 장애물 색칠 + 지형 면 메쉬 + 라이브 pose/경로)
+#     ※ 이 런치가 recon_reports/recon_map/scenario2_map.map(정찰로 만든 맵)을 그대로 로드해 표시한다.
 ros2 launch rviz_visualization tank_scenario2_map_view.launch.py
 #   FSM 상태 확인: ros2 topic echo /tank/decision/status
+# T3') 웹 대시보드 "RViz 3D" 탭에 시나리오2 맵(정찰 합본맵+발견장애물)·지형 면 메쉬를 띄우려면 데스크톱 창 없이:
+ros2 launch rviz_visualization tank_scenario2_map_view.launch.py use_rviz:=false
 
 
 ########################################################################################
