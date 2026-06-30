@@ -36,13 +36,34 @@ def _project_root() -> str:
     return str(Path(__file__).resolve().parents[3])
 
 
+def _clear_stale_scenario2_completion_files(project_root: str) -> None:
+    """Remove stale completion sentinels before launching a new mission.
+
+    The simulator-side Scenario-2 harness watches ``route_A.json`` and
+    ``scenario2_result.json``. Leaving a previous run's files in place can
+    make a new run finish before the vehicle reaches the firing checkpoint.
+    """
+    report_dir = Path(project_root) / "recon_reports" / "scenario2"
+    for filename in ("route_A.json", "scenario2_result.json"):
+        try:
+            (report_dir / filename).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            print(f"[scenario2] stale report cleanup failed for {filename}: {exc}")
+
+
 def generate_launch_description():
+    project_root = _project_root()
+    _clear_stale_scenario2_completion_files(project_root)
+
     control_share = get_package_share_directory("control")
     autonomous_launch = os.path.join(control_share, "launch", "tank_autonomous_control.launch.py")
 
-    recon_map_dir = os.path.join(_project_root(), "recon_reports", "recon_map")
+    recon_map_dir = os.path.join(project_root, "recon_reports", "recon_map")
     default_map = os.path.join(recon_map_dir, "scenario2_map.map")
     default_terrain = os.path.join(recon_map_dir, "scenario2_terrain.json")
+    scenario2_route_file = os.path.join(control_share, "config", "scenario2_routes.yaml")
 
     scenario2_map_arg = DeclareLaunchArgument(
         "scenario2_map", default_value=default_map,
@@ -57,13 +78,27 @@ def generate_launch_description():
         scenario2_map_arg,
         scenario2_terrain_arg,
         # decision/risk 노드가 scripts/recon_eval(threat_geometry)을 찾도록 프로젝트 루트를 노출.
-        SetEnvironmentVariable("TANK_PROJECT_ROOT", _project_root()),
+        SetEnvironmentVariable("TANK_PROJECT_ROOT", project_root),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(autonomous_launch),
             launch_arguments={
                 "mission_type": "mission",
                 "route_id": "A",        # 시나리오2 임무 루트 = A 고정(설계)
                 "route_side": "west",
+                # 정찰 공용 route는 유지하고, 시나리오2에서는 50,260에서 멈추는 별도 route를 사용한다.
+                "route_config_file": scenario2_route_file,
+                "default_goal_x": "50.0",
+                "default_goal_y": "260.0",
+                # 도착 후 pause/exit하지 않고 controller가 STOP을 유지해야 포탑 노드가 실제 발사한다.
+                "pause_on_goal_reached": "false",
+                "exit_on_goal_reached": "false",
+                # The external Scenario-2 harness declares success when it sees
+                # route_A.json(reached=true). Hold that report at (50,260)
+                # until ballistic_turret_node has fired and physically returned.
+                "require_turret_completion_for_reached": "true",
+                # Simulator's original /set_destination points at the enemy.
+                # Lock it out: scenario2 must always visit the firing checkpoint first.
+                "accept_external_goal_updates": "false",
                 "static_map_file": LaunchConfiguration("scenario2_map"),
                 "terrain_cost_file": LaunchConfiguration("scenario2_terrain"),
                 # 지형 비용(험지 회피)을 정찰과 동일하게 OFF. 정찰은 terrain_cost_file이 비어 무영향이라,
@@ -71,26 +106,75 @@ def generate_launch_description():
                 # 재활성화하려면 값만 올리면 됨(예전엔 4.0으로 급경사 셀 강회피).
                 "terrain_weight": "0.0",
                 # 시나리오2 local_path 리포트(route_A.json)를 정찰과 격리 → 정찰 recon_reports/route_A.json 미접촉.
-                "recon_report_dir": os.path.join(_project_root(), "recon_reports", "scenario2"),
+                "recon_report_dir": os.path.join(project_root, "recon_reports", "scenario2"),
             }.items(),
         ),
-        # --- 시나리오2 전술층: decision FSM(돌파/교전/복귀) + mock turret(교전 폐루프 stand-in) ---
+        # Strict Scenario-2 sequence is owned by ballistic_turret_node:
+        # checkpoint (50,260) -> full stop -> aim/fire -> internal return goal.
+        # Do NOT launch decision_node here: its independent RETURN FSM can
+        # overwrite the checkpoint while the ballistic node is waiting to fire.
+        # The ballistic node owns the strict two-target sequence:
+        # (48,224) -> static target (50,285,8.5) -> barrel down ->
+        # (50,260) -> final enemy -> barrel down -> return home.
         Node(
-            package="mission", executable="decision_node", name="tank_decision_node",
+            package="control", executable="ballistic_turret_node", name="tank_ballistic_turret_node",
             output="screen",
             parameters=[{
-                "scenario2_map_file": LaunchConfiguration("scenario2_map"),
-                "start_x": 59.0, "start_y": 27.0,    # routes.yaml finalmap.start
-                "goal_tolerance": 10.0,              # ★ planner/control/local_path 와 일치
-                "known_match_radius_m": 8.0,
-                "engage_range_m": 20.0,              # Tank001 반경과 정합
-                "risk_radius_m": 20.0,
-                "risk_threshold": 0.5,
+                "engagements_json": (
+                    '[{'
+                    '"id":"enemy_mid",'
+                    '"checkpoint":{"x":48.0,"y":224.0,"radius_m":10.0},'
+                    '"checkpoint_settle_sec":0.8,'
+                    '"target":{"x":50.0,"y":285.0,"z":8.5},'
+                    '"target_from_enemy_pose":false,'
+                    '"target_height_offset_m":0.0'
+                    '},{'
+                    '"id":"enemy_final",'
+                    '"checkpoint":{"x":50.0,"y":260.0,"radius_m":10.0},'
+                    '"checkpoint_settle_sec":0.8,'
+                    '"target":{"x":135.46,"y":276.87,"z":0.0},'
+                    '"target_from_enemy_pose":true,'
+                    '"target_height_offset_m":0.0'
+                    '}]'
+                ),
+                # Dataset-based ballistic and turret-feedback convention.
+                "ballistic_k": 0.001520,
+                "muzzle_height_m": 3.199,
+                # Convert the world ballistic arc into hull-relative turret
+                # yaw/pitch using playerBodyX/Y/Z (yaw/pitch/roll).  This is
+                # essential when the hull is side-tilted on Scenario-2 terrain.
+                "use_body_attitude_compensation": False,
+                "body_pitch_sign": 1.0,
+                "body_roll_sign": 1.0,
+                "turret_yaw_feedback_is_world": True,
+                "muzzle_offset_right_m": 0.0,
+                "muzzle_offset_forward_m": 0.0,
+                "body_attitude_ttl_sec": 1.0,
+                "min_pitch_deg": -5.0,
+                "max_pitch_deg": 10.0,
+                "pitch_feedback_sign": 1.0,
+                "max_range_m": 130.0,
+                "fire_pulse_sec": 0.35,
+                "impact_timeout_sec": 8.0,
+                # Stable deadband closes the Q/E and R/F loop before every shot.
+                "yaw_tolerance_deg": 1.6,
+                "pitch_tolerance_deg": 0.75,
+                "yaw_control_deadband_deg": 1.6,
+                "pitch_control_deadband_deg": 0.75,
+                "aim_stable_sec": 0.45,
+                "turret_feedback_ttl_sec": 0.75,
+                "on_target_cycles": 1,
+                # F is held down after *each* target so the next drive leg has
+                # a clear forward camera view.
+                "lower_barrel_after_engagement": True,
+                "lower_barrel_target_deg": -5.0,
+                "lower_barrel_weight": 1.0,
+                # Only after engagement 2 is complete does the node issue home.
+                "return_enabled": True,
+                "return_x": 59.0,
+                "return_y": 27.0,
+                "return_radius_m": 10.0,
+                "return_goal_topic": "/tank/mission/goal_pose",
             }],
-        ),
-        Node(
-            package="mission", executable="mock_turret_node", name="tank_mock_turret_node",
-            output="screen",
-            parameters=[{"aim_sec": 1.5, "always_hit": True}],
         ),
     ])

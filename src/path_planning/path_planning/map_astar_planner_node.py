@@ -586,6 +586,11 @@ class TeamDynamicAStarPlannerNode(Node):
         self.declare_parameter("default_goal_enabled", DEFAULT_GOAL_ENABLED)
         self.declare_parameter("default_goal_x", DEFAULT_GOAL_X)
         self.declare_parameter("default_goal_y", DEFAULT_GOAL_Y)
+        # Scenario-specific lock: when false, the simulator's legacy
+        # /set_destination -> /tank/goal/pose message cannot replace the
+        # launch-defined checkpoint goal.  Dedicated mission goals still work.
+        self.declare_parameter("accept_external_goal_updates", True)
+        self.declare_parameter("mission_goal_pose_topic", "/tank/mission/goal_pose")
         self.declare_parameter("max_expansions", MAX_EXPANSIONS)
         self.declare_parameter("use_route_waypoints", USE_ROUTE_WAYPOINTS)
         self.declare_parameter("route_map_name", ROUTE_MAP_NAME)
@@ -671,6 +676,12 @@ class TeamDynamicAStarPlannerNode(Node):
         self.lookahead_distance = float(self.get_parameter("lookahead_distance").value)
         self.publish_path_period_sec = float(self.get_parameter("publish_path_period_sec").value)
         self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
+        self.accept_external_goal_updates = bool(
+            self.get_parameter("accept_external_goal_updates").value
+        )
+        self.mission_goal_pose_topic = str(
+            self.get_parameter("mission_goal_pose_topic").value
+        )
         self.max_expansions = int(self.get_parameter("max_expansions").value)
         self.use_route_waypoints = bool(self.get_parameter("use_route_waypoints").value)
         self.route_map_name = str(self.get_parameter("route_map_name").value)
@@ -799,6 +810,11 @@ class TeamDynamicAStarPlannerNode(Node):
 
         self.create_subscription(PoseStamped, TOPIC_PLAYER_POSE, self.player_pose_cb, 10)
         self.create_subscription(PoseStamped, TOPIC_GOAL_POSE, self.goal_pose_cb, 10)
+        # Internal mission transitions use a separate topic so Scenario-2 can
+        # keep the checkpoint goal locked while still returning after firing.
+        self.create_subscription(
+            PoseStamped, self.mission_goal_pose_topic, self.mission_goal_pose_cb, 10
+        )
         self.create_subscription(String, TOPIC_MAP_OBSTACLES, self.obstacles_cb, 10)
         self.create_subscription(PointCloud2, TOPIC_LIDAR_DETECTED_MAP, self.lidar_cb, 10)
         self.create_subscription(String, TOPIC_LIDAR_CLUSTERS, self.lidar_clusters_cb, 10)
@@ -844,8 +860,12 @@ class TeamDynamicAStarPlannerNode(Node):
                 self.route_remaining_waypoints = []
         self.current_pos = new_pos
 
-    def goal_pose_cb(self, msg: PoseStamped) -> None:
-        new_goal = (float(msg.pose.position.x), float(msg.pose.position.y))
+    def _set_goal(self, new_goal: Tuple[float, float], reason: str) -> None:
+        """Set a new global goal only when it differs meaningfully.
+
+        Both the public simulator goal topic and the internal mission goal topic
+        share this path; the caller decides which source is allowed.
+        """
         # 목적지가 '의미있게' 바뀔 때만 전역경로 재생성. 0.5m는 과민했다 — /tank/goal/pose에
         # ros_bridge(시뮬 POST)와 planner(2Hz)가 이중 발행해, 좌표변환 부동소수 차로도 매번
         # route를 비워 lookahead가 프레임마다 흔들렸다. goal_tolerance(10m)와 정합되게 10m로 상향.
@@ -853,8 +873,8 @@ class TeamDynamicAStarPlannerNode(Node):
             self.goal_pos = new_goal
             self.route = []
             self.plan_request_pending = True
-            self.plan_request_reason = "goal_updated"
-            self.last_replan_reason = "goal_updated"
+            self.plan_request_reason = reason
+            self.last_replan_reason = reason
             self.path_block_hit_count = 0
             self.dynamic_replan_count = 0
             self.last_dynamic_replan_pos = None
@@ -865,6 +885,24 @@ class TeamDynamicAStarPlannerNode(Node):
             self.route_checkpoint_index = 0
             self.route_checkpoint_total = 0
             self.route_remaining_waypoints = []
+
+    def goal_pose_cb(self, msg: PoseStamped) -> None:
+        # In Scenario-2 the simulator still POSTs its original enemy-position
+        # destination.  It must not overwrite the firing checkpoint.
+        if not self.accept_external_goal_updates:
+            return
+        self._set_goal(
+            (float(msg.pose.position.x), float(msg.pose.position.y)),
+            "goal_updated",
+        )
+
+    def mission_goal_pose_cb(self, msg: PoseStamped) -> None:
+        # Only mission orchestration (the ballistic node) uses this topic.
+        # It remains enabled even when external simulator goals are locked.
+        self._set_goal(
+            (float(msg.pose.position.x), float(msg.pose.position.y)),
+            "mission_goal_updated",
+        )
 
     def obstacles_cb(self, msg: String) -> None:
         try:

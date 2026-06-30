@@ -22,6 +22,7 @@ setup(
     entry_points={
         "console_scripts": [
             "tank_controller_node = control.tank_controller_node:main",
+            "ballistic_turret_node = control.ballistic_turret_node:main",
         ],
     },
 )

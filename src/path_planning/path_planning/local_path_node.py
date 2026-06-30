@@ -55,6 +55,10 @@ TOPIC_FUSION_DEBUG_STATUS = "/tank/debug/fusion/status"
 # 정찰 전용: 미분류 후보(라이다엔 잡혔으나 카메라 분류 안 된 클러스터)를 controller에 알려
 # 감속/dwell(전방 후보) + 포탑 step-stare(옆 후보) 큐로 쓰게 한다. mission_type==recon에서만 발행.
 TOPIC_OBSERVE_REQUEST = "/tank/recon/observe_request"
+# Scenario-2 mission gate. When enabled, route_A.json must not report
+# ``reached`` merely because the vehicle arrived at the firing checkpoint.
+# The ballistic node opens this gate only after it has fired and returned.
+TOPIC_TURRET_STATUS = "/tank/turret/status"
 
 from lidar.config import TOPIC_LIDAR_DETECTED_MAP
 from path_planning.config import (
@@ -323,20 +327,36 @@ class LocalPathNode(Node):
         self.declare_parameter("recon_report_dir", "./recon_reports")
         self.declare_parameter("goal_pose_topic", "/tank/goal/pose")
         self.declare_parameter("goal_tolerance", 5.0)
+        # Scenario-2 sets this true. Until ballistic_turret_node reaches its
+        # terminal ``returned`` phase, arriving at the checkpoint is only an
+        # intermediate stop — it must not create route_A.json(reached=true),
+        # because the scenario runner interprets that file as mission success
+        # and terminates the whole ROS launch.
+        self.declare_parameter("require_turret_completion_for_reached", False)
+        self.declare_parameter("turret_status_topic", TOPIC_TURRET_STATUS)
 
         self.route_id = str(self.get_parameter("route_id").value)
         self.route_map_name = str(self.get_parameter("route_map_name").value)
         self.recon_report_dir = str(self.get_parameter("recon_report_dir").value)
         self.goal_pose_topic = str(self.get_parameter("goal_pose_topic").value)
         self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
+        self.require_turret_completion_for_reached = bool(
+            self.get_parameter("require_turret_completion_for_reached").value
+        )
+        self.turret_status_topic = str(self.get_parameter("turret_status_topic").value)
 
         self.recon_logger = ReconLogger(self.route_id, self.route_map_name, self.recon_report_dir)
         self.sim_time = 0.0
         self._last_sim_time = 0.0
         self._report_saved = False
         self.goal_pos = None
+        self._turret_phase = "unknown"
+        # False by default preserves existing recon/one-way route behavior.
+        self._turret_completion_seen = not self.require_turret_completion_for_reached
+        self._reach_gate_wait_logged = False
 
         self.create_subscription(PoseStamped, self.goal_pose_topic, self.goal_pose_cb, 10)
+        self.create_subscription(String, self.turret_status_topic, self.turret_status_cb, 10)
         self.create_subscription(String, "/tank/event/collision", self.collision_cb, 10)
 
         # 주행 품질 진단용 구독 (읽기만 — 제어/계획 거동은 안 건드림). recon_logger에 per-step 기록해
@@ -452,6 +472,27 @@ class LocalPathNode(Node):
     def goal_pose_cb(self, msg: PoseStamped) -> None:
         with self._lock:
             self.goal_pos = (float(msg.pose.position.x), float(msg.pose.position.y))
+
+    def turret_status_cb(self, msg: String) -> None:
+        """Open Scenario-2 completion gate only after return is physically done."""
+        try:
+            payload = json.loads(msg.data)
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        phase = str(payload.get("phase", "")).strip().lower()
+        if not phase:
+            return
+        with self._lock:
+            self._turret_phase = phase
+            if phase in {"returned", "complete"}:
+                self._turret_completion_seen = True
+            elif phase in {
+                "approach", "settling", "aim", "firing", "wait_impact",
+                "hit", "miss", "impact_timeout", "returning",
+            }:
+                self._turret_completion_seen = False
 
     def collision_cb(self, msg: String) -> None:
         with self._lock:
@@ -635,7 +676,21 @@ class LocalPathNode(Node):
                 py = self.player_pose.pose.position.y
                 dist = math.hypot(px - self.goal_pos[0], py - self.goal_pos[1])
                 if dist < self.goal_tolerance:
-                    if not self._report_saved:
+                    gate_open = (
+                        not self.require_turret_completion_for_reached
+                        or self._turret_completion_seen
+                    )
+                    if not gate_open:
+                        # Do not write route_A.json(reached=true) at (50,260).
+                        # The external Scenario-2 harness treats that file as an
+                        # immediate success signal and would kill the aim/fire node.
+                        if not self._reach_gate_wait_logged:
+                            self.get_logger().info(
+                                "Goal radius reached; withholding route report until "
+                                f"turret completion (phase={self._turret_phase!r})"
+                            )
+                            self._reach_gate_wait_logged = True
+                    elif not self._report_saved:
                         self.recon_logger.reached = True
                         self.recon_logger.save_report()
                         self._report_saved = True

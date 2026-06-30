@@ -100,9 +100,20 @@ class TeamPathControllerNode(Node):
         self.declare_parameter("max_speed", 25.0)
         self.declare_parameter("max_yaw_rate", 2.0)
         self.declare_parameter("goal_tolerance", 10.0)
+        # Goal 도착 후 simulator pause는 일반 정찰/주행에는 유용하지만,
+        # scenario2의 정지-조준-발사 단계에서는 /get_action을 계속 받아야 한다.
+        self.declare_parameter("pause_on_goal_reached", True)
+        # Keep the controller alive at a stop-aim-fire checkpoint.  The legacy
+        # default preserves the previous behavior for ordinary one-way runs.
+        self.declare_parameter("exit_on_goal_reached", True)
         self.declare_parameter("enable_local_target", ENABLE_LOCAL_TARGET)
         self.declare_parameter("target_ttl_sec", TARGET_TTL_SEC)
         self.declare_parameter("mission_type", "mission")  # 'recon', 'mission', 'return'
+        # 단일 /tank/control/command 발행자를 유지하기 위한 포탑 override 입력.
+        # ballistic_turret_node 같은 교전 노드는 이 topic만 발행하고, 이 컨트롤러가
+        # 주행 명령과 합성해 simulator로 보낸다.
+        self.declare_parameter("turret_override_topic", "/tank/turret/override")
+        self.declare_parameter("turret_override_ttl_sec", 0.35)
         self.declare_parameter("heading_deadband_deg", HEADING_DEADBAND_DEG)
         self.declare_parameter("steering_full_error_deg", STEERING_FULL_ERROR_DEG)
         self.declare_parameter("min_ad_weight", MIN_AD_WEIGHT)
@@ -209,9 +220,15 @@ class TeamPathControllerNode(Node):
         self.crawl_turn_ws_weight = float(self.get_parameter("crawl_turn_ws_weight").value)
         self.max_yaw_rate = float(self.get_parameter("max_yaw_rate").value)
         self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
+        self.pause_on_goal_reached = bool(self.get_parameter("pause_on_goal_reached").value)
+        self.exit_on_goal_reached = bool(self.get_parameter("exit_on_goal_reached").value)
         self.enable_local_target = bool(self.get_parameter("enable_local_target").value)
         self.target_ttl_sec = float(self.get_parameter("target_ttl_sec").value)
         self.mission_type = str(self.get_parameter("mission_type").value).lower()
+        self.turret_override_topic = str(self.get_parameter("turret_override_topic").value)
+        self.turret_override_ttl_sec = max(0.05, float(self.get_parameter("turret_override_ttl_sec").value))
+        self._turret_override: Optional[Dict[str, Any]] = None
+        self._turret_override_stamp: float = -1e9
 
         # ── 정찰 전용 "지각 주도 관측" 소비 (mission_type==recon에서만) ──────────
         # local_path_node의 /tank/recon/observe_request(미분류 후보)를 받아
@@ -377,6 +394,7 @@ class TeamPathControllerNode(Node):
         self.create_subscription(PoseStamped, TOPIC_LOCAL_TARGET_POSE, self.local_target_cb, 10)
         self.create_subscription(NavPath, "/tank/global_path", self.global_path_cb, 10)
         self.create_subscription(String, TOPIC_COLLISION_EVENT, self.collision_cb, 10)
+        self.create_subscription(String, self.turret_override_topic, self.turret_override_cb, 10)
         self.create_subscription(String, self.safety_status_topic, self.safety_status_cb, 10)
         # 정찰 관측요청(미분류 후보) + 포탑 현재각 피드백(step-stare 폐루프용).
         self.create_subscription(String, "/tank/recon/observe_request", self.observe_request_cb, 10)
@@ -463,6 +481,21 @@ class TeamPathControllerNode(Node):
 
     def collision_cb(self, msg: String) -> None:
         self.collision_count += 1
+
+    def turret_override_cb(self, msg: String) -> None:
+        """Receive a short-lived turret-only override from the engagement layer.
+
+        The controller remains the *only* publisher of /tank/control/command,
+        so movement and turret actions cannot race at the bridge.
+        """
+        try:
+            payload = json.loads(msg.data)
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        self._turret_override = payload
+        self._turret_override_stamp = time.monotonic()
 
     def safety_status_cb(self, msg: String) -> None:
         try:
@@ -1194,20 +1227,21 @@ class TeamPathControllerNode(Node):
         abs_err = abs(yaw_error)
         if self.goal_pos is not None and get_distance(self.current_pos, self.goal_pos) < self.goal_tolerance:
             self.mission_complete = True
-            
-            # 시나리오(mission_type)에 따른 도착 후 행동 분기
-            if self.mission_type == "mission":
-                self.fire_cmd = True  # 목표 도달 시 사격 (파괴 임무)
-            else:
-                self.fire_cmd = False # 정찰(recon)이나 복귀(return) 시 사격 금지
 
-            if not hasattr(self, '_stop_published_count'):
-                self._stop_published_count = 0
-            self._stop_published_count += 1
-            if self._stop_published_count > 10:
-                self.get_logger().info(f"Mission Complete [{self.mission_type}]: Destination Reached. Terminating Control Node.")
-                import sys
-                sys.exit(0)
+            # The ballistic checkpoint needs this node to keep publishing
+            # /tank/control/command; otherwise the turret override cannot reach
+            # the simulator after the first second at the checkpoint.
+            if self.exit_on_goal_reached:
+                if not hasattr(self, '_stop_published_count'):
+                    self._stop_published_count = 0
+                self._stop_published_count += 1
+                if self._stop_published_count > 10:
+                    self.get_logger().info(
+                        f"Mission Complete [{self.mission_type}]: Destination Reached. "
+                        "Terminating Control Node."
+                    )
+                    import sys
+                    sys.exit(0)
             return "STOP", 1.0, "goal_reached"
         if get_distance(self.current_pos, target) < 1.0 and self.goal_pos and get_distance(target, self.goal_pos) < self.stop_distance:
             return "STOP", 1.0, "target_stop"
@@ -1234,6 +1268,14 @@ class TeamPathControllerNode(Node):
 
     def escape_command_if_needed(self, target: Optional[Tuple[float, float]] = None) -> Optional[Tuple[Dict[str, Any], str]]:
         if not self.enable_stuck_escape or self.current_pos is None:
+            return None
+        # Goal/checkpoint에서의 STOP은 의도된 대기다. 이를 stuck으로 오인해
+        # 후진하면 포탑 조준 중 차체가 흔들리고, 사격 뒤 복귀 goal도 망가진다.
+        if self.goal_pos is not None and get_distance(self.current_pos, self.goal_pos) < self.goal_tolerance:
+            t = self.current_sim_time if self.current_sim_time > 0.0 else time.time()
+            self.last_stuck_check_pos = self.current_pos
+            self.last_stuck_check_yaw = self.current_yaw
+            self.last_stuck_check_time = t
             return None
         # 정찰 의도적 dwell(정지관측) 중에는 stuck-escape를 끈다 — 의도 정지를 끼임으로 오인 방지.
         # 베이스라인을 현재 위치/시각으로 리셋해 dwell 종료 후 stuck 윈도가 새로 시작하게 한다.
@@ -1379,6 +1421,55 @@ class TeamPathControllerNode(Node):
             "fire": False,
         }
 
+    @staticmethod
+    def _sanitize_turret_axis(part: Any, allowed: set[str]) -> Dict[str, Any]:
+        """Validate a turret axis from the override boundary without throwing."""
+        if not isinstance(part, dict):
+            return {"command": "", "weight": 0.0}
+        command = str(part.get("command", ""))
+        if command not in allowed:
+            command = ""
+        try:
+            weight = float(part.get("weight", 0.0))
+        except (TypeError, ValueError):
+            weight = 0.0
+        weight = clamp(weight, 0.0, 1.0)
+        if not command:
+            weight = 0.0
+        return {"command": command, "weight": weight}
+
+    def apply_turret_override(self, action: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Merge a fresh active override into one simulator command.
+
+        ``hold_motion`` intentionally cancels W/S and A/D during the final
+        ballistic aiming phase.  The override expires quickly if its producer
+        stops, restoring the normal driving controller automatically.
+        """
+        override = self._turret_override
+        age = time.monotonic() - self._turret_override_stamp
+        if not isinstance(override, dict) or age > self.turret_override_ttl_sec:
+            return action, {"active": False, "reason": "missing_or_stale", "age_sec": round(age, 3)}
+        if not bool(override.get("active", False)):
+            return action, {"active": False, "reason": "inactive", "age_sec": round(age, 3)}
+
+        action["turretQE"] = self._sanitize_turret_axis(override.get("turretQE"), {"Q", "E"})
+        action["turretRF"] = self._sanitize_turret_axis(override.get("turretRF"), {"R", "F"})
+        action["fire"] = bool(override.get("fire", False))
+        hold_motion = bool(override.get("hold_motion", False))
+        if hold_motion:
+            action["moveWS"] = {"command": "STOP", "weight": 1.0}
+            action["moveAD"] = {"command": "", "weight": 0.0}
+        status = override.get("status") if isinstance(override.get("status"), dict) else {}
+        return action, {
+            "active": True,
+            "age_sec": round(age, 3),
+            "hold_motion": hold_motion,
+            "fire": action["fire"],
+            "turretQE": action["turretQE"],
+            "turretRF": action["turretRF"],
+            "producer": status,
+        }
+
     def publish_command(self, action: Dict[str, Any]) -> None:
         msg = String()
         msg.data = json.dumps(action, ensure_ascii=False, separators=(",", ":"))
@@ -1410,8 +1501,12 @@ class TeamPathControllerNode(Node):
         escape = self.escape_command_if_needed(target)
         if escape is not None:
             action, mode = escape
+            action, turret_override_status = self.apply_turret_override(action)
             self.publish_command(action)
-            self.publish_status({"ok": True, "mode": mode, "target_source": source, "command": action})
+            self.publish_status({
+                "ok": True, "mode": mode, "target_source": source,
+                "turret_override": turret_override_status, "command": action,
+            })
             return
 
         cmd_ad, w_ad, yaw_error, desired_yaw = self.calculate_steering(target)
@@ -1490,7 +1585,15 @@ class TeamPathControllerNode(Node):
         action = self.make_action(cmd_ws, w_ws, cmd_ad, w_ad)
         if recon_turret_qe.get("command"):
             action["turretQE"] = recon_turret_qe
-        if speed_mode == "goal_reached":
+        # 교전 노드의 override를 마지막에 합성한다. 특히 checkpoint에서 active이면
+        # goal_reached의 control:pause를 억제해 simulator가 /get_action을 계속 호출하고
+        # Q/E/R/F 및 fire pulse를 실제로 받을 수 있게 한다.
+        action, turret_override_status = self.apply_turret_override(action)
+        if (
+            speed_mode == "goal_reached"
+            and self.pause_on_goal_reached
+            and not turret_override_status.get("active", False)
+        ):
             # 목적지 도달 시 시뮬레이터 일시정지 요청.
             # 브릿지 select_action_command가 latest_command를 그대로 반환하므로
             # 이 control 필드가 /get_action 응답에 실려 시뮬로 전달된다.
@@ -1535,6 +1638,7 @@ class TeamPathControllerNode(Node):
                 "turn_overspeed_guard": turn_overspeed_guard_status,
                 "target_guard": self.target_guard_status,
             },
+            "turret_override": turret_override_status,
             "controller_profile": {
                 "straight_ws_weight": self.straight_ws_weight,
                 "turn_ws_weight": self.turn_ws_weight,
