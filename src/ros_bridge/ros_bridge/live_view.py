@@ -712,20 +712,20 @@ def render_view_page(poll_ms: int = 1000) -> str:
                         <canvas id="mapCanvas"></canvas>
                         <iframe id="rvizFrame" title="RViz 3D" style="display:none;"></iframe>
                         <div id="rosWrap" style="display:none;position:absolute;inset:0;flex-direction:column;background:var(--bg);">
-                            <div class="map-tabs" style="grid-template-columns:repeat(4,minmax(0,1fr));height:32px;">
+                            <div class="map-tabs" style="grid-template-columns:repeat(3,minmax(0,1fr));height:32px;">
                                 <button id="ros-sub-graph" class="tab-button active" type="button" onclick="setRosSub('graph')">GRAPH</button>
                                 <button id="ros-sub-services" class="tab-button" type="button" onclick="setRosSub('services')">SERVICES</button>
-                                <button id="ros-sub-tf" class="tab-button" type="button" onclick="setRosSub('tf')">TF</button>
                                 <button id="ros-sub-params" class="tab-button" type="button" onclick="setRosSub('params')">PARAMS</button>
                             </div>
                             <div style="position:relative;flex:1 1 auto;min-height:0;">
                                 <div id="rosGraph" style="position:absolute;inset:0;"></div>
-                                <div id="rosGraphTools" style="position:absolute;top:6px;right:8px;z-index:5;display:flex;gap:5px;">
+                                <div id="rosGraphTools" style="position:absolute;top:6px;right:8px;z-index:5;display:flex;gap:5px;align-items:center;">
+                                    <span style="color:var(--muted);font-size:10px">보기</span>
+                                    <button id="rosFlowBtn" class="rosbtn on" type="button" onclick="toggleRosFlow()" title="노드↔노드 / 흐름 / 전체 전환">노드</button>
                                     <button class="rosbtn" type="button" onclick="cyRosFit()">FIT</button>
-                                    <button id="rosFlowBtn" class="rosbtn on" type="button" onclick="toggleRosFlow()">흐름만</button>
                                 </div>
+                                <div id="rosEdgeInfo" style="display:none;position:absolute;left:8px;bottom:8px;max-width:46%;max-height:62%;overflow:auto;z-index:6;background:rgba(8,19,40,0.96);border:1px solid var(--line);padding:8px 10px;font-size:10px;line-height:1.6;"></div>
                                 <div id="rosServices" class="scroll" style="position:absolute;inset:0;display:none;"></div>
-                                <div id="rosTf" class="scroll" style="position:absolute;inset:0;display:none;"></div>
                                 <div id="rosParams" class="scroll" style="position:absolute;inset:0;display:none;"></div>
                             </div>
                         </div>
@@ -791,15 +791,23 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 byId("leftPanelTitle").textContent = tabName === "route" ? "ROUTE" : tabName === "risk" ? "RECON RISK" : tabName === "ai" ? "AI LOG" : tabName === "recon" ? "RECON" : "SENSOR";
                 updateLeftPanel(latestState || {});
             }
-            let cyRos = null, cyRosSig = "", cyDashTimer = null, rosFlowMode = true;
-            function cyRosFit() { if (cyRos) { try { cyRos.resize(); cyRos.fit(undefined, 10); } catch (e) {} } }
+            let cyRos = null, cyRosSig = "", cyDashTimer = null;
+            let rosGraphMode = "node";  // node(노드↔노드, 토픽 접음) | flow(노드↔노드 토픽) | all(전체)
+            const ROS_MODES = ["node", "flow", "all"], ROS_MODE_LABEL = { node: "노드", flow: "흐름", all: "전체" };
+            function cyRosFit() { if (cyRos) { try { cyRos.resize(); cyRos.fit(undefined, 12); } catch (e) {} } }
             function toggleRosFlow() {
-                rosFlowMode = !rosFlowMode;
-                byId("rosFlowBtn").classList.toggle("on", rosFlowMode);
-                byId("rosFlowBtn").textContent = rosFlowMode ? "흐름만" : "전체";
-                cyRosSig = "";  // 강제 재레이아웃
+                rosGraphMode = ROS_MODES[(ROS_MODES.indexOf(rosGraphMode) + 1) % ROS_MODES.length];
+                byId("rosFlowBtn").textContent = ROS_MODE_LABEL[rosGraphMode];
+                hideRosEdgeInfo(); cyRosSig = "";
                 renderRosGraph(latestState || {});
             }
+            function showRosEdgeInfo(src, dst, topics) {
+                const d = byId("rosEdgeInfo"); if (!d) return;
+                d.innerHTML = `<div style="color:var(--green);font-weight:700;margin-bottom:5px">${escapeHtml(rosShort(src))} → ${escapeHtml(rosShort(dst))} · ${topics.length}개 토픽</div>`
+                    + topics.slice().sort().map((t) => `<div style="color:#bfe0ff">${escapeHtml(t)}</div>`).join("");
+                d.style.display = "block";
+            }
+            function hideRosEdgeInfo() { const d = byId("rosEdgeInfo"); if (d) d.style.display = "none"; }
             function rosShort(id) {
                 if (id.startsWith("t:")) { const p = id.slice(2).split("/").filter(Boolean); return "/" + p.slice(-2).join("/"); }
                 const p = id.split("/").filter(Boolean); return p[p.length - 1] || id;
@@ -815,11 +823,18 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     style: [
                         { selector: 'node[kind="node"]', style: { shape: "round-rectangle", "background-color": "#0d2147", "border-color": "#4f8dff", "border-width": 1.5, label: "data(label)", color: "#dbe6ff", "font-size": 10, "font-weight": "bold", "text-valign": "center", "text-halign": "center", width: "label", height: 20, "padding": "7px", "text-wrap": "wrap", "text-max-width": "130px" } },
                         { selector: 'node[kind="topic"]', style: { shape: "round-rectangle", "background-color": "#0a1730", "border-color": "#5ac8ff", "border-width": 1, label: "data(label)", color: "#bfe0ff", "font-size": 9, "text-valign": "center", "text-halign": "center", width: "label", height: 15, "padding": "4px" } },
-                        { selector: "edge", style: { "curve-style": "bezier", "target-arrow-shape": "triangle", width: "data(w)", "line-color": "data(c)", "target-arrow-color": "data(c)", "arrow-scale": 0.7, opacity: 0.8 } },
+                        { selector: "edge", style: { "curve-style": "bezier", "target-arrow-shape": "triangle", width: "data(w)", "line-color": "data(c)", "target-arrow-color": "data(c)", "arrow-scale": 0.8, opacity: 0.78, label: "data(elabel)", "font-size": 8, color: "#9fd8ff", "text-rotation": "autorotate", "text-background-color": "#06101f", "text-background-opacity": 0.85, "text-background-padding": 1 } },
                         { selector: "edge[active = 1]", style: { "line-style": "dashed", "line-dash-pattern": [6, 4] } },
+                        { selector: "edge:selected", style: { "line-color": "#ffffff", "target-arrow-color": "#ffffff", "z-index": 99 } },
                     ],
                     layout: { name: "preset" },
                 });
+                cyRos.on("tap", "edge", (ev) => {
+                    const t = ev.target.data("topics");
+                    if (t && t.length) showRosEdgeInfo(ev.target.data("src2"), ev.target.data("dst2"), t);
+                    else hideRosEdgeInfo();
+                });
+                cyRos.on("tap", (ev) => { if (ev.target === cyRos) hideRosEdgeInfo(); });
                 if (!cyDashTimer) {
                     let off = 0;
                     cyDashTimer = setInterval(() => {
@@ -839,58 +854,74 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 }
                 const cy = ensureCyRos();
                 if (!cy) { cont.innerHTML = '<div style="color:#5a6b62;font-size:12px;padding:14px">cytoscape 로드 실패(CDN 확인)</div>'; return; }
-                let nodes = g.nodes || [], topics = g.topics || [], edges = g.edges || [];
-                // 흐름만: 발행·구독을 둘 다 가진 토픽(=노드↔노드 데이터흐름)만. 노드<2면 허브 전체 표시.
-                if (rosFlowMode && nodes.length >= 2) {
-                    const hasPub = new Set(), hasSub = new Set();
-                    edges.forEach((e) => { if (String(e.target).startsWith("t:")) hasPub.add(e.target); if (String(e.source).startsWith("t:")) hasSub.add(e.source); });
-                    const keep = new Set(topics.filter((t) => hasPub.has(t.id) && hasSub.has(t.id)).map((t) => t.id));
-                    if (keep.size) {  // 흐름 토픽이 있을 때만 필터(없으면 전체 유지)
-                        topics = topics.filter((t) => keep.has(t.id));
-                        edges = edges.filter((e) => keep.has(e.source) || keep.has(e.target));
-                        const used = new Set();
-                        edges.forEach((e) => { if (!String(e.source).startsWith("t:")) used.add(e.source); if (!String(e.target).startsWith("t:")) used.add(e.target); });
-                        nodes = nodes.filter((n) => used.has(n.id));
-                    }
-                }
+                const nodes = g.nodes || [], topics = g.topics || [], edges = g.edges || [];
                 const els = [];
-                nodes.forEach((n) => els.push({ data: { id: n.id, kind: "node", label: rosShort(n.id) } }));
-                topics.forEach((t) => { const hz = t.hz; els.push({ data: { id: t.id, kind: "topic", label: rosShort(t.id) + (hz ? ` ${hz}Hz` : ""), hz: hz || 0 } }); });
-                edges.forEach((e) => { const hz = e.hz || 0; els.push({ data: { id: e.id, source: e.source, target: e.target, w: hzWidth(hz), c: hzColor(hz), active: hz > 0 ? 1 : 0 } }); });
-                if (nodes.length <= 1) cont.dataset.hub = "1"; else delete cont.dataset.hub;
-                const sig = els.map((x) => x.data.id).sort().join("|");
+                if (rosGraphMode === "node") {
+                    // 토픽을 접고 노드→노드 직결(엣지 라벨=토픽 수, 클릭하면 토픽 목록 펼침)
+                    const pubs = {}, subs = {}, thz = {};
+                    edges.forEach((e) => {
+                        if (String(e.target).startsWith("t:")) { (pubs[e.target] = pubs[e.target] || []).push(e.source); thz[e.target] = e.hz || 0; }
+                        else if (String(e.source).startsWith("t:")) { (subs[e.source] = subs[e.source] || []).push(e.target); }
+                    });
+                    const n2n = {};
+                    Object.keys(pubs).forEach((t) => (pubs[t] || []).forEach((P) => (subs[t] || []).forEach((S) => {
+                        if (P === S) return;
+                        const k = P + "" + S, o = n2n[k] || (n2n[k] = { src: P, dst: S, topics: [], maxHz: 0 });
+                        o.topics.push(t.slice(2)); o.maxHz = Math.max(o.maxHz, thz[t] || 0);
+                    })));
+                    const used = new Set();
+                    Object.values(n2n).forEach((o) => { used.add(o.src); used.add(o.dst); });
+                    nodes.forEach((n) => { if (used.has(n.id)) els.push({ data: { id: n.id, kind: "node", label: rosShort(n.id) } }); });
+                    Object.keys(n2n).forEach((k) => { const o = n2n[k]; els.push({ data: { id: "e:" + k, source: o.src, target: o.dst, src2: o.src, dst2: o.dst, topics: o.topics, elabel: String(o.topics.length), w: hzWidth(o.maxHz), c: hzColor(o.maxHz), active: o.maxHz > 0 ? 1 : 0 } }); });
+                    if (!els.length) nodes.forEach((n) => els.push({ data: { id: n.id, kind: "node", label: rosShort(n.id) } }));
+                } else {
+                    let tps = topics, eds = edges, nds = nodes;
+                    if (rosGraphMode === "flow" && nodes.length >= 2) {
+                        const hasPub = new Set(), hasSub = new Set();
+                        edges.forEach((e) => { if (String(e.target).startsWith("t:")) hasPub.add(e.target); if (String(e.source).startsWith("t:")) hasSub.add(e.source); });
+                        const keep = new Set(topics.filter((t) => hasPub.has(t.id) && hasSub.has(t.id)).map((t) => t.id));
+                        if (keep.size) {
+                            tps = topics.filter((t) => keep.has(t.id));
+                            eds = edges.filter((e) => keep.has(e.source) || keep.has(e.target));
+                            const u = new Set(); eds.forEach((e) => { if (!String(e.source).startsWith("t:")) u.add(e.source); if (!String(e.target).startsWith("t:")) u.add(e.target); });
+                            nds = nodes.filter((n) => u.has(n.id));
+                        }
+                    }
+                    nds.forEach((n) => els.push({ data: { id: n.id, kind: "node", label: rosShort(n.id) } }));
+                    tps.forEach((t) => { const hz = t.hz; els.push({ data: { id: t.id, kind: "topic", label: rosShort(t.id) + (hz ? ` ${hz}Hz` : ""), hz: hz || 0 } }); });
+                    eds.forEach((e) => { const hz = e.hz || 0; els.push({ data: { id: e.id, source: e.source, target: e.target, w: hzWidth(hz), c: hzColor(hz), active: hz > 0 ? 1 : 0, elabel: "" } }); });
+                }
+                const sig = rosGraphMode + "|" + els.map((x) => x.data.id).sort().join("|");
                 if (sig !== cyRosSig) {
                     cyRos.json({ elements: els });
                     cyRosSig = sig;
-                    try { cyRos.layout({ name: "dagre", rankDir: "LR", nodeSep: 14, rankSep: 44, edgeSep: 6, fit: true, padding: 8 }).run(); }
-                    catch (e) { try { cyRos.layout({ name: "breadthfirst", directed: true, spacingFactor: 0.85, fit: true, padding: 8 }).run(); } catch (e2) {} }
+                    try { cyRos.layout({ name: "dagre", rankDir: "LR", nodeSep: 18, rankSep: 70, edgeSep: 8, fit: true, padding: 12 }).run(); }
+                    catch (e) { try { cyRos.layout({ name: "breadthfirst", directed: true, spacingFactor: 0.9, fit: true, padding: 12 }).run(); } catch (e2) {} }
                 } else {
                     cyRos.batch(() => {
                         els.forEach((x) => {
                             const el = cyRos.getElementById(x.data.id);
                             if (!el || !el.length) return;
                             if (x.data.kind === "topic") { el.data("label", x.data.label); el.data("hz", x.data.hz); }
-                            if (x.data.w != null) { el.data("w", x.data.w); el.data("c", x.data.c); el.data("active", x.data.active); }
+                            if (x.data.w != null) { el.data("w", x.data.w); el.data("c", x.data.c); el.data("active", x.data.active); if (x.data.elabel != null) el.data("elabel", x.data.elabel); }
                         });
                     });
                 }
             }
             let rosSubTab = "graph", rosParamNode = "";
             function setRosSub(s) {
-                rosSubTab = ["graph", "services", "tf", "params"].includes(s) ? s : "graph";
-                ["graph", "services", "tf", "params"].forEach((k) => byId("ros-sub-" + k).classList.toggle("active", k === rosSubTab));
+                rosSubTab = ["graph", "services", "params"].includes(s) ? s : "graph";
+                ["graph", "services", "params"].forEach((k) => byId("ros-sub-" + k).classList.toggle("active", k === rosSubTab));
                 byId("rosGraph").style.display = rosSubTab === "graph" ? "block" : "none";
                 byId("rosGraphTools").style.display = rosSubTab === "graph" ? "flex" : "none";
                 byId("rosServices").style.display = rosSubTab === "services" ? "block" : "none";
-                byId("rosTf").style.display = rosSubTab === "tf" ? "block" : "none";
                 byId("rosParams").style.display = rosSubTab === "params" ? "block" : "none";
-                byId("rosServices").dataset.sig = ""; byId("rosTf").dataset.sig = ""; byId("rosParams").dataset.count = "";
+                byId("rosServices").dataset.sig = ""; byId("rosParams").dataset.count = "";
                 renderRosActive(latestState || {});
                 if (rosSubTab === "graph" && cyRos) { setTimeout(() => { try { cyRos.resize(); cyRos.fit(undefined, 8); } catch (e) {} }, 50); }
             }
             function renderRosActive(state) {
                 if (rosSubTab === "services") renderRosServices(state);
-                else if (rosSubTab === "tf") renderRosTf(state);
                 else if (rosSubTab === "params") renderRosParams(state);
                 else renderRosGraph(state);
             }
@@ -902,21 +933,6 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 let h = '<table style="width:100%;border-collapse:collapse;font-size:11px"><tr style="color:var(--muted);text-align:left"><th style="padding:4px">서비스</th><th>타입</th><th>노드</th></tr>';
                 svc.forEach((s) => { h += `<tr style="border-top:1px solid var(--line-dim)"><td style="padding:4px;color:var(--cyan)">${escapeHtml(rosShort("t:" + s.name))}</td><td style="color:var(--muted)">${escapeHtml((s.type || "").split("/").pop())}</td><td>${escapeHtml((s.nodes || []).map((n) => n.split("/").pop()).join(", "))}</td></tr>`; });
                 c.innerHTML = h + "</table>";
-            }
-            function renderRosTf(state) {
-                const c = byId("rosTf"); const tf = (state && state.rosGraph && state.rosGraph.tf) || [];
-                const sig = tf.map((t) => t.parent + ">" + t.child).join("|");
-                if (c.dataset.sig === sig) return; c.dataset.sig = sig;
-                if (!tf.length) { c.innerHTML = '<div style="color:var(--muted);padding:12px;line-height:1.6">TF 없음<br><span style="color:#5a6b62;font-size:11px">자율 스택 실행 시 /tf·/tf_static 프레임 트리가 표시됩니다.</span></div>'; return; }
-                const children = {}, allKids = new Set();
-                tf.forEach((t) => { (children[t.parent] = children[t.parent] || []).push(t); allKids.add(t.child); });
-                const roots = [...new Set(tf.map((t) => t.parent))].filter((p) => !allKids.has(p));
-                const node = (frame, depth) => {
-                    let h = `<div style="padding:2px 0 2px ${depth * 16}px;font-size:11px">${depth > 0 ? "└ " : ""}<b style="color:var(--text)">${escapeHtml(frame)}</b></div>`;
-                    (children[frame] || []).forEach((ch) => { h += node(ch.child, depth + 1); });
-                    return h;
-                };
-                c.innerHTML = '<div style="padding:8px">' + roots.map((r) => node(r, 0)).join("") + "</div>";
             }
             function renderRosParams(state) {
                 const c = byId("rosParams"); const nodes = (state && state.rosGraph && state.rosGraph.nodes) || [];
