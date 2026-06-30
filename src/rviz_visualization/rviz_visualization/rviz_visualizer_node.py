@@ -70,6 +70,7 @@
 # 1. Python 기본 모듈 import
 ############################################################
 import math
+import zlib
 
 # ros_bridge에서 들어오는 장애물/LiDAR 정보는 std_msgs/String 안에
 # JSON 문자열로 들어오므로 json 파싱이 필요하다.
@@ -215,6 +216,14 @@ from .config import (
     TOPIC_POTENTIAL_RESULT_VECTOR,
     TOPIC_LOCAL_TARGET_POSE,
     TOPIC_GLOBAL_PATH,
+    TOPIC_FUSED_OBJECTS,
+    TOPIC_DISCOVERED_OBJECTS,
+    TOPIC_RVIZ_DYNAMIC_AVOIDANCE_MARKERS,
+    DYNAMIC_AVOIDANCE_DISK_Z_OFFSET,
+    DYNAMIC_AVOIDANCE_DISK_HEIGHT,
+    DYNAMIC_AVOIDANCE_TEXT_HEIGHT,
+    DYNAMIC_AVOIDANCE_TEXT_Z_OFFSET,
+    DYNAMIC_AVOIDANCE_RADIUS_FALLBACK_M,
     SHOW_POTENTIAL_MARKERS,
     POTENTIAL_VECTOR_SCALE,
     POTENTIAL_ARROW_Z_OFFSET,
@@ -384,6 +393,9 @@ class RvizVisualizerNode(Node):
         self.potential_result_vector: Optional[Vector3Stamped] = None
         self.local_target_pose: Optional[PoseStamped] = None
         self.global_path: Optional[NavPath] = None
+        # path_planning의 JSON payload를 그대로 보관한다. 여기서는 좌표를 재보정하지 않는다.
+        self.latest_fused_objects_payload: Dict[str, Any] = {"objects": []}
+        self.latest_discovered_objects_payload: Dict[str, Any] = {"objects": []}
 
 
         ########################################################
@@ -523,6 +535,10 @@ class RvizVisualizerNode(Node):
             10,
         )
 
+        # 동적 회피반경은 fusion 노드가 만든 안정화 position_map을 구독해 단순 렌더링한다.
+        self.create_subscription(String, TOPIC_FUSED_OBJECTS, self.fused_objects_callback, 10)
+        self.create_subscription(String, TOPIC_DISCOVERED_OBJECTS, self.discovered_objects_callback, 10)
+
 
         ########################################################
         # D. Publisher 생성
@@ -567,6 +583,13 @@ class RvizVisualizerNode(Node):
         self.potential_marker_pub = self.create_publisher(
             MarkerArray,
             TOPIC_RVIZ_POTENTIAL_MARKERS,
+            10,
+        )
+
+        # fusion/discovered 객체 회피반경 전용 MarkerArray. 기존 fused object marker와 분리한다.
+        self.dynamic_avoidance_marker_pub = self.create_publisher(
+            MarkerArray,
+            TOPIC_RVIZ_DYNAMIC_AVOIDANCE_MARKERS,
             10,
         )
 
@@ -803,6 +826,20 @@ class RvizVisualizerNode(Node):
     def global_path_callback(self, msg: NavPath) -> None:
         self.global_path = msg
 
+    def fused_objects_callback(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+            self.latest_fused_objects_payload = payload if isinstance(payload, dict) else {"objects": []}
+        except Exception:
+            self.latest_fused_objects_payload = {"objects": []}
+
+    def discovered_objects_callback(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+            self.latest_discovered_objects_payload = payload if isinstance(payload, dict) else {"objects": []}
+        except Exception:
+            self.latest_discovered_objects_payload = {"objects": []}
+
 
     ############################################################
     # 7. Timer callback
@@ -827,7 +864,100 @@ class RvizVisualizerNode(Node):
         self.publish_lidar_markers()
         self.publish_risk_markers()
         self.publish_potential_markers()
+        self.publish_dynamic_avoidance_markers()
 
+
+
+    def _dynamic_object_position(self, obj: Dict[str, Any]) -> Optional[Tuple[float, float, float]]:
+        pos = obj.get("position_map") if isinstance(obj.get("position_map"), dict) else None
+        if pos is not None:
+            try:
+                return float(pos.get("x", 0.0)), float(pos.get("y", pos.get("z", 0.0))), float(pos.get("z", 0.0))
+            except (TypeError, ValueError):
+                return None
+        try:
+            return float(obj.get("map_x")), float(obj.get("map_y")), float(obj.get("map_z", 0.0))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _dynamic_color_for_class(class_name: str, alpha: float) -> Tuple[float, float, float, float]:
+        palette = {
+            "rock": (1.0, 0.55, 0.0), "car": (1.0, 0.25, 0.65), "tank": (1.0, 0.0, 0.0),
+            "house": (0.65, 0.35, 1.0), "wall": (0.0, 1.0, 0.0), "tent": (1.0, 1.0, 0.0),
+            "tree": (0.2, 0.9, 0.25), "person": (0.0, 0.9, 1.0),
+        }
+        r, g, b = palette.get(str(class_name).lower(), (1.0, 1.0, 1.0))
+        return r, g, b, alpha
+
+    @staticmethod
+    def _stable_marker_base_id(key: str) -> int:
+        return int(zlib.crc32(key.encode("utf-8")) & 0x3FFFFFFF) * 2
+
+    def publish_dynamic_avoidance_markers(self) -> None:
+        """fusion/discovered의 회피반경을 위치 재계산 없이 그대로 표현한다."""
+        msg = MarkerArray()
+        stamp = self.get_clock().now().to_msg()
+        clear = Marker()
+        clear.header.frame_id = MAP_FRAME
+        clear.header.stamp = stamp
+        clear.action = Marker.DELETEALL
+        msg.markers.append(clear)
+
+        merged: Dict[str, Dict[str, Any]] = {}
+        discovered = self.latest_discovered_objects_payload.get("objects", [])
+        if isinstance(discovered, list):
+            for idx, obj in enumerate(discovered):
+                if not isinstance(obj, dict):
+                    continue
+                key = str(obj.get("stable_object_id", obj.get("object_id", f"discovered_{idx}")))
+                merged[key] = obj
+        fused = self.latest_fused_objects_payload.get("objects", [])
+        if isinstance(fused, list):
+            for idx, obj in enumerate(fused):
+                if not isinstance(obj, dict):
+                    continue
+                key = str(obj.get("stable_object_id", obj.get("object_id", f"fused_{idx}")))
+                # 현재 프레임 fused가 동일 stable id이면 position_map은 이미 local_path가 안정화한 값이다.
+                merged[key] = obj
+
+        for key, obj in merged.items():
+            xyz = self._dynamic_object_position(obj)
+            if xyz is None:
+                continue
+            x, y, z = xyz
+            try:
+                radius = float(obj.get("avoidance_radius_m", DYNAMIC_AVOIDANCE_RADIUS_FALLBACK_M))
+            except (TypeError, ValueError):
+                radius = DYNAMIC_AVOIDANCE_RADIUS_FALLBACK_M
+            if radius <= 0.0:
+                continue
+            cls = str(obj.get("class_name", obj.get("className", "unknown"))).lower()
+            state = str(obj.get("position_state", "candidate"))
+            confirmed = bool(obj.get("is_confirmed", False))
+            r, g, b, a = self._dynamic_color_for_class(cls, 0.22 if confirmed else 0.12)
+            base_id = self._stable_marker_base_id(key)
+
+            disk = Marker()
+            disk.header.frame_id = MAP_FRAME; disk.header.stamp = stamp
+            disk.ns = "dynamic_avoidance_disk"; disk.id = base_id; disk.type = Marker.CYLINDER; disk.action = Marker.ADD
+            disk.pose.position.x = x; disk.pose.position.y = y; disk.pose.position.z = z + DYNAMIC_AVOIDANCE_DISK_Z_OFFSET
+            disk.pose.orientation.w = 1.0
+            disk.scale.x = 2.0 * radius; disk.scale.y = 2.0 * radius; disk.scale.z = DYNAMIC_AVOIDANCE_DISK_HEIGHT
+            disk.color.r = r; disk.color.g = g; disk.color.b = b; disk.color.a = a
+            msg.markers.append(disk)
+
+            text = Marker()
+            text.header.frame_id = MAP_FRAME; text.header.stamp = stamp
+            text.ns = "dynamic_avoidance_label"; text.id = base_id + 1; text.type = Marker.TEXT_VIEW_FACING; text.action = Marker.ADD
+            text.pose.position.x = x; text.pose.position.y = y; text.pose.position.z = z + DYNAMIC_AVOIDANCE_TEXT_Z_OFFSET
+            text.pose.orientation.w = 1.0
+            text.scale.z = DYNAMIC_AVOIDANCE_TEXT_HEIGHT
+            text.color.r = r; text.color.g = g; text.color.b = b; text.color.a = 1.0
+            text.text = f"{cls}  r={radius:.1f}m  {state}"
+            msg.markers.append(text)
+
+        self.dynamic_avoidance_marker_pub.publish(msg)
 
 
     ############################################################

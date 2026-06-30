@@ -65,6 +65,12 @@ mapping:
   enabled: true
   merge_radius_m: 8.0
   position_ema_alpha: 0.35
+  # 후보 위치는 EMA+이동상한으로 안정화하고, 3회 확정 후에는 tank_map 좌표를 동결한다.
+  freeze_position_on_confirm: true
+  candidate_max_step_m: 1.0
+  candidate_outlier_reject_m: 6.0
+  # 아래 값은 A* discovered_obstacle_inflate와 함께 쓰는 공통 안전여유다.
+  avoidance_inflate_m: 2.0
   add_classes:
   - rock
   - tank
@@ -75,7 +81,7 @@ mapping:
   save_latest_filename: discovered_objects_latest.map
   save_timestamped_copy: true
   save_confirmed_only: true
-  min_confirm_observations: 1
+  min_confirm_observations: 3
   min_confirm_age_sec: 0.0
   track_id_merge_enabled: true
   track_id_merge_radius_m: 10.0

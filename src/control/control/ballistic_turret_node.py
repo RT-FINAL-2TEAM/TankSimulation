@@ -125,6 +125,16 @@ class BallisticTurretNode(Node):
         self.declare_parameter("lower_barrel_settle_sec", 0.20)
         self.declare_parameter("lower_barrel_timeout_sec", 8.0)
 
+        # After each engagement, rotate the turret back to the hull-forward
+        # heading before releasing the vehicle to drive again.  The simulator
+        # publishes turret yaw as an absolute map heading by default.
+        self.declare_parameter("center_turret_after_engagement", True)
+        self.declare_parameter("center_turret_heading_offset_deg", 0.0)
+        self.declare_parameter("center_turret_tolerance_deg", 1.5)
+        self.declare_parameter("center_turret_stable_sec", 0.35)
+        self.declare_parameter("center_turret_timeout_sec", 8.0)
+        self.declare_parameter("center_turret_weight_max", 0.40)
+
         # Return only after the final engagement.
         self.declare_parameter("return_enabled", True)
         self.declare_parameter("return_x", 59.0)
@@ -216,6 +226,24 @@ class BallisticTurretNode(Node):
         self.lower_barrel_timeout_sec = max(
             0.5, float(self.get_parameter("lower_barrel_timeout_sec").value)
         )
+        self.center_turret_after_engagement = bool(
+            self.get_parameter("center_turret_after_engagement").value
+        )
+        self.center_turret_heading_offset_deg = float(
+            self.get_parameter("center_turret_heading_offset_deg").value
+        )
+        self.center_turret_tolerance_deg = max(
+            0.10, float(self.get_parameter("center_turret_tolerance_deg").value)
+        )
+        self.center_turret_stable_sec = max(
+            0.05, float(self.get_parameter("center_turret_stable_sec").value)
+        )
+        self.center_turret_timeout_sec = max(
+            0.5, float(self.get_parameter("center_turret_timeout_sec").value)
+        )
+        self.center_turret_weight_max = clamp(
+            float(self.get_parameter("center_turret_weight_max").value), 0.10, 1.0
+        )
 
         self.return_enabled = bool(self.get_parameter("return_enabled").value)
         self.return_point = (
@@ -259,6 +287,9 @@ class BallisticTurretNode(Node):
         self.lowering_started_wall: Optional[float] = None
         self.lowered_since_wall: Optional[float] = None
         self.lowering_reason: Optional[str] = None
+        self.centering_started_wall: Optional[float] = None
+        self.centered_since_wall: Optional[float] = None
+        self.centering_reason: Optional[str] = None
         self.last_result: Optional[Dict[str, Any]] = None
         self.stage_results: List[Dict[str, Any]] = []
         self.return_goal_sent = False
@@ -288,7 +319,8 @@ class BallisticTurretNode(Node):
             f"engagements=[{plan_text}], return=({self.return_point[0]:.1f},{self.return_point[1]:.1f}), "
             f"k={self.k:.6f}, muzzle_h={self.muzzle_height_m:.3f}m, "
             f"attitude_comp={self.use_body_attitude_compensation}, "
-            f"pitch_sign={self.body_pitch_sign:+.0f}, roll_sign={self.body_roll_sign:+.0f}"
+            f"pitch_sign={self.body_pitch_sign:+.0f}, roll_sign={self.body_roll_sign:+.0f}, "
+            f"center_after_fire={self.center_turret_after_engagement}"
         )
 
     # ------------------------------------------------------------------
@@ -562,6 +594,9 @@ class BallisticTurretNode(Node):
         self.lowering_started_wall = None
         self.lowered_since_wall = None
         self.lowering_reason = None
+        self.centering_started_wall = None
+        self.centered_since_wall = None
+        self.centering_reason = None
         self.last_result = None
 
     def _advance_or_return(self, reason: str) -> None:
@@ -597,6 +632,38 @@ class BallisticTurretNode(Node):
         self.get_logger().info(
             f"Lowering barrel after stage={self.stage_index + 1} {reason}: "
             f"holding F to {self.lower_barrel_target_deg:.2f} deg"
+        )
+
+    def _begin_post_fire_recovery(self, reason: str) -> None:
+        """Start the safe post-shot sequence: lower barrel, then center yaw."""
+        if self.lower_barrel_after_engagement:
+            self._begin_lowering_barrel(reason)
+        else:
+            self._begin_turret_centering(reason)
+
+    def _center_target_yaw_deg(self) -> float:
+        """Return the turret-yaw feedback target for the hull-forward direction.
+
+        ``playerTurretX`` / ``get_action_turret.x`` are absolute map headings in
+        the current simulator.  If a future simulator reports relative yaw, the
+        existing ``turret_yaw_feedback_is_world`` parameter keeps this target in
+        the corresponding convention.
+        """
+        if self.turret_yaw_feedback_is_world:
+            return normalize_180(self.body_yaw_deg + self.center_turret_heading_offset_deg)
+        return normalize_180(self.center_turret_heading_offset_deg)
+
+    def _begin_turret_centering(self, reason: str) -> None:
+        if not self.center_turret_after_engagement:
+            self._advance_or_return(reason)
+            return
+        self.phase = "centering_turret"
+        self.centering_reason = reason
+        self.centering_started_wall = time.monotonic()
+        self.centered_since_wall = None
+        self.get_logger().info(
+            f"Centering turret after stage={self.stage_index + 1}: "
+            f"target world-yaw={self._center_target_yaw_deg():.2f} deg"
         )
 
     def _solve_low_arc_pitch_deg(self, horizontal_range: float, height_delta: float) -> Optional[float]:
@@ -945,7 +1012,7 @@ class BallisticTurretNode(Node):
                     fire=False, status=status,
                 )
                 return
-            self._begin_lowering_barrel(self.phase)
+            self._begin_post_fire_recovery(self.phase)
 
         if self.phase == "lowering_barrel":
             feedback_age = now - self.turret_feedback_wall
@@ -985,7 +1052,7 @@ class BallisticTurretNode(Node):
             })
             if reached and stable_sec >= self.lower_barrel_settle_sec:
                 reason = f"{self.lowering_reason or 'engagement'}:barrel_lowered"
-                self._advance_or_return(reason)
+                self._begin_turret_centering(reason)
                 next_active = self.phase not in {"approach", "returning", "complete"}
                 next_status = self._stage_status_base(active=next_active)
                 next_status.update({"phase": self.phase, "active": next_active,
@@ -1001,7 +1068,7 @@ class BallisticTurretNode(Node):
                     f"Barrel-lowering timeout at stage={self.stage_index + 1}; continuing mission"
                 )
                 reason = f"{self.lowering_reason or 'engagement'}:barrel_lower_timeout"
-                self._advance_or_return(reason)
+                self._begin_turret_centering(reason)
                 next_active = self.phase not in {"approach", "returning", "complete"}
                 next_status = self._stage_status_base(active=next_active)
                 next_status.update({"phase": self.phase, "active": next_active,
@@ -1016,6 +1083,109 @@ class BallisticTurretNode(Node):
                 active=True, hold_motion=True,
                 turret_qe=self._axis("", 0.0),
                 turret_rf=self._axis("F", self.lower_barrel_weight),
+                fire=False, status=status,
+            )
+            return
+
+        # Post-shot turret home: keep the hull stopped until the gun yaw is
+        # aligned with the current hull-forward heading.  Pitch remains at the
+        # previously lowered value; no R/F command is issued here.
+        if self.phase == "centering_turret":
+            feedback_age = now - self.turret_feedback_wall
+            yaw_feedback_fresh = (
+                self.turret_yaw_deg is not None
+                and feedback_age <= self.turret_feedback_ttl_sec
+            )
+            body_age = now - self.body_attitude_wall
+            body_heading_fresh = body_age <= self.body_attitude_ttl_sec
+            target_yaw = self._center_target_yaw_deg()
+            current_yaw = self.turret_yaw_deg if yaw_feedback_fresh else None
+            yaw_error = (
+                normalize_180(target_yaw - current_yaw)
+                if current_yaw is not None else None
+            )
+            reached = (
+                yaw_error is not None
+                and abs(yaw_error) <= self.center_turret_tolerance_deg
+            )
+            timed_out = (
+                self.centering_started_wall is not None
+                and now - self.centering_started_wall >= self.center_turret_timeout_sec
+            )
+            if reached:
+                if self.centered_since_wall is None:
+                    self.centered_since_wall = now
+                stable_sec = now - self.centered_since_wall
+            else:
+                self.centered_since_wall = None
+                stable_sec = 0.0
+
+            yaw_weight = (
+                0.0 if yaw_error is None or reached
+                else self._yaw_weight(yaw_error, self.center_turret_weight_max)
+            )
+            yaw_cmd = "" if yaw_weight <= 0.0 or yaw_error is None else (
+                "E" if yaw_error > 0.0 else "Q"
+            )
+            status = self._stage_status_base(active=True)
+            status.update({
+                "phase": "centering_turret",
+                "centering_reason": self.centering_reason,
+                "center_target_yaw_deg": target_yaw,
+                "current_yaw_deg": current_yaw,
+                "center_yaw_error_deg": yaw_error,
+                "center_tolerance_deg": self.center_turret_tolerance_deg,
+                "center_reached": reached,
+                "center_stable_sec": round(stable_sec, 3),
+                "center_stable_sec_required": self.center_turret_stable_sec,
+                "turret_feedback_age_sec": round(max(0.0, feedback_age), 3),
+                "turret_feedback_source": self.turret_feedback_source,
+                "body_heading_age_sec": round(max(0.0, body_age), 3),
+                "body_heading_fresh": body_heading_fresh,
+                "command": {
+                    "turretQE": {"command": yaw_cmd, "weight": yaw_weight},
+                    "turretRF": {"command": "", "weight": 0.0},
+                },
+            })
+            if reached and stable_sec >= self.center_turret_stable_sec:
+                reason = f"{self.centering_reason or 'engagement'}:turret_centered"
+                self._advance_or_return(reason)
+                next_active = self.phase not in {"approach", "returning", "complete"}
+                next_status = self._stage_status_base(active=next_active)
+                next_status.update({
+                    "phase": self.phase,
+                    "active": next_active,
+                    "return_goal_sent": self.return_goal_sent,
+                })
+                self._publish_override(
+                    active=next_active, hold_motion=next_active,
+                    turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                    fire=False, status=next_status,
+                )
+                return
+            if timed_out:
+                self.get_logger().warn(
+                    f"Turret-centering timeout at stage={self.stage_index + 1}; continuing mission"
+                )
+                reason = f"{self.centering_reason or 'engagement'}:turret_center_timeout"
+                self._advance_or_return(reason)
+                next_active = self.phase not in {"approach", "returning", "complete"}
+                next_status = self._stage_status_base(active=next_active)
+                next_status.update({
+                    "phase": self.phase,
+                    "active": next_active,
+                    "return_goal_sent": self.return_goal_sent,
+                })
+                self._publish_override(
+                    active=next_active, hold_motion=next_active,
+                    turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                    fire=False, status=next_status,
+                )
+                return
+            self._publish_override(
+                active=True, hold_motion=True,
+                turret_qe=self._axis(yaw_cmd, yaw_weight),
+                turret_rf=self._axis("", 0.0),
                 fire=False, status=status,
             )
             return

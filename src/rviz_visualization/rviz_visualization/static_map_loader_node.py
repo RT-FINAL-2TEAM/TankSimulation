@@ -98,6 +98,13 @@ class StaticMapLoaderNode(Node):
         self.max_y = float(self.config["terrain"].get("max_y", 300.0))
         self.width = int(round((self.max_x - self.min_x) / self.resolution))
         self.height = int(round((self.max_y - self.min_y) / self.resolution))
+        avoidance_cfg = self.config.get("avoidance_visualization", {}) or {}
+        self.static_planner_margin_m = float(avoidance_cfg.get("planner_static_safety_margin_m", 2.0))
+        self.static_radius_z_offset = float(avoidance_cfg.get("disk_z_offset", 0.10))
+        self.static_radius_disk_height = float(avoidance_cfg.get("disk_height", 0.08))
+        self.static_radius_text_height = float(avoidance_cfg.get("text_height", 0.80))
+        self.static_radius_text_z_offset = float(avoidance_cfg.get("text_z_offset", 1.00))
+        self.static_radius_impassable_only = bool(avoidance_cfg.get("show_only_impassable", True))
 
         static_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -119,6 +126,10 @@ class StaticMapLoaderNode(Node):
         self.diff_marker_pub = self.create_publisher(
             MarkerArray, "/tank/rviz/map_diff_markers", static_qos
         )
+        # finalmap의 정적 장애물 실제 A* 회피반경(base + planner safety margin)을 표시한다.
+        self.static_avoidance_marker_pub = self.create_publisher(
+            MarkerArray, "/tank/rviz/static_avoidance_markers", static_qos
+        )
         self.recon_occupancy_pub = self.create_publisher(
             OccupancyGrid, "/tank/map/recon/occupancy_grid", static_qos
         )
@@ -134,6 +145,7 @@ class StaticMapLoaderNode(Node):
         self.recon_markers = self._make_object_markers(
             self.recon_objects, namespace_prefix="recon", color_mode="color_recon"
         )
+        self.static_avoidance_markers = self._make_static_avoidance_markers(self.recon_objects)
         self.mission_markers = self._make_object_markers(
             self.mission_objects, namespace_prefix="mission", color_mode="color_mission"
         )
@@ -278,6 +290,56 @@ class StaticMapLoaderNode(Node):
             # RViz 선택 패널에서 메타데이터가 보이도록 유지한다.
             marker.text = obj.prefab_name
             msg.markers.append(marker)
+        return msg
+
+    def _make_static_avoidance_markers(self, objects: List[MapObject]) -> MarkerArray:
+        """정적 맵의 base radius와 A* static inflate를 합친 원을 RViz에 표시한다."""
+        msg = MarkerArray()
+        clear = Marker()
+        clear.header.frame_id = self.frame_id
+        clear.action = Marker.DELETEALL
+        msg.markers.append(clear)
+        marker_id = 0
+        for obj in objects:
+            spec = self._category_spec(obj.category)
+            if self.static_radius_impassable_only and not bool(spec.get("impassable", False)):
+                continue
+            base_radius = float(spec.get("inflation_radius_m", 0.0))
+            if base_radius <= 0.0:
+                continue
+            total_radius = base_radius + self.static_planner_margin_m
+            r, g, b, _a = self._color_tuple(spec.get("color_recon", [1.0, 1.0, 1.0, 0.5]))
+            disk = Marker()
+            disk.header.frame_id = self.frame_id
+            disk.ns = "static_avoidance_disk"
+            disk.id = marker_id * 2
+            disk.type = Marker.CYLINDER
+            disk.action = Marker.ADD
+            disk.pose.position.x = float(obj.map_x)
+            disk.pose.position.y = float(obj.map_y)
+            disk.pose.position.z = self._marker_z(obj, spec) + self.static_radius_z_offset
+            disk.pose.orientation.w = 1.0
+            disk.scale.x = 2.0 * total_radius
+            disk.scale.y = 2.0 * total_radius
+            disk.scale.z = self.static_radius_disk_height
+            disk.color.r = r; disk.color.g = g; disk.color.b = b; disk.color.a = 0.16
+            msg.markers.append(disk)
+
+            label = Marker()
+            label.header.frame_id = self.frame_id
+            label.ns = "static_avoidance_label"
+            label.id = marker_id * 2 + 1
+            label.type = Marker.TEXT_VIEW_FACING
+            label.action = Marker.ADD
+            label.pose.position.x = float(obj.map_x)
+            label.pose.position.y = float(obj.map_y)
+            label.pose.position.z = self._marker_z(obj, spec) + self.static_radius_text_z_offset
+            label.pose.orientation.w = 1.0
+            label.scale.z = self.static_radius_text_height
+            label.color.r = r; label.color.g = g; label.color.b = b; label.color.a = 1.0
+            label.text = f"{obj.category} r={total_radius:.1f}m ({base_radius:.1f}+{self.static_planner_margin_m:.1f})"
+            msg.markers.append(label)
+            marker_id += 1
         return msg
 
     def _make_diff_markers(self, recon: List[MapObject], mission: List[MapObject]) -> MarkerArray:
@@ -656,6 +718,8 @@ class StaticMapLoaderNode(Node):
         now = self.get_clock().now().to_msg()
         self._stamp_marker_array(self.recon_markers, now)
         self.recon_marker_pub.publish(self.recon_markers)
+        self._stamp_marker_array(self.static_avoidance_markers, now)
+        self.static_avoidance_marker_pub.publish(self.static_avoidance_markers)
         self.recon_raw_pub.publish(self.recon_raw_msg)
         self.summary_pub.publish(self.summary_msg)
 

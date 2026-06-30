@@ -57,6 +57,10 @@ from control.config import (
     TOPIC_PLAYER_POSE,
     TOPIC_PLAYER_STATE,
     TURN_WS_WEIGHT,
+    TOPIC_PATH_POINTS,
+    ENABLE_PLANNER_SPEED_PROFILE,
+    PLANNER_SPEED_PROFILE_TTL_SEC,
+    PLANNER_GOAL_STOP_DISTANCE_M,
 )
 
 
@@ -200,6 +204,11 @@ class TeamPathControllerNode(Node):
         self.declare_parameter("forward_guard_target_distance", 12.0)
         self.declare_parameter("forward_guard_max_search_points", 120)
         self.declare_parameter("forward_guard_allow_in_danger", False)
+        # A*가 발행하는 곡선/감속 profile. APF의 desired_motion은 여기서 사용하지 않는다.
+        self.declare_parameter("enable_planner_speed_profile", ENABLE_PLANNER_SPEED_PROFILE)
+        self.declare_parameter("planner_path_points_topic", TOPIC_PATH_POINTS)
+        self.declare_parameter("planner_speed_profile_ttl_sec", PLANNER_SPEED_PROFILE_TTL_SEC)
+        self.declare_parameter("planner_goal_stop_distance_m", PLANNER_GOAL_STOP_DISTANCE_M)
 
         self.enable_local_target = bool(self.get_parameter("enable_local_target").value)
         self.target_ttl_sec = float(self.get_parameter("target_ttl_sec").value)
@@ -345,6 +354,10 @@ class TeamPathControllerNode(Node):
         self.forward_guard_target_distance = float(self.get_parameter("forward_guard_target_distance").value)
         self.forward_guard_max_search_points = int(self.get_parameter("forward_guard_max_search_points").value)
         self.forward_guard_allow_in_danger = bool(self.get_parameter("forward_guard_allow_in_danger").value)
+        self.enable_planner_speed_profile = bool(self.get_parameter("enable_planner_speed_profile").value)
+        self.planner_path_points_topic = str(self.get_parameter("planner_path_points_topic").value)
+        self.planner_speed_profile_ttl_sec = max(0.1, float(self.get_parameter("planner_speed_profile_ttl_sec").value))
+        self.planner_goal_stop_distance_m = max(0.1, float(self.get_parameter("planner_goal_stop_distance_m").value))
         self._steering_direction_lock_cmd: str = ""
         self._steering_direction_lock_until: float = 0.0
         self._steering_direction_lock_reason: str = "none"
@@ -384,6 +397,11 @@ class TeamPathControllerNode(Node):
 
         self.global_path: list[tuple[float, float]] = []
         self.trajectory_history: list[tuple[float, float]] = []
+        self.planner_speed_points: List[Dict[str, Any]] = []
+        self.planner_vehicle_geometry: Dict[str, Any] = {}
+        self.planner_route_version: Optional[int] = None
+        self._planner_profile_stamp_mono: float = -1e9
+        self._planner_profile_status: Dict[str, Any] = {"active": False, "reason": "no_profile"}
 
         self.pub_cmd = self.create_publisher(String, TOPIC_CONTROL_COMMAND, 10)
         self.pub_status = self.create_publisher(String, TOPIC_CONTROL_STATUS, 10)
@@ -393,6 +411,7 @@ class TeamPathControllerNode(Node):
         self.create_subscription(PoseStamped, TOPIC_LOOKAHEAD_POSE, self.lookahead_cb, 10)
         self.create_subscription(PoseStamped, TOPIC_LOCAL_TARGET_POSE, self.local_target_cb, 10)
         self.create_subscription(NavPath, "/tank/global_path", self.global_path_cb, 10)
+        self.create_subscription(String, self.planner_path_points_topic, self.planner_path_points_cb, 10)
         self.create_subscription(String, TOPIC_COLLISION_EVENT, self.collision_cb, 10)
         self.create_subscription(String, self.turret_override_topic, self.turret_override_cb, 10)
         self.create_subscription(String, self.safety_status_topic, self.safety_status_cb, 10)
@@ -1222,10 +1241,77 @@ class TeamPathControllerNode(Node):
         weight = clamp(weight, 0.0, self.max_ad_weight)
         return cmd, weight, yaw_error, desired_yaw
 
+    def planner_path_points_cb(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+            points = payload.get("points", []) if isinstance(payload, dict) else []
+            if not isinstance(points, list):
+                return
+            cleaned: List[Dict[str, Any]] = []
+            for point in points:
+                if not isinstance(point, dict):
+                    continue
+                try:
+                    cleaned.append({
+                        "x": float(point["x"]), "y": float(point["y"]),
+                        "phase": str(point.get("phase", "cruise")),
+                        "point_type": str(point.get("point_type", "straight")),
+                        "recommended_ws_weight": float(point.get("recommended_ws_weight", self.straight_ws_weight)),
+                        "recommended_speed_mps": float(point.get("recommended_speed_mps", 0.0)),
+                        "distance_to_goal_m": float(point.get("distance_to_goal_m", 0.0)),
+                    })
+                except (KeyError, TypeError, ValueError):
+                    continue
+            self.planner_speed_points = cleaned
+            self.planner_vehicle_geometry = payload.get("vehicle_geometry", {}) if isinstance(payload, dict) else {}
+            self.planner_route_version = payload.get("route_version") if isinstance(payload, dict) else None
+            self._planner_profile_stamp_mono = time.monotonic()
+        except Exception:
+            return
+
+    def _planner_profile_at_current_pose(self) -> Optional[Dict[str, Any]]:
+        if not self.enable_planner_speed_profile or self.current_pos is None:
+            self._planner_profile_status = {"active": False, "reason": "disabled_or_no_pose"}
+            return None
+        age = time.monotonic() - self._planner_profile_stamp_mono
+        if not self.planner_speed_points or age > self.planner_speed_profile_ttl_sec:
+            self._planner_profile_status = {"active": False, "reason": "stale_or_empty", "age_sec": round(age, 3)}
+            return None
+        nearest = min(self.planner_speed_points, key=lambda p: get_distance(self.current_pos, (p["x"], p["y"])))
+        profile = dict(nearest)
+        profile["age_sec"] = round(age, 3)
+        profile["active"] = True
+        self._planner_profile_status = profile
+        return profile
+
+    def _effective_goal_stop_distance(self) -> float:
+        profile = self._planner_profile_at_current_pose()
+        if profile is not None:
+            return self.planner_goal_stop_distance_m
+        return self.goal_tolerance
+
+    def apply_planner_speed_profile(
+        self, cmd_ws: str, ws_weight: float, speed_mode: str
+    ) -> Tuple[str, float, str, Dict[str, Any]]:
+        profile = self._planner_profile_at_current_pose()
+        if profile is None:
+            return cmd_ws, ws_weight, speed_mode, dict(self._planner_profile_status)
+        phase = str(profile.get("phase", "cruise"))
+        suggested = max(0.0, min(1.0, float(profile.get("recommended_ws_weight", ws_weight))))
+        distance_to_goal = float(profile.get("distance_to_goal_m", 0.0))
+        # 실제 goal 근처에서만 stop phase를 강제한다. 오래된 마지막 point가 멀리 있는 문제를 막는다.
+        if phase == "stop" and self.goal_pos is not None and self.current_pos is not None and get_distance(self.current_pos, self.goal_pos) <= self.planner_goal_stop_distance_m:
+            return "STOP", 1.0, "planner_stop", profile
+        if cmd_ws == "W" and suggested < ws_weight:
+            return "W", suggested, f"{speed_mode}|planner_{phase}", profile
+        if cmd_ws == "W" and phase == "curve":
+            return "W", min(ws_weight, suggested), f"{speed_mode}|planner_curve", profile
+        return cmd_ws, ws_weight, speed_mode, profile
+
     def calculate_speed(self, target: Tuple[float, float], yaw_error: float) -> Tuple[str, float, str]:
         assert self.current_pos is not None
         abs_err = abs(yaw_error)
-        if self.goal_pos is not None and get_distance(self.current_pos, self.goal_pos) < self.goal_tolerance:
+        if self.goal_pos is not None and get_distance(self.current_pos, self.goal_pos) < self._effective_goal_stop_distance():
             self.mission_complete = True
 
             # The ballistic checkpoint needs this node to keep publishing
@@ -1271,7 +1357,7 @@ class TeamPathControllerNode(Node):
             return None
         # Goal/checkpoint에서의 STOP은 의도된 대기다. 이를 stuck으로 오인해
         # 후진하면 포탑 조준 중 차체가 흔들리고, 사격 뒤 복귀 goal도 망가진다.
-        if self.goal_pos is not None and get_distance(self.current_pos, self.goal_pos) < self.goal_tolerance:
+        if self.goal_pos is not None and get_distance(self.current_pos, self.goal_pos) < self._effective_goal_stop_distance():
             t = self.current_sim_time if self.current_sim_time > 0.0 else time.time()
             self.last_stuck_check_pos = self.current_pos
             self.last_stuck_check_yaw = self.current_yaw
@@ -1575,6 +1661,8 @@ class TeamPathControllerNode(Node):
         cmd_ws, w_ws, speed_mode, turn_overspeed_guard_status = self.apply_turn_overspeed_guard(
             cmd_ws, w_ws, yaw_error, speed_mode, safety_mode, apf_vector_control
         )
+        # planner 곡선/감속 profile은 최종 W 상한으로만 적용한다. 안전/APF STOP은 항상 우선한다.
+        cmd_ws, w_ws, speed_mode, planner_profile_status = self.apply_planner_speed_profile(cmd_ws, w_ws, speed_mode)
         # 정찰 전용: 미분류 후보 관측을 위한 ②감속/dwell + ③포탑 step-stare (recon에서만, 마지막에 적용).
         recon_turret_qe: Dict[str, Any] = {"command": "", "weight": 0.0}
         recon_obs_status: Dict[str, Any] = {"active": False}
@@ -1623,6 +1711,8 @@ class TeamPathControllerNode(Node):
             "current_speed_mps": self.current_speed,
             "speed_mode": speed_mode,
             "recon_observation": recon_obs_status,
+            "planner_speed_profile": planner_profile_status,
+            "planner_vehicle_geometry": self.planner_vehicle_geometry,
             "safety": {
                 "enabled": self.enable_safety_speed_limit,
                 "mode": self.safety_mode,
@@ -1642,6 +1732,9 @@ class TeamPathControllerNode(Node):
             "controller_profile": {
                 "straight_ws_weight": self.straight_ws_weight,
                 "turn_ws_weight": self.turn_ws_weight,
+                "enable_planner_speed_profile": self.enable_planner_speed_profile,
+                "planner_speed_profile_ttl_sec": self.planner_speed_profile_ttl_sec,
+                "planner_goal_stop_distance_m": self.planner_goal_stop_distance_m,
                 "crawl_pivot_ws_weight": self.crawl_pivot_ws_weight,
                 "crawl_turn_ws_weight": self.crawl_turn_ws_weight,
                 "crawl_pivot_angle_deg": self.crawl_pivot_angle_deg,
