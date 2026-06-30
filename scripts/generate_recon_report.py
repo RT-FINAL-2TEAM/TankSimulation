@@ -50,9 +50,11 @@ DEFAULT_GT_MAP = os.path.join(PROJECT_ROOT, "src", "rviz_visualization", "map", 
 START_XY = (60.0, 30.0)
 GOAL_XY = (110.0, 276.5)
 
-# 위험도 가중치 — perception 기반 3요소(은밀성/위협근접/험지). 합 1.0.
-# 시간/거리/우회는 '위험'이 아니라 '효율'이라 위험도에서 분리(별도 표기).
-DEFAULT_WEIGHTS = {"stealth": 0.5, "proximity": 0.3, "terrain": 0.2}
+# 위험도 가중치 — perception 5요소. 합 1.0.
+#  노출(은밀성)/근접 = 경로가 적 시야·반경을 지나는 정도(1차).
+#  threat(확정 위협 수)/obstacle(장애물 밀도) = 그 지역의 적·장애물 양(사용자 직관 반영).
+#  terrain(험지 σ) = 주행 불안정/돌파 난이도(작은 비중). 시간/거리/우회는 여전히 '효율'이라 제외.
+DEFAULT_WEIGHTS = {"stealth": 0.30, "proximity": 0.15, "threat": 0.25, "obstacle": 0.15, "terrain": 0.15}
 
 # YOLO 위협클래스별 가중(정보 섹션 표기용 — 위험도 점수엔 미반영).
 # YOLO 고카운트는 중복 탐지라, 위치 위험도는 센서퓨전 확정 발견객체로만 산정한다.
@@ -63,9 +65,11 @@ THREAT_CLASS_WEIGHTS = {"person": 1.0, "tank": 1.0, "house": 1.0}
 # person은 fix/fusion에서 ignored 처리라 발견맵엔 안 들어옴.
 PERCEIVED_THREAT_RADII = {"house": tg.HOUSE_RADIUS_M, "tank": tg.TANK_RADIUS_M}
 
-# reference 정규화 기준값. terrain만 위험도에 사용(은밀성/근접은 이미 0~1 길이비).
+# reference 정규화 기준값(은밀성/근접은 이미 0~1 길이비라 제외). 이 값이면 norm=1.0.
 REFS = {
-    "terrain": 8.0,     # 험지 σPitch+σRoll(deg)가 이 값이면 norm=1.0
+    "terrain": 16.0,    # 험지 σPitch+σRoll(deg) — 8→16(실측 11~14가 항상 포화하던 것 해소)
+    "threat": 5.0,      # 확정 위협 수가 이만큼이면 위협밀도 최대
+    "obstacle": 400.0,  # 장애물 밀도(/100m)가 이만큼이면 최대
 }
 
 # 데이터 품질 임계
@@ -299,6 +303,7 @@ def densify_polyline(poly: List[Tuple[float, float]], step: float = 0.75) -> Lis
 # 길이 기반 노출(은밀성)·근접 — 클린 중심선 × perception 위협
 # --------------------------------------------------------------------------- #
 PROFILE_BINS = 20  # exposure.profile 구간 수(경로 0~1을 N등분) — 웹 그래프/전술조언용
+EXPOSURE_DECAY_MULT = 2.0  # 노출 거리감쇠 범위 = 위협반경 × 이 값(반경서 0.5, 2배서 0)
 
 
 def compute_centerline_exposure(centerline: Optional[List[Tuple[float, float]]],
@@ -336,38 +341,40 @@ def compute_centerline_exposure(centerline: Optional[List[Tuple[float, float]]],
         total_len += seg
         bin_idx = min(PROFILE_BINS - 1, int((i - 1) / n_seg * PROFILE_BINS))
         prof_total[bin_idx] += seg
-        seg_exposed = False
+        seg_decay = 0.0          # 이 세그먼트의 노출 강도(거리감쇠, LoS 게이트, 위협 중 최대)
         seg_within = False
-        seg_cls_exposed = set()
         seg_cls_within = set()
+        seg_cls_exposed = set()
         for ti, th in enumerate(threats):
             r = float(th.get("radius") or tg.threat_radius(th))
             d = math.hypot(mx - float(th["x"]), mz - float(th["z"]))
+            cls = str(th.get("type", "unknown"))
             if d <= r:
                 seg_within = True
-                cls = str(th.get("type", "unknown"))
                 seg_cls_within.add(cls)
                 stats[ti]["within"] += seg
                 if d < stats[ti]["min_dist"]:
                     stats[ti]["min_dist"] = d
-                if tg.check_los(mx, mz, float(th["x"]), float(th["z"]), los_obstacles):
-                    seg_exposed = True
-                    seg_cls_exposed.add(cls)
-                    stats[ti]["exposed"] += seg
-        if seg_exposed:
-            exposed_len += seg
-            prof_exposed[bin_idx] += seg
+            # 노출: 반경 이분법 대신 거리감쇠(반경서 0.5, 2배서 0). LoS 트일 때만.
+            decay = max(0.0, 1.0 - d / (EXPOSURE_DECAY_MULT * r)) if r > 0 else 0.0
+            if decay > 0.0 and tg.check_los(mx, mz, float(th["x"]), float(th["z"]), los_obstacles):
+                stats[ti]["exposed"] += seg * decay
+                seg_cls_exposed.add(cls)
+                if decay > seg_decay:
+                    seg_decay = decay
+        exposed_len += seg * seg_decay
+        prof_exposed[bin_idx] += seg * seg_decay
         if seg_within:
             proximity_len += seg
         for c in seg_cls_within:
             class_within[c] += seg
         for c in seg_cls_exposed:
-            class_exposed[c] += seg
+            class_exposed[c] += seg * seg_decay
 
     per_threat: List[dict] = []
     for ti, th in enumerate(threats):
         st = stats[ti]
-        if st["within"] > 0:
+        if st["within"] > 0 or st["exposed"] > 0:
             per_threat.append({
                 "threat": th.get("prefabName") or f"{th.get('type', 'threat')}#{ti}",
                 "type": th.get("type", "unknown"),
@@ -554,22 +561,25 @@ def _clamp01(v: float) -> float:
 
 
 def normalize(metrics_by_route: Dict[str, dict], exposures: Dict[str, Optional[dict]],
-              mode: str) -> Dict[str, dict]:
-    """루트별 위험 3요소 raw값 추출 후 0~1 정규화. None 항목은 available=False.
+              mode: str, threat_counts: Optional[Dict[str, int]] = None) -> Dict[str, dict]:
+    """루트별 위험 5요소 raw값 추출 후 0~1 정규화. None 항목은 available=False.
 
-    은밀성/위협근접은 이미 0~1 길이비(중심선 노출), 험지만 REF 정규화.
+    은밀성/위협근접은 이미 0~1 길이비(중심선 노출), threat/obstacle/terrain은 REF 정규화.
     """
+    threat_counts = threat_counts or {}
     raw: Dict[str, Dict[str, Optional[float]]] = {}
     for rid, m in metrics_by_route.items():
         exp = exposures.get(rid)
         raw[rid] = {
             "stealth": (exp["stealth_ratio"] if exp else None),
             "proximity": (exp["proximity_ratio"] if exp else None),
+            "threat": threat_counts.get(rid),         # 확정 위협 수(센서퓨전 dedup)
+            "obstacle": m.get("obstacle_density"),    # 장애물 밀도(/100m), 거리<5m면 None
             "terrain": m["terrain_sigma"],
         }
 
     out: Dict[str, dict] = {rid: {} for rid in metrics_by_route}
-    keys = ["stealth", "proximity", "terrain"]
+    keys = ["stealth", "proximity", "threat", "obstacle", "terrain"]
     for key in keys:
         vals = {rid: raw[rid][key] for rid in raw}
         avail = {rid: v for rid, v in vals.items() if v is not None}
@@ -599,6 +609,8 @@ def risk_score(norm_route: Dict[str, dict], weights: Dict[str, float]) -> Tuple[
     """가중합 위험도 총점 + 항목별 분해 (은밀성/위협근접/험지)."""
     keymap = [("stealth", "stealth", "은밀성(시야 노출 길이비)"),
               ("proximity", "proximity", "위협 근접(반경내 길이비)"),
+              ("threat", "threat", "위협 밀도(확정 위협 수)"),
+              ("obstacle", "obstacle", "장애물 밀도(/100m)"),
               ("terrain", "terrain", "험지(지형 굴곡 σ)")]
     total = 0.0
     breakdown: List[dict] = []
@@ -1052,7 +1064,7 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
     if not any_warn:
         L.append("- (런 품질 경고 없음)")
     L.append("")
-    L.append("- **위험도 = perception 기반 3요소**(은밀성·위협근접·험지). 시간/거리/우회는 효율 축으로 분리(3장).")
+    L.append("- **위험도 = perception 5요소**(은밀성·위협근접·위협밀도·장애물밀도·험지). 시간/거리/우회는 효율 축으로 분리(3장).")
     L.append("- **노출/근접은 클린 루트 중심선**(planned_paths v0, weave 제외) 길이비. weave 궤적으로 재면 수색행동 때문에 과대평가됨.")
     L.append("- **발견 위협엔 heading이 없어** House FOV 콘 대신 반경+LoS(전방향) 보수적 판정. LoS 차폐는 주행 base 맵 + 발견 obstacle 기준.")
     L.append("- **GT(정답맵)는 7장 검증 전용** — 위험도 점수엔 미반영(실무엔 GT 없음).")
@@ -1123,7 +1135,8 @@ def run_recon_eval(input_path: str = DEFAULT_REPORT_DIR,
         exposures[rid] = compute_centerline_exposure(centerlines[rid], perceived[rid], los_obstacles[rid])
         gt_validation[rid] = validate_perception_vs_gt(perceived[rid], gt_threats)
 
-    norm = normalize(metrics, exposures, norm_mode)
+    threat_counts = {rid: len(perceived[rid]) for rid in routes}
+    norm = normalize(metrics, exposures, norm_mode, threat_counts)
     for rid in routes:
         valid, warns = validate_run(metrics[rid])
         total, breakdown = risk_score(norm[rid], weights)
@@ -1258,7 +1271,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--routes", default=DEFAULT_ROUTES,
                    help="중심선 폴백/계획 경로 그림용 routes.yaml (기본 path_planning/config/routes.yaml)")
     p.add_argument("--norm", choices=["reference", "minmax"], default="reference", help="정규화 방식")
-    for k in ("stealth", "proximity", "terrain"):
+    for k in ("stealth", "proximity", "threat", "obstacle", "terrain"):
         p.add_argument(f"--w-{k}", type=float, default=None, help=f"가중치 {k} 오버라이드")
     p.add_argument("--stdout", action="store_true", help="파일 대신 표준출력")
     p.add_argument("--no-figures", action="store_true",
@@ -1270,7 +1283,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
 
     weights = dict(DEFAULT_WEIGHTS)
-    for k in ("stealth", "proximity", "terrain"):
+    for k in ("stealth", "proximity", "threat", "obstacle", "terrain"):
         v = getattr(args, f"w_{k}")
         if v is not None:
             weights[k] = v

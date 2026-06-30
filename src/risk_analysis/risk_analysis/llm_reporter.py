@@ -69,7 +69,7 @@ class LLMReporter:
         출력 규칙:
         - 반드시 JSON 객체 하나만 출력한다.
         - JSON 밖에 설명, 마크다운, 코드블록을 쓰지 마라.
-        - selected_route는 반드시 "A" 또는 "B" 중 하나다.
+        - selected_route는 반드시 "A" 또는 "B" 중 하나다. selected_route는 **실제 임무에 사용할 권장 루트 = 종합 위험이 더 낮은(더 안전한) 쪽**이다. 더 위험한 루트를 고르지 마라.
         - risk_level 값은 "low", "medium", "high", "critical" 중 하나다.
         - confidence 값은 "low", "medium", "high" 중 하나다.
         - speed_policy 값은 "slow", "medium", "fast" 중 하나다.
