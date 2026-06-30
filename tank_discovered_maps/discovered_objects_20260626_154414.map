@@ -1,0 +1,47 @@
+{
+  "terrainIndex": 5,
+  "map_role": "discovered_runtime_objects",
+  "frame_id": "tank_map",
+  "coordinate_policy": "saved position uses Unity raw convention: x=map.x, y=map.z, z=map.y",
+  "created_wall": 1782456254.3903048,
+  "object_count": 1,
+  "candidate_count": 1,
+  "confirmed_count": 1,
+  "save_confirmed_only": true,
+  "obstacles": [
+    {
+      "prefabName": "detected_house_0001",
+      "position": {
+        "x": 22.687160834035918,
+        "y": 21.767932102479563,
+        "z": 202.3662571130012
+      },
+      "rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "metadata": {
+        "object_id": "detected_house_0001",
+        "class_name": "house",
+        "map_x": 22.687160834035918,
+        "map_y": 202.3662571130012,
+        "map_z": 21.767932102479563,
+        "distance_m": 27.169689060139227,
+        "confidence": 0.97265625,
+        "observation_count": 9,
+        "first_seen_wall": 1782456226.430211,
+        "last_seen_wall": 1782456229.231529,
+        "source": "yolo_lidar_projection_cluster_fusion",
+        "track_id": null,
+        "class_fixed_id": 4,
+        "class_votes": {
+          "house": 8.3837890625
+        },
+        "is_confirmed": true,
+        "confirmed_wall": 1782456226.430211
+      }
+    }
+  ]
+}

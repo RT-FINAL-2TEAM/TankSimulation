@@ -26,6 +26,8 @@ from nav_msgs.msg import Path as NavPath
 from rclpy.node import Node
 from std_msgs.msg import String
 
+from tank_common.vehicle_model import TankVehicleModel
+
 from control.config import (
     CONTROLLER_HZ,
     ENABLE_LOCAL_TARGET,
@@ -96,6 +98,19 @@ class TeamPathControllerNode(Node):
             pass
 
         self.declare_parameter("tank_param_file", default_param_file)
+        self.declare_parameter("enable_dynamic_speed_policy", True)
+        self.declare_parameter("enable_stopping_distance_model", True)
+        self.declare_parameter("enable_curvature_speed_limit", True)
+        self.declare_parameter("planner_status_topic", "/tank/planner/status")
+        self.declare_parameter("planner_feasibility_topic", "/tank/planner/feasibility_status")
+        self.declare_parameter("cruise_speed_mps", 4.6)
+        self.declare_parameter("slow_turn_speed_mps", 2.4)
+        self.declare_parameter("crawl_turn_speed_mps", 1.6)
+        self.declare_parameter("crawl_pivot_speed_mps", 1.0)
+        self.declare_parameter("min_forward_speed_mps", 0.7)
+        self.declare_parameter("goal_approach_speed_mps", 0.9)
+        self.declare_parameter("obstacle_slow_speed_mps", 1.0)
+        self.declare_parameter("obstacle_stop_extra_margin_m", 1.0)
         self.declare_parameter("controller_hz", 10.0)
         self.declare_parameter("max_speed", 25.0)
         self.declare_parameter("max_yaw_rate", 2.0)
@@ -340,9 +355,29 @@ class TeamPathControllerNode(Node):
         self._sharp_turn_pivot_cooldown_until: float = 0.0
         self._sharp_turn_pivot_last_reason: str = "none"
 
-        self.tank_params = self.load_tank_params(str(self.get_parameter("tank_param_file").value))
+        self.tank_param_file = str(self.get_parameter("tank_param_file").value)
+        self.tank_params = self.load_tank_params(self.tank_param_file)
+        self.vehicle_model = TankVehicleModel(self.tank_param_file)
         self.max_speed = self.extract_max_from_dict(self.tank_params.get("steady_state_speed", {}), 19.45)
         self.max_yaw_rate = self.extract_max_from_dict(self.tank_params.get("steady_state_yaw_rate", {}), 38.84)
+        self.enable_dynamic_speed_policy = bool(self.get_parameter("enable_dynamic_speed_policy").value)
+        self.enable_stopping_distance_model = bool(self.get_parameter("enable_stopping_distance_model").value)
+        self.enable_curvature_speed_limit = bool(self.get_parameter("enable_curvature_speed_limit").value)
+        self.planner_status_topic = str(self.get_parameter("planner_status_topic").value)
+        self.planner_feasibility_topic = str(self.get_parameter("planner_feasibility_topic").value)
+        policy = self.tank_params.get("controller_speed_policy", {}) if isinstance(self.tank_params.get("controller_speed_policy"), dict) else {}
+        self.cruise_speed_mps = float(policy.get("cruise_speed_mps", self.get_parameter("cruise_speed_mps").value))
+        self.slow_turn_speed_mps = float(policy.get("slow_turn_speed_mps", self.get_parameter("slow_turn_speed_mps").value))
+        self.crawl_turn_speed_mps = float(policy.get("crawl_turn_speed_mps", self.get_parameter("crawl_turn_speed_mps").value))
+        self.crawl_pivot_speed_mps = float(policy.get("crawl_pivot_speed_mps", self.get_parameter("crawl_pivot_speed_mps").value))
+        self.min_forward_speed_mps = float(policy.get("min_forward_speed_mps", self.get_parameter("min_forward_speed_mps").value))
+        self.goal_approach_speed_mps = float(policy.get("goal_approach_speed_mps", self.get_parameter("goal_approach_speed_mps").value))
+        self.obstacle_slow_speed_mps = float(policy.get("obstacle_slow_speed_mps", self.get_parameter("obstacle_slow_speed_mps").value))
+        self.obstacle_stop_extra_margin_m = float(self.get_parameter("obstacle_stop_extra_margin_m").value)
+        self.last_speed_policy_status: Dict[str, Any] = {"enabled": self.enable_dynamic_speed_policy}
+        self.planner_status: Dict[str, Any] = {}
+        self.planner_feasibility_status: Dict[str, Any] = {}
+        self.planner_emergency_cluster_blocked: bool = False
 
         self.current_pos: Optional[Tuple[float, float]] = None
         self.current_yaw: float = 0.0
@@ -378,6 +413,8 @@ class TeamPathControllerNode(Node):
         self.create_subscription(NavPath, "/tank/global_path", self.global_path_cb, 10)
         self.create_subscription(String, TOPIC_COLLISION_EVENT, self.collision_cb, 10)
         self.create_subscription(String, self.safety_status_topic, self.safety_status_cb, 10)
+        self.create_subscription(String, self.planner_status_topic, self.planner_status_cb, 10)
+        self.create_subscription(String, self.planner_feasibility_topic, self.planner_feasibility_cb, 10)
         # 정찰 관측요청(미분류 후보) + 포탑 현재각 피드백(step-stare 폐루프용).
         self.create_subscription(String, "/tank/recon/observe_request", self.observe_request_cb, 10)
         self.create_subscription(Vector3Stamped, "/tank/api/get_action/turret", self.turret_feedback_cb, 10)
@@ -385,7 +422,7 @@ class TeamPathControllerNode(Node):
         self.create_timer(1.0 / max(1.0, hz), self.timer_cb)
         self.get_logger().info(
             f"Team path controller initialized: max_speed={self.max_speed:.2f}, max_yaw_rate={self.max_yaw_rate:.2f}, "
-            f"local_target={self.enable_local_target}"
+            f"local_target={self.enable_local_target}, dynamic_speed_policy={self.enable_dynamic_speed_policy}"
         )
 
     def load_tank_params(self, path: str) -> Dict[str, Any]:
@@ -1027,6 +1064,57 @@ class TeamPathControllerNode(Node):
             },
         }
 
+    def planner_status_cb(self, msg: String) -> None:
+        try:
+            data = json.loads(msg.data)
+        except Exception:
+            return
+        if not isinstance(data, dict):
+            return
+        self.planner_status = data
+        self.planner_emergency_cluster_blocked = bool(data.get("emergency_cluster_blocked", False))
+
+    def planner_feasibility_cb(self, msg: String) -> None:
+        try:
+            data = json.loads(msg.data)
+        except Exception:
+            return
+        if isinstance(data, dict):
+            data["_received_wall"] = time.time()
+            self.planner_feasibility_status = data
+
+    def _local_path_curvature_speed_limit(self) -> Optional[float]:
+        """현재 위치 기준 global path 일부의 최소 회전반경으로 속도 상한을 계산한다."""
+        if not self.enable_curvature_speed_limit or self.current_pos is None or len(self.global_path) < 3:
+            return None
+        try:
+            best_i = min(range(len(self.global_path)), key=lambda i: get_distance(self.current_pos, self.global_path[i]))
+            segment = [self.current_pos] + self.global_path[best_i: best_i + 80]
+            summary = self.vehicle_model.path_curvature_summary(segment, self.current_speed, max_points=80)
+            limit = summary.get("recommended_speed_limit_mps")
+            self._last_local_curvature_status = summary
+            if limit is None:
+                return None
+            # feasible하면 cruise보다 낮출 필요가 없다. sharp corner가 있을 때만 제한한다.
+            if bool(summary.get("feasible_at_current_speed", True)) and int(summary.get("sharp_corner_count", 0)) <= 0:
+                return None
+            return max(0.5, float(limit))
+        except Exception:
+            return None
+
+    def _planner_curvature_speed_limit(self) -> Optional[float]:
+        if not self.enable_curvature_speed_limit or not isinstance(self.planner_feasibility_status, dict):
+            return None
+        try:
+            if time.time() - float(self.planner_feasibility_status.get("_received_wall", 0.0)) > 2.0:
+                return None
+            if bool(self.planner_feasibility_status.get("feasible_at_current_speed", True)):
+                return None
+            v = self.planner_feasibility_status.get("recommended_speed_limit_mps")
+            return None if v is None else max(0.5, float(v))
+        except Exception:
+            return None
+
     def _yaw_error_to_target(self, target: Tuple[float, float]) -> float:
         if self.current_pos is None:
             return 0.0
@@ -1192,14 +1280,16 @@ class TeamPathControllerNode(Node):
     def calculate_speed(self, target: Tuple[float, float], yaw_error: float) -> Tuple[str, float, str]:
         assert self.current_pos is not None
         abs_err = abs(yaw_error)
-        if self.goal_pos is not None and get_distance(self.current_pos, self.goal_pos) < self.goal_tolerance:
+        distance_to_goal = get_distance(self.current_pos, self.goal_pos) if self.goal_pos else None
+
+        if self.goal_pos is not None and distance_to_goal is not None and distance_to_goal < self.goal_tolerance:
             self.mission_complete = True
-            
+
             # 시나리오(mission_type)에 따른 도착 후 행동 분기
             if self.mission_type == "mission":
-                self.fire_cmd = True  # 목표 도달 시 사격 (파괴 임무)
+                self.fire_cmd = True
             else:
-                self.fire_cmd = False # 정찰(recon)이나 복귀(return) 시 사격 금지
+                self.fire_cmd = False
 
             if not hasattr(self, '_stop_published_count'):
                 self._stop_published_count = 0
@@ -1208,29 +1298,124 @@ class TeamPathControllerNode(Node):
                 self.get_logger().info(f"Mission Complete [{self.mission_type}]: Destination Reached. Terminating Control Node.")
                 import sys
                 sys.exit(0)
+            self.last_speed_policy_status = {
+                "enabled": self.enable_dynamic_speed_policy,
+                "mode": "goal_reached",
+                "distance_to_goal_m": distance_to_goal,
+            }
             return "STOP", 1.0, "goal_reached"
+
         if get_distance(self.current_pos, target) < 1.0 and self.goal_pos and get_distance(target, self.goal_pos) < self.stop_distance:
+            self.last_speed_policy_status = {"enabled": self.enable_dynamic_speed_policy, "mode": "target_stop"}
             return "STOP", 1.0, "target_stop"
-        # 새 전차 제어 데이터셋 기준:
-        # - STOP + A/D 제자리 회전은 검증 데이터가 부족함.
-        # - W=0.1~0.2 + A/D는 2~4m급 회전반경으로 검증되어 있어 stuck 위험이 낮다.
+
+        if not self.enable_dynamic_speed_policy:
+            # 기존 고정 weight 기반 정책 fallback.
+            if abs_err > self.crawl_pivot_angle_deg:
+                w_ws = clamp(self.crawl_pivot_ws_weight, 0.05, 1.0)
+                return "W", w_ws, "crawl_pivot"
+            if abs_err > self.rotate_in_place_angle_deg:
+                w_ws = clamp(self.crawl_turn_ws_weight, 0.05, 1.0)
+                return "W", w_ws, "crawl_turn"
+            if abs_err > self.slowdown_angle_deg:
+                w_ws = clamp(self.turn_ws_weight, 0.1, 1.0)
+                return "W", w_ws, "slow_turn"
+            error_scale = 1.0 - (abs_err / self.slowdown_angle_deg) * 0.3
+            w_ws = clamp(self.straight_ws_weight * error_scale, 0.1, 1.0)
+            return "W", w_ws, "cruise"
+
+        # 데이터셋 기반 동적 속도 정책:
+        # yaw error/곡률/장애물/goal 접근 상태로 목표속도를 정하고,
+        # steady_state_speed table로 W weight를 역보간한다.
+        mode_parts: List[str] = []
         if abs_err > self.crawl_pivot_angle_deg:
-            w_ws = clamp(self.crawl_pivot_ws_weight, 0.05, 1.0)
-            return "W", w_ws, "crawl_pivot"
-        if abs_err > self.rotate_in_place_angle_deg:
-            w_ws = clamp(self.crawl_turn_ws_weight, 0.05, 1.0)
-            return "W", w_ws, "crawl_turn"
+            target_speed = self.crawl_pivot_speed_mps
+            mode_parts.append("crawl_pivot_speed")
+        elif abs_err > self.rotate_in_place_angle_deg:
+            target_speed = self.crawl_turn_speed_mps
+            mode_parts.append("crawl_turn_speed")
+        elif abs_err > self.slowdown_angle_deg:
+            target_speed = self.slow_turn_speed_mps
+            mode_parts.append("slow_turn_speed")
+        else:
+            error_scale = 1.0 - (abs_err / max(1.0, self.slowdown_angle_deg)) * 0.25
+            target_speed = self.cruise_speed_mps * clamp(error_scale, 0.65, 1.0)
+            mode_parts.append("cruise_speed")
 
-        # W/S weight는 시뮬레이터 입력 그 자체다.
-        # tank_parameters.yaml의 max_speed가 갱신되어도 명령 weight가 임의로 축소되지 않도록
-        # 기존 speed_factor = max_speed / 19.45 보정은 제거한다.
-        if abs_err > self.slowdown_angle_deg:
-            w_ws = clamp(self.turn_ws_weight, 0.1, 1.0)
-            return "W", w_ws, "slow_turn"
+        local_curv_limit = self._local_path_curvature_speed_limit()
+        planner_curv_limit = self._planner_curvature_speed_limit()
+        curvature_limit = None
+        limits = [v for v in (local_curv_limit, planner_curv_limit) if v is not None]
+        if limits:
+            curvature_limit = min(limits)
+            if target_speed > curvature_limit:
+                target_speed = curvature_limit
+                mode_parts.append("curvature_limited")
 
-        error_scale = 1.0 - (abs_err / self.slowdown_angle_deg) * 0.3
-        w_ws = clamp(self.straight_ws_weight * error_scale, 0.1, 1.0)
-        return "W", w_ws, "cruise"
+        stop_distance = self.vehicle_model.stopping_distance(self.current_speed) if self.enable_stopping_distance_model else self.stop_distance
+        if self.enable_stopping_distance_model and distance_to_goal is not None:
+            goal_slow_distance = self.goal_tolerance + stop_distance
+            if distance_to_goal <= goal_slow_distance:
+                target_speed = min(target_speed, self.goal_approach_speed_mps)
+                mode_parts.append("goal_stop_distance_slow")
+
+        nearest = self.safety_nearest_obstacle_distance
+        front_blocking = self.is_front_blocking_context()
+        obstacle_stop_distance = stop_distance + max(0.0, self.obstacle_stop_extra_margin_m)
+        obstacle_stop = False
+        obstacle_slow = False
+        if nearest is not None:
+            try:
+                n = float(nearest)
+                obstacle_stop = bool(front_blocking and n <= obstacle_stop_distance)
+                obstacle_slow = bool(front_blocking and n <= obstacle_stop_distance + 4.0)
+            except Exception:
+                obstacle_stop = False
+                obstacle_slow = False
+        # APF가 꺼져 nearest가 없더라도 planner가 현재 경로 corridor 차단을 보고하면 감속한다.
+        if self.planner_emergency_cluster_blocked:
+            obstacle_slow = True
+            mode_parts.append("planner_emergency_slow")
+        if obstacle_stop:
+            self.last_speed_policy_status = {
+                "enabled": True,
+                "mode": "obstacle_stop_distance_model",
+                "target_speed_mps": 0.0,
+                "current_speed_mps": self.current_speed,
+                "stopping_distance_m": stop_distance,
+                "nearest_obstacle_distance_m": nearest,
+                "front_blocking": front_blocking,
+            }
+            return "STOP", 1.0, "obstacle_stop_distance_model"
+        if obstacle_slow:
+            target_speed = min(target_speed, self.obstacle_slow_speed_mps)
+            mode_parts.append("obstacle_slow")
+
+        target_speed = max(0.0, float(target_speed))
+        if target_speed <= 0.05:
+            w_ws = 1.0
+            cmd = "STOP"
+        else:
+            target_speed = max(self.min_forward_speed_mps, target_speed)
+            w_ws = clamp(self.vehicle_model.ws_weight_for_speed(target_speed), 0.05, 1.0)
+            cmd = "W"
+
+        speed_mode = "|".join(mode_parts) if mode_parts else "dynamic_speed"
+        self.last_speed_policy_status = {
+            "enabled": True,
+            "mode": speed_mode,
+            "target_speed_mps": round(target_speed, 3),
+            "ws_weight": round(w_ws, 3),
+            "current_speed_mps": round(float(self.current_speed), 3),
+            "stopping_distance_m": round(float(stop_distance), 3),
+            "distance_to_goal_m": None if distance_to_goal is None else round(float(distance_to_goal), 3),
+            "curvature_limit_mps": curvature_limit,
+            "local_curvature": getattr(self, "_last_local_curvature_status", None),
+            "planner_emergency_cluster_blocked": self.planner_emergency_cluster_blocked,
+            "nearest_obstacle_distance_m": nearest,
+            "front_blocking": front_blocking,
+        }
+        return cmd, w_ws, speed_mode
 
     def escape_command_if_needed(self, target: Optional[Tuple[float, float]] = None) -> Optional[Tuple[Dict[str, Any], str]]:
         if not self.enable_stuck_escape or self.current_pos is None:
@@ -1519,6 +1704,7 @@ class TeamPathControllerNode(Node):
             "yaw_error_deg": yaw_error,
             "current_speed_mps": self.current_speed,
             "speed_mode": speed_mode,
+            "speed_policy": self.last_speed_policy_status,
             "recon_observation": recon_obs_status,
             "safety": {
                 "enabled": self.enable_safety_speed_limit,
@@ -1543,6 +1729,12 @@ class TeamPathControllerNode(Node):
                 "crawl_pivot_angle_deg": self.crawl_pivot_angle_deg,
                 "rotate_in_place_angle_deg": self.rotate_in_place_angle_deg,
                 "slowdown_angle_deg": self.slowdown_angle_deg,
+                "dynamic_speed_policy": self.enable_dynamic_speed_policy,
+                "cruise_speed_mps": self.cruise_speed_mps,
+                "slow_turn_speed_mps": self.slow_turn_speed_mps,
+                "crawl_turn_speed_mps": self.crawl_turn_speed_mps,
+                "crawl_pivot_speed_mps": self.crawl_pivot_speed_mps,
+                "min_forward_speed_mps": self.min_forward_speed_mps,
                 "enable_apf_vector_stop_pivot": self.enable_apf_vector_stop_pivot,
                 "prefer_turn_away_from_nearest_obstacle": self.prefer_turn_away_from_nearest_obstacle,
                 "away_turn_lock_sec": self.away_turn_lock_sec,
