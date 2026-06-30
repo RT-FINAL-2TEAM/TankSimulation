@@ -35,3 +35,5 @@ recon_reports/*
 # 출력 디렉터리(런타임에 코드가 자동 생성) — 추적 안 함
 tank_logs/
 reports/
+tank_discovered_maps/
+tank_terrain_maps/
