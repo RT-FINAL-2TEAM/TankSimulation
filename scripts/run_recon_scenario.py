@@ -360,6 +360,12 @@ def main() -> int:
             scripts_dir = os.path.dirname(os.path.abspath(__file__))
             print("\n--- LLM 전술 분석 자동 실행 ---")
             try:
+                # 새 comparison.json 반영: 수식·LLM 공통 입력(risk_features)+수식 verdict+보고서 갱신.
+                # (stale risk_features 재사용 방지 — make_llm_input은 이 산출물을 읽는다.)
+                subprocess.run(
+                    ["python3", os.path.join(scripts_dir, "generate_recon_report.py")],
+                    cwd=PROJECT_ROOT, check=False, timeout=120,
+                )
                 subprocess.run(
                     ["python3", os.path.join(scripts_dir, "make_llm_input.py")],
                     cwd=PROJECT_ROOT, check=True, timeout=60,
@@ -381,6 +387,15 @@ def main() -> int:
                     print(f"  📝 TXT 보고서: {os.path.join(REPORT_DIR, 'route_analysis_report.txt')}")
                 except Exception as e:
                     print(f"  [TXT] 루트 분석 보고서 생성 실패: {e}")
+                try:
+                    # 수식 verdict vs LLM 판단 비교 → risk_comparison.{json,md} (+ MFD RECON RISK 패널).
+                    subprocess.run(
+                        ["python3", os.path.join(scripts_dir, "compare_verdicts.py")],
+                        cwd=PROJECT_ROOT, check=True, timeout=60,
+                    )
+                    print(f"  ⚖️  수식 vs LLM 비교: {os.path.join(REPORT_DIR, 'risk_comparison.md')}")
+                except Exception as e:
+                    print(f"  [CMP] 수식·LLM 비교 생성 실패: {e}")
         else:
             print("\n[경고] route_A.json / route_B.json 일부 누락 — comparison 생략")
         return 0

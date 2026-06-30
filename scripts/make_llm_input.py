@@ -32,12 +32,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 
-DEFAULT_INPUT = "recon_reports/comparison.json"
+DEFAULT_INPUT = "recon_reports/risk_features.json"
 DEFAULT_OUTPUT = "recon_reports/route_comparison.json"
+DEFAULT_REPORT_DIR = "recon_reports"
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
@@ -67,150 +69,70 @@ def round_float(value: Any, ndigits: int = 3, default: float = 0.0) -> float:
         return default
 
 
-def get_yolo_enemy_count(route_data: Dict[str, Any]) -> int:
+def summarize_route(rec: Dict[str, Any]) -> Dict[str, Any]:
+    """risk_features.json의 per-route 레코드(그룹별) → LLM 입력용 평면 요약.
+
+    적 수는 센서퓨전 확정 dedup(threat.confirmed_count), 노출은 길이비(exposure),
+    효율은 별도 축. yolo_counts_raw는 '누적 프레임'으로 명시해 적 수 오독을 막는다.
     """
-    YOLO counts 기준 적/위협 수.
-    person + tank + house만 위협으로 사용.
-    rock은 장애물이므로 제외.
-    """
-    vision_yolo = route_data.get("vision_yolo", {})
-    if not isinstance(vision_yolo, dict):
-        return 0
-
-    counts = vision_yolo.get("counts", {})
-    if not isinstance(counts, dict):
-        return 0
-
-    person = safe_int(counts.get("person"), 0)
-    tank = safe_int(counts.get("tank"), 0)
-    house = safe_int(counts.get("house"), 0)
-
-    return person + tank + house
-
-
-def get_closest_enemy_distance(route_data: Dict[str, Any]) -> Optional[float]:
-    """
-    comparison.json에 closest_enemy_distance_m가 있으면 사용.
-    없으면 None 대신 0.0으로 둔다.
-
-    현재 네 comparison.json 구조에는 이 값이 없을 가능성이 큼.
-    나중에 생성 쪽에서 closest distance를 넣으면 자동 반영됨.
-    """
-    candidates = [
-        route_data.get("closest_enemy_distance_m"),
-        route_data.get("closest_threat_distance_m"),
-        route_data.get("min_enemy_distance_m"),
-    ]
-
-    for value in candidates:
-        if value is not None:
-            return round_float(value, 3, 0.0)
-
-    # exposure.per_threat 안에 min_dist_m이 있으면 그중 최솟값 사용
-    exposure = route_data.get("exposure", {})
-    if isinstance(exposure, dict):
-        events = exposure.get("per_threat") or exposure.get("events") or []
-        if isinstance(events, list):
-            dists = []
-            for e in events:
-                if isinstance(e, dict) and e.get("min_dist_m") is not None:
-                    dists.append(safe_float(e.get("min_dist_m")))
-            if dists:
-                return round(min(dists), 3)
-
-    return 0.0
-
-
-def summarize_route(route_data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    route_A / route_B 하나를 LLM 입력용으로 최소 요약.
-    """
-    result = route_data.get("result", {})
-    if not isinstance(result, dict):
-        result = {}
-
-    obstacle = route_data.get("obstacle_summary", {})
-    if not isinstance(obstacle, dict):
-        obstacle = {}
-
-    exposure = route_data.get("exposure", {})
-    if not isinstance(exposure, dict):
-        exposure = {}
-
-    terrain = route_data.get("terrain_roughness", {})
-    if not isinstance(terrain, dict):
-        terrain = {}
+    threat = rec.get("threat") if isinstance(rec.get("threat"), dict) else {}
+    exp = rec.get("exposure") if isinstance(rec.get("exposure"), dict) else {}
+    terr = rec.get("terrain") if isinstance(rec.get("terrain"), dict) else {}
+    eff = rec.get("efficiency") if isinstance(rec.get("efficiency"), dict) else {}
+    qual = rec.get("quality") if isinstance(rec.get("quality"), dict) else {}
+    raw = rec.get("raw_ref") if isinstance(rec.get("raw_ref"), dict) else {}
+    exp_ok = bool(exp.get("available"))
 
     return {
-        "route_id": route_data.get("route"),
-        "reached": bool(result.get("reached", False)),
-        "distance_m": round_float(result.get("distance_m"), 3, 0.0),
-        "sim_time_s": round_float(result.get("sim_time_s"), 3, 0.0),
+        "route_id": rec.get("route_id"),
+        "reached": bool(rec.get("reached", False)),
 
-        # result.collisions -> collision_count로 이름 통일
-        "collision_count": safe_int(result.get("collisions"), 0),
+        # 위협 — 확정 dedup 수(YOLO 누적 아님)
+        "enemy_count": safe_int(threat.get("confirmed_count"), 0),
+        "enemy_by_class": threat.get("by_class", {}) if isinstance(threat.get("by_class"), dict) else {},
+        "closest_enemy_distance_m": threat.get("nearest_dist_m"),  # null=위협 미탐지(판단 제외)
 
-        # YOLO 기준 위협 개수: person + tank + house
-        "enemy_count": get_yolo_enemy_count(route_data),
+        # 노출(은밀성) — 1차 위험 신호, 길이비 0~1
+        "stealth_ratio": round_float(exp.get("stealth_ratio"), 4) if exp_ok else None,
+        "proximity_ratio": round_float(exp.get("proximity_ratio"), 4) if exp_ok else None,
+        "exposure_available": exp_ok,
 
-        # 현재 comparison.json에 없으면 0.0
-        "closest_enemy_distance_m": get_closest_enemy_distance(route_data),
+        # 효율(별도 축 — 위험 아님)
+        "distance_m": round_float(eff.get("distance_m"), 3, 0.0),
+        "sim_time_s": round_float(eff.get("sim_time_s"), 3, 0.0),
+        "detour_ratio": eff.get("detour_ratio"),
+        "collision_count": safe_int(eff.get("collision_count"), 0),
+        "obstacle_count": safe_int(eff.get("obstacle_count"), 0),
+        "obstacle_density_per_100m": eff.get("obstacle_density_per_100m"),
 
-        # exposure 값
-        "enemy_visible_time_s": round_float(
-            exposure.get("total_dwell_s"),
-            3,
-            0.0,
-        ),
-        "max_continuous_visible_time_s": round_float(
-            exposure.get("max_continuous_s"),
-            3,
-            0.0,
-        ),
+        # 지형(험지)
+        "pitch_std_deg": round_float(terr.get("pitch_std_deg"), 3, 0.0),
+        "roll_std_deg": round_float(terr.get("roll_std_deg"), 3, 0.0),
+        "terrain_sigma_deg": round_float(terr.get("sigma_deg"), 3, 0.0),
 
-        # 장애물
-        "obstacle_count": safe_int(obstacle.get("count"), 0),
-        "obstacle_density_per_100m": round_float(
-            obstacle.get("density_per_100m"),
-            3,
-            0.0,
-        ),
+        # 정찰 신뢰도(점수 미반영, 신뢰도 캡용)
+        "gt_found": qual.get("found"),
+        "gt_total": qual.get("gt_total"),
+        "gt_confidence": qual.get("confidence"),
 
-        # 현재 comparison.json에 없으면 0
-        "blocked_segment_count": safe_int(
-            route_data.get("blocked_segment_count"),
-            0,
-        ),
-
-        # 지형 roughness
-        "pitch_std_deg": round_float(
-            terrain.get("pitch_std_deg"),
-            3,
-            0.0,
-        ),
-        "roll_std_deg": round_float(
-            terrain.get("roll_std_deg"),
-            3,
-            0.0,
-        ),
-        "yolo_counts": route_data.get("vision_yolo", {}).get("counts", {})
-        if isinstance(route_data.get("vision_yolo"), dict)
-        else {},
-        "asset_spotted_gt": route_data.get("asset_spotted_gt", {})
-        if isinstance(route_data.get("asset_spotted_gt"), dict)
-        else {},
+        # 참고 전용
+        "yolo_counts_raw": raw.get("yolo_counts", {}) if isinstance(raw.get("yolo_counts"), dict) else {},
+        "asset_spotted_gt": raw.get("asset_spotted_gt", {}) if isinstance(raw.get("asset_spotted_gt"), dict) else {},
     }
 
 
-def build_llm_input(comparison_data: Dict[str, Any]) -> Dict[str, Any]:
-    route_a = comparison_data.get("route_A")
-    route_b = comparison_data.get("route_B")
+def build_llm_input(features: Dict[str, Any]) -> Dict[str, Any]:
+    """risk_features.json dict → LLM 입력(route_comparison.json) dict."""
+    route_a = features.get("route_A")
+    route_b = features.get("route_B")
 
-    if not isinstance(route_a, dict):
-        raise ValueError("comparison.json에 route_A가 없습니다.")
-
-    if not isinstance(route_b, dict):
-        raise ValueError("comparison.json에 route_B가 없습니다.")
+    if not isinstance(route_a, dict) or "threat" not in route_a:
+        raise ValueError(
+            "risk_features.json 형식이 아닙니다(route_A.threat 없음) — "
+            "generate_recon_report.py를 먼저 실행하세요."
+        )
+    if not isinstance(route_b, dict) or "threat" not in route_b:
+        raise ValueError("risk_features.json에 route_B가 없습니다.")
 
     return {
         "route_A": summarize_route(route_a),
@@ -240,14 +162,14 @@ def save_json(data: Dict[str, Any], path: str) -> None:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="comparison.json을 LLM 입력용 최소 JSON으로 변환"
+        description="risk_features.json(수식·LLM 공통 입력)을 LLM 입력 JSON으로 변환"
     )
 
     parser.add_argument(
         "--input",
         "-i",
         default=DEFAULT_INPUT,
-        help=f"입력 comparison.json 경로. 기본: {DEFAULT_INPUT}",
+        help=f"입력 risk_features.json 경로. 기본: {DEFAULT_INPUT} (없으면 자동 생성)",
     )
 
     parser.add_argument(
@@ -269,8 +191,17 @@ def parse_args():
 def main() -> int:
     args = parse_args()
 
-    comparison_data = load_json(args.input)
-    llm_input = build_llm_input(comparison_data)
+    # risk_features.json이 아직 없으면 generate_recon_report로 즉석 생성(공유 입력 보장).
+    if not Path(args.input).exists():
+        try:
+            import generate_recon_report as grr  # scripts/ 동일 디렉터리
+            grr.build_recon_artifacts(report_dir=DEFAULT_REPORT_DIR)
+        except Exception as e:
+            print(f"[오류] risk_features 생성 실패: {e}", file=sys.stderr)
+            return 1
+
+    features = load_json(args.input)
+    llm_input = build_llm_input(features)
 
     if args.stdout:
         print(json.dumps(llm_input, ensure_ascii=False, indent=2))

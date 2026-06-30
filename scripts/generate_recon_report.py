@@ -298,6 +298,9 @@ def densify_polyline(poly: List[Tuple[float, float]], step: float = 0.75) -> Lis
 # --------------------------------------------------------------------------- #
 # 길이 기반 노출(은밀성)·근접 — 클린 중심선 × perception 위협
 # --------------------------------------------------------------------------- #
+PROFILE_BINS = 20  # exposure.profile 구간 수(경로 0~1을 N등분) — 웹 그래프/전술조언용
+
+
 def compute_centerline_exposure(centerline: Optional[List[Tuple[float, float]]],
                                 threats: List[Dict[str, Any]],
                                 los_obstacles: List[Dict[str, float]]) -> Optional[dict]:
@@ -307,14 +310,21 @@ def compute_centerline_exposure(centerline: Optional[List[Tuple[float, float]]],
     - proximity(위협근접): 반경 내(LoS 무관, 막혀도 물리적 근접) 구간 길이 비율.
     perception 위협엔 heading이 없어 FOV 콘은 적용 안 함(반경+LoS, 보수적).
     반환 None = 중심선 미수집. 위협 0개면 비율 0으로 정상 반환.
+    by_class(class별 노출/근접 비율)·profile(경로 0~1 구간별 노출 비율)도 함께 반환한다.
     """
     if not centerline or len(centerline) < 2:
         return None
+    from collections import defaultdict
     pts = densify_polyline(centerline, 0.75)
     total_len = 0.0
     exposed_len = 0.0    # 반경+LoS (any threat)
     proximity_len = 0.0  # 반경 (any threat)
     stats = [{"exposed": 0.0, "within": 0.0, "min_dist": float("inf")} for _ in threats]
+    class_exposed: Dict[str, float] = defaultdict(float)  # class별 노출 길이
+    class_within: Dict[str, float] = defaultdict(float)   # class별 반경내 길이
+    prof_exposed = [0.0] * PROFILE_BINS                   # 구간별 노출 길이
+    prof_total = [0.0] * PROFILE_BINS                     # 구간별 전체 길이
+    n_seg = max(1, len(pts) - 1)
 
     for i in range(1, len(pts)):
         x0, z0 = pts[i - 1]
@@ -324,23 +334,35 @@ def compute_centerline_exposure(centerline: Optional[List[Tuple[float, float]]],
             continue
         mx, mz = 0.5 * (x0 + x1), 0.5 * (z0 + z1)
         total_len += seg
+        bin_idx = min(PROFILE_BINS - 1, int((i - 1) / n_seg * PROFILE_BINS))
+        prof_total[bin_idx] += seg
         seg_exposed = False
         seg_within = False
+        seg_cls_exposed = set()
+        seg_cls_within = set()
         for ti, th in enumerate(threats):
             r = float(th.get("radius") or tg.threat_radius(th))
             d = math.hypot(mx - float(th["x"]), mz - float(th["z"]))
             if d <= r:
                 seg_within = True
+                cls = str(th.get("type", "unknown"))
+                seg_cls_within.add(cls)
                 stats[ti]["within"] += seg
                 if d < stats[ti]["min_dist"]:
                     stats[ti]["min_dist"] = d
                 if tg.check_los(mx, mz, float(th["x"]), float(th["z"]), los_obstacles):
                     seg_exposed = True
+                    seg_cls_exposed.add(cls)
                     stats[ti]["exposed"] += seg
         if seg_exposed:
             exposed_len += seg
+            prof_exposed[bin_idx] += seg
         if seg_within:
             proximity_len += seg
+        for c in seg_cls_within:
+            class_within[c] += seg
+        for c in seg_cls_exposed:
+            class_exposed[c] += seg
 
     per_threat: List[dict] = []
     for ti, th in enumerate(threats):
@@ -354,6 +376,18 @@ def compute_centerline_exposure(centerline: Optional[List[Tuple[float, float]]],
                 "min_dist_m": round(st["min_dist"], 2) if st["min_dist"] != float("inf") else None,
             })
     per_threat.sort(key=lambda e: e["exposed_length_m"], reverse=True)
+
+    by_class: Dict[str, dict] = {}
+    for c in sorted(set(class_within) | set(class_exposed)):
+        by_class[c] = {
+            "stealth_ratio": round(class_exposed.get(c, 0.0) / total_len, 4) if total_len > 0 else 0.0,
+            "proximity_ratio": round(class_within.get(c, 0.0) / total_len, 4) if total_len > 0 else 0.0,
+        }
+    profile = [
+        {"pos": round((b + 0.5) / PROFILE_BINS, 3),
+         "exposed": round(prof_exposed[b] / prof_total[b], 3) if prof_total[b] > 0 else 0.0}
+        for b in range(PROFILE_BINS)
+    ]
     return {
         "stealth_ratio": round(exposed_len / total_len, 4) if total_len > 0 else 0.0,
         "proximity_ratio": round(proximity_len / total_len, 4) if total_len > 0 else 0.0,
@@ -362,6 +396,8 @@ def compute_centerline_exposure(centerline: Optional[List[Tuple[float, float]]],
         "total_length_m": round(total_len, 2),
         "threat_count": len(threats),
         "per_threat": per_threat,
+        "by_class": by_class,
+        "profile": profile,
     }
 
 
@@ -1028,6 +1064,184 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
 # --------------------------------------------------------------------------- #
 # main
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# 공유 입력(risk_features) / 수식 verdict(formula_verdict) — 수식·LLM 단일 입력 + 비교
+# --------------------------------------------------------------------------- #
+def _write_json(path: str, data: dict) -> str:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return path
+
+
+def run_recon_eval(input_path: str = DEFAULT_REPORT_DIR,
+                   route_a: Optional[str] = None,
+                   route_b: Optional[str] = None,
+                   discovered_dir: str = DEFAULT_DISCOVERED_DIR,
+                   gt_map: str = DEFAULT_GT_MAP,
+                   map_path: str = DEFAULT_MAP,
+                   routes_path: str = DEFAULT_ROUTES,
+                   weights: Optional[Dict[str, float]] = None,
+                   norm_mode: str = "reference") -> Optional[dict]:
+    """정찰 루트 A/B 평가 일괄 수행 — main()/feature builder/app_routes 공용 단일 출처.
+
+    반환 dict(routes/metrics/exposures/perceived/centerlines/los_obstacles/
+    gt_validation/gt_threats/scored/rec/weights/norm). 입력 없으면 None.
+    """
+    weights = dict(weights) if weights else dict(DEFAULT_WEIGHTS)
+    routes_data = load_inputs(input_path, route_a, route_b)
+    if not routes_data:
+        return None
+
+    try:
+        gt_threats, _gt_bboxes, _gt_objects = tg.load_map(gt_map)
+    except (FileNotFoundError, json.JSONDecodeError):
+        gt_threats = []
+    try:
+        _, base_bboxes, _ = tg.load_map(map_path)
+    except (FileNotFoundError, json.JSONDecodeError):
+        base_bboxes = []
+
+    routes = sorted(routes_data.keys())
+    metrics: Dict[str, dict] = {}
+    exposures: Dict[str, Optional[dict]] = {}
+    perceived: Dict[str, List[Dict[str, Any]]] = {}
+    centerlines: Dict[str, Optional[List[Tuple[float, float]]]] = {}
+    los_obstacles: Dict[str, List[Dict[str, float]]] = {}
+    gt_validation: Dict[str, dict] = {}
+    scored: Dict[str, dict] = {}
+
+    for rid in routes:
+        m = extract_metrics(routes_data[rid])
+        metrics[rid] = m
+        centerlines[rid] = extract_centerline(routes_data[rid], rid, routes_path)
+        disc_path = os.path.join(discovered_dir, f"discovered_objects_route_{rid}.map")
+        disc_data = _read_json(disc_path) if os.path.isfile(disc_path) else {"obstacles": []}
+        perceived[rid] = parse_perceived_threats(disc_data)
+        disc_bboxes = [b for b in (tg.obstacle_to_bbox(o) for o in disc_data.get("obstacles", [])) if b]
+        los_obstacles[rid] = base_bboxes + disc_bboxes
+        exposures[rid] = compute_centerline_exposure(centerlines[rid], perceived[rid], los_obstacles[rid])
+        gt_validation[rid] = validate_perception_vs_gt(perceived[rid], gt_threats)
+
+    norm = normalize(metrics, exposures, norm_mode)
+    for rid in routes:
+        valid, warns = validate_run(metrics[rid])
+        total, breakdown = risk_score(norm[rid], weights)
+        scored[rid] = {"risk_total": total, "breakdown": breakdown,
+                       "valid": valid, "warnings": warns}
+    rec = recommend(scored, gt_validation)
+
+    return {"routes": routes, "metrics": metrics, "exposures": exposures,
+            "perceived": perceived, "centerlines": centerlines,
+            "los_obstacles": los_obstacles, "gt_validation": gt_validation,
+            "gt_threats": gt_threats, "scored": scored, "rec": rec,
+            "weights": weights, "norm": norm_mode}
+
+
+def _nearest_threat_dist(exp: Optional[dict]) -> Optional[float]:
+    """exposure.per_threat의 최소 거리(있으면) — 위협 미탐지면 None(0과 구분)."""
+    if not exp:
+        return None
+    dists = [e["min_dist_m"] for e in exp.get("per_threat", []) if e.get("min_dist_m") is not None]
+    return round(min(dists), 2) if dists else None
+
+
+def build_risk_features(R: dict) -> dict:
+    """run_recon_eval 결과 → 수식·LLM 공통 단일 입력 risk_features.json dict."""
+    from collections import Counter
+    out: Dict[str, Any] = {"schema_version": "1.0", "weights": R["weights"], "norm": R["norm"]}
+    for rid in R["routes"]:
+        m = R["metrics"][rid]
+        exp = R["exposures"].get(rid)
+        per = R["perceived"].get(rid, [])
+        by_cls = Counter(str(t.get("type", "unknown")) for t in per)
+        out[f"route_{rid}"] = {
+            "route_id": rid,
+            "reached": m["reached"],
+            "valid": R["scored"][rid]["valid"],
+            "threat": {
+                "confirmed_count": len(per),
+                "by_class": dict(by_cls),
+                "nearest_dist_m": _nearest_threat_dist(exp),
+                "list": [{"type": t.get("type"),
+                          "x": round(float(t.get("x", 0.0)), 2),
+                          "z": round(float(t.get("z", 0.0)), 2),
+                          "radius": t.get("radius")} for t in per],
+            },
+            "exposure": (
+                {
+                    "stealth_ratio": exp["stealth_ratio"],
+                    "proximity_ratio": exp["proximity_ratio"],
+                    "exposed_length_m": exp["exposed_length_m"],
+                    "total_length_m": exp["total_length_m"],
+                    "by_class": exp.get("by_class", {}),
+                    "profile": exp.get("profile", []),
+                    "available": True,
+                } if exp else {"available": False}
+            ),
+            "terrain": {
+                "sigma_deg": m["terrain_sigma"],
+                "pitch_std_deg": m["terrain_pitch"],
+                "roll_std_deg": m["terrain_roll"],
+            },
+            "efficiency": {
+                "distance_m": m["distance_m"],
+                "sim_time_s": m["sim_time_s"],
+                "detour_ratio": m["detour_ratio"],
+                "collision_count": m["collisions"],
+                "obstacle_count": m["obstacle_count"],
+                "obstacle_density_per_100m": m["obstacle_density"],
+            },
+            "quality": R["gt_validation"].get(rid, {}),
+            "raw_ref": {
+                "yolo_counts": m["yolo_counts"],
+                "_note": "누적 탐지 프레임 수(distinct 아님) — 적 수 판단에 쓰지 말 것",
+                "asset_spotted_gt": m["asset_gt"],
+            },
+        }
+    return out
+
+
+def build_formula_verdict(R: dict) -> dict:
+    """run_recon_eval 결과 → 수식 점수 verdict(formula_verdict.json) dict."""
+    scored = R["scored"]
+    rec = R["rec"]
+    return {
+        "schema_version": "1.0",
+        "engine": "formula",
+        "weights": R["weights"],
+        "winner": rec.get("winner"),
+        "confidence": rec.get("confidence"),
+        "reason": rec.get("reason"),
+        "routes": {
+            rid: {
+                "risk_total": scored[rid]["risk_total"],
+                "components": {
+                    b["key"]: {"raw": b["raw"], "norm": b["norm"],
+                               "weight": b["weight"], "contrib": b["contrib"]}
+                    for b in scored[rid]["breakdown"]
+                },
+                "valid": scored[rid]["valid"],
+                "warnings": scored[rid]["warnings"],
+                "gt_validation": R["gt_validation"].get(rid),
+            } for rid in R["routes"]
+        },
+    }
+
+
+def build_recon_artifacts(report_dir: str = DEFAULT_REPORT_DIR, **kw) -> Tuple[str, str]:
+    """risk_features.json + formula_verdict.json을 report_dir에 생성(on-demand 빌드용).
+
+    make_llm_input / app_routes가 공유 입력을 보장하려 import해서 호출한다.
+    """
+    R = run_recon_eval(input_path=report_dir, **kw)
+    if R is None:
+        raise FileNotFoundError(f"정찰 입력 없음(comparison.json/route_*.json): {report_dir}")
+    feat_path = _write_json(os.path.join(report_dir, "risk_features.json"), build_risk_features(R))
+    verdict_path = _write_json(os.path.join(report_dir, "formula_verdict.json"), build_formula_verdict(R))
+    return feat_path, verdict_path
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="정찰 보고서 생성기 (recon_reports/*.json → recon_report.md)")
     p.add_argument("--input", default=DEFAULT_REPORT_DIR,
@@ -1061,56 +1275,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         if v is not None:
             weights[k] = v
 
-    routes_data = load_inputs(args.input, args.route_a, args.route_b)
-    if not routes_data:
+    R = run_recon_eval(args.input, args.route_a, args.route_b, args.discovered_dir,
+                       args.gt_map, args.map, args.routes, weights, args.norm)
+    if R is None:
         print(f"[오류] 입력을 찾지 못함: {args.input} (comparison.json / route_*.json 없음)", file=sys.stderr)
         return EXIT_NO_INPUT
+    routes = R["routes"]
+    metrics = R["metrics"]
+    exposures = R["exposures"]
+    perceived = R["perceived"]
+    centerlines = R["centerlines"]
+    los_obstacles = R["los_obstacles"]
+    gt_validation = R["gt_validation"]
+    gt_threats = R["gt_threats"]
+    scored = R["scored"]
+    rec = R["rec"]
 
-    # GT 위협(정답맵) — 위험도엔 안 쓰고 정찰 정확도 검증에만.
+    # 수식·LLM 공통 입력 + 수식 verdict를 JSON으로 내보낸다(마크다운과 무관, --stdout이어도 생성).
+    report_dir = args.input if os.path.isdir(args.input) else (os.path.dirname(args.input) or ".")
     try:
-        gt_threats, _gt_bboxes, gt_objects = tg.load_map(args.gt_map)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"[경고] GT 맵 로드 실패({e}) — 정찰 정확도 검증 생략", file=sys.stderr)
-        gt_threats, gt_objects = [], []
-
-    # 주행 base 맵(finalmap) — 계획경로 오버레이 + LoS 차폐 base obstacle(알려진 나무 등).
-    try:
-        _, base_bboxes, _ = tg.load_map(args.map)
-    except (FileNotFoundError, json.JSONDecodeError):
-        base_bboxes = []
-
-    routes = sorted(routes_data.keys())
-    metrics: Dict[str, dict] = {}
-    exposures: Dict[str, Optional[dict]] = {}
-    perceived: Dict[str, List[Dict[str, Any]]] = {}
-    centerlines: Dict[str, Optional[List[Tuple[float, float]]]] = {}
-    los_obstacles: Dict[str, List[Dict[str, float]]] = {}
-    gt_validation: Dict[str, dict] = {}
-    scored: Dict[str, dict] = {}
-
-    for rid in routes:
-        m = extract_metrics(routes_data[rid])
-        metrics[rid] = m
-        centerlines[rid] = extract_centerline(routes_data[rid], rid, args.routes)
-        # perception: 센서퓨전 확정 발견객체맵 → 위협 + LoS 차폐 obstacle
-        disc_path = os.path.join(args.discovered_dir, f"discovered_objects_route_{rid}.map")
-        disc_data = _read_json(disc_path) if os.path.isfile(disc_path) else {"obstacles": []}
-        if not os.path.isfile(disc_path):
-            print(f"[경고] 발견객체맵 없음: {disc_path} — route_{rid} 위협 0으로 처리", file=sys.stderr)
-        perceived[rid] = parse_perceived_threats(disc_data)
-        disc_bboxes = [b for b in (tg.obstacle_to_bbox(o) for o in disc_data.get("obstacles", [])) if b]
-        los_obstacles[rid] = base_bboxes + disc_bboxes
-        exposures[rid] = compute_centerline_exposure(centerlines[rid], perceived[rid], los_obstacles[rid])
-        gt_validation[rid] = validate_perception_vs_gt(perceived[rid], gt_threats)
-
-    norm = normalize(metrics, exposures, args.norm)
-    for rid in routes:
-        valid, warns = validate_run(metrics[rid])
-        total, breakdown = risk_score(norm[rid], weights)
-        scored[rid] = {"risk_total": total, "breakdown": breakdown,
-                       "valid": valid, "warnings": warns}
-
-    rec = recommend(scored, gt_validation)
+        _write_json(os.path.join(report_dir, "risk_features.json"), build_risk_features(R))
+        _write_json(os.path.join(report_dir, "formula_verdict.json"), build_formula_verdict(R))
+    except Exception as e:
+        print(f"[경고] risk_features/formula_verdict 쓰기 실패: {e}", file=sys.stderr)
 
     # 노출 지도(PNG)는 md와 같은 폴더에 생성해 basename으로 임베드한다. stdout/--no-figures면 생략.
     figures: Dict[str, Optional[str]] = {}

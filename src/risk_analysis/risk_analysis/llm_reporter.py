@@ -9,13 +9,21 @@ import requests
 class LLMReporter:
     def __init__(
         self,
-        ollama_url: str = "http://localhost:11434/api/generate",
-        model_name: str = "qwen3:0.6b",
-        timeout_sec: int = 1800,
+        ollama_url: str = None,
+        model_name: str = None,
+        timeout_sec: int = None,
     ):
-        self.ollama_url = ollama_url
-        self.model_name = model_name
-        self.timeout_sec = timeout_sec
+        # 모델/URL/timeout은 env 단일 출처(나중에 .env만 바꿔 GPU PC에서 큰 모델로 교체).
+        self.ollama_url = ollama_url or os.environ.get(
+            "TANK_OLLAMA_URL", "http://localhost:11434/api/generate"
+        )
+        self.model_name = model_name or os.environ.get(
+            "TANK_LLM_MODEL", os.environ.get("TANK_OLLAMA_MODEL", "qwen3:0.6b")
+        )
+        try:
+            self.timeout_sec = int(timeout_sec or os.environ.get("TANK_LLM_TIMEOUT_SEC", "1800"))
+        except (TypeError, ValueError):
+            self.timeout_sec = 1800
 
     def forced_route(self):
         raw = os.environ.get("TANK_FORCE_ROUTE", "A").strip().upper()
@@ -46,19 +54,16 @@ class LLMReporter:
         반드시 입력 JSON에 있는 값만 근거로 사용하라.
         입력에 없는 숫자나 항목을 만들지 마라.
 
-        판단 기준:
-        - reached=false이면 매우 불리하다.
-        - distance_m와 sim_time_s는 실제 정찰 주행 결과이며 값이 과도하게 크면 이동 부담이 크다.
-        - collision_count가 많을수록 불리하다.
-        - enemy_count가 많을수록 적 접촉/피탐지 위험이 크다.
-        - closest_enemy_distance_m가 0이면 거리 정보가 없는 것으로 보고 판단 근거에서 제외한다.
-        - closest_enemy_distance_m가 0보다 크면 값이 작을수록 위험하다.
-        - enemy_visible_time_s가 길수록 위험하다.
-        - max_continuous_visible_time_s가 길수록 지속 노출 위험이 크다.
-        - obstacle_count가 많을수록 이동 부담이 크다.
-        - obstacle_density_per_100m가 높으면 동일 거리 대비 장애물이 밀집된 것으로 본다.
-        - blocked_segment_count가 많을수록 우회/정체/매복 위험이 크다.
-        - pitch_std_deg와 roll_std_deg가 클수록 지형 주행 안정성이 낮다.
+        판단 기준 (위험 축을 1차로, 효율은 보조로):
+        - reached=false이면 정찰 미완주로 매우 불리하다.
+        - [노출 = 1차 위험] stealth_ratio(0~1)는 적에게 실제로 보이며 주행하는 경로 길이 비율이다. 클수록 위험(은밀성 낮음).
+        - proximity_ratio(0~1)는 적 탐지반경 안을 지나는 길이 비율이다. 클수록 위험.
+        - exposure_available=false이면 노출 미측정이니 노출은 판단에서 제외한다.
+        - closest_enemy_distance_m는 가장 가까운 적과의 거리(m)다. null이면 위협 미탐지로 보고 제외, 값이 있으면 작을수록 위험하다.
+        - [위협 맥락] enemy_count는 센서퓨전으로 확정된 distinct 적/초소 수다(많을수록 위험). enemy_by_class로 초소(house)/전차(tank)를 구분하라. yolo_counts_raw는 중복 누적 탐지 프레임이니 적 수로 쓰지 마라.
+        - [험지] pitch_std_deg·roll_std_deg(또는 terrain_sigma_deg)가 클수록 지형 주행 안정성이 낮다(위험).
+        - [효율 = 보조, 위험 아님] distance_m·sim_time_s·detour_ratio·obstacle_count·obstacle_density_per_100m는 '이동 부담'이다. risk_level은 노출·위협·험지로 정하고, 효율은 위험이 비슷할 때만 보조로 써라.
+        - [신뢰도] gt_confidence가 낮거나(<0.5) gt_found가 gt_total보다 많이 적으면 정찰이 위협을 놓쳤을 수 있으니 confidence를 낮춰라.
         - 단일 항목이 아니라 전체 위험 맥락을 비교해 selected_route를 선택하라.
 
         출력 규칙:
@@ -91,46 +96,15 @@ class LLMReporter:
             "tactical_note": "전술 메모"
         }},
         "used_evidence": {{
-            "A": {{
-            "route_id": null,
-            "reached": null,
-            "distance_m": null,
-            "sim_time_s": null,
-            "collision_count": null,
-            "enemy_count": null,
-            "closest_enemy_distance_m": null,
-            "enemy_visible_time_s": null,
-            "max_continuous_visible_time_s": null,
-            "obstacle_count": null,
-            "obstacle_density_per_100m": null,
-            "blocked_segment_count": null,
-            "pitch_std_deg": null,
-            "roll_std_deg": null,
-            "yolo_counts": {{}},
-            "asset_spotted_gt": {{}},
-            "reason": ""
-            }},
-            "B": {{
-            "route_id": null,
-            "reached": null,
-            "distance_m": null,
-            "sim_time_s": null,
-            "collision_count": null,
-            "enemy_count": null,
-            "closest_enemy_distance_m": null,
-            "enemy_visible_time_s": null,
-            "max_continuous_visible_time_s": null,
-            "obstacle_count": null,
-            "obstacle_density_per_100m": null,
-            "blocked_segment_count": null,
-            "pitch_std_deg": null,
-            "roll_std_deg": null,
-            "yolo_counts": {{}},
-            "asset_spotted_gt": {{}},
-            "reason": ""
-            }}
+            "A": {{ "route_id": "A", "reason": "" }},
+            "B": {{ "route_id": "B", "reason": "" }}
         }}
         }}
+        (used_evidence의 숫자는 시스템이 입력값으로 자동 채우니 reason만 쓰면 된다.)
+
+        예시 (형식·판단 흐름 참고용 — 반드시 아래 '입력 데이터'의 실제 값으로 새로 판단하라):
+        입력 예: route_A stealth_ratio=0.10, enemy_count=1, terrain_sigma_deg=8 / route_B stealth_ratio=0.55, enemy_count=3, terrain_sigma_deg=6
+        출력 예: {{"selected_route":"A","risk_level":{{"A":"low","B":"high"}},"confidence":"medium","summary":"A는 노출이 낮아 더 은밀하다.","decision_reason":"B는 stealth_ratio 0.55로 경로 절반이 적 시야에 노출되고 확정 적이 3으로 더 많다. A는 노출 0.10·적 1로 은밀성이 높다. 지형은 A가 약간 거칠지만 위험축에서 노출 차이가 결정적이라 A를 택했다.","key_risks":{{"A":["지형 굴곡 다소 높음"],"B":["경로 절반이 적 시야에 노출","확정 적 3"]}},"recommended_behavior":{{"speed_policy":"medium","caution_points":["A 후반 험지 구간 감속"],"tactical_note":"A로 진입하되 노출 구간 진입 전 정지·관측."}},"used_evidence":{{"A":{{"route_id":"A","reason":"노출 최소"}},"B":{{"route_id":"B","reason":"노출 과다"}}}}}}
 
         {force_instruction}
 
@@ -277,24 +251,30 @@ class LLMReporter:
         if not isinstance(old_b, dict):
             old_b = {}
 
-        # used_evidence의 숫자는 LLM 결과를 믿지 않고 입력 JSON의 실제 값으로 덮어쓴다.
+        # used_evidence의 숫자는 LLM 결과를 믿지 않고 입력 JSON(route_comparison)의 실제 값으로 덮어쓴다.
         def copy_evidence(route_data: dict, old_reason: str = "") -> dict:
             return {
                 "route_id": route_data.get("route_id"),
                 "reached": route_data.get("reached"),
+                "enemy_count": route_data.get("enemy_count"),
+                "enemy_by_class": route_data.get("enemy_by_class") if isinstance(route_data.get("enemy_by_class"), dict) else {},
+                "closest_enemy_distance_m": route_data.get("closest_enemy_distance_m"),
+                "stealth_ratio": route_data.get("stealth_ratio"),
+                "proximity_ratio": route_data.get("proximity_ratio"),
+                "exposure_available": route_data.get("exposure_available"),
                 "distance_m": route_data.get("distance_m"),
                 "sim_time_s": route_data.get("sim_time_s"),
+                "detour_ratio": route_data.get("detour_ratio"),
                 "collision_count": route_data.get("collision_count"),
-                "enemy_count": route_data.get("enemy_count"),
-                "closest_enemy_distance_m": route_data.get("closest_enemy_distance_m"),
-                "enemy_visible_time_s": route_data.get("enemy_visible_time_s"),
-                "max_continuous_visible_time_s": route_data.get("max_continuous_visible_time_s"),
                 "obstacle_count": route_data.get("obstacle_count"),
                 "obstacle_density_per_100m": route_data.get("obstacle_density_per_100m"),
-                "blocked_segment_count": route_data.get("blocked_segment_count"),
                 "pitch_std_deg": route_data.get("pitch_std_deg"),
                 "roll_std_deg": route_data.get("roll_std_deg"),
-                "yolo_counts": route_data.get("yolo_counts") if isinstance(route_data.get("yolo_counts"), dict) else {},
+                "terrain_sigma_deg": route_data.get("terrain_sigma_deg"),
+                "gt_found": route_data.get("gt_found"),
+                "gt_total": route_data.get("gt_total"),
+                "gt_confidence": route_data.get("gt_confidence"),
+                "yolo_counts_raw": route_data.get("yolo_counts_raw") if isinstance(route_data.get("yolo_counts_raw"), dict) else {},
                 "asset_spotted_gt": route_data.get("asset_spotted_gt") if isinstance(route_data.get("asset_spotted_gt"), dict) else {},
                 "reason": old_reason,
             }

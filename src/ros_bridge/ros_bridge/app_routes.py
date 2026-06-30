@@ -1146,6 +1146,22 @@ def _resolve_route_comparison_path() -> Path:
     return _resolve_recon_report_dir() / "route_comparison.json"
 
 
+def _resolve_risk_comparison_path() -> Path:
+    return _resolve_recon_report_dir() / "risk_comparison.json"
+
+
+def _resolve_risk_features_path() -> Path:
+    return _resolve_recon_report_dir() / "risk_features.json"
+
+
+def _load_json_dict_safe(path: Path) -> Optional[Dict[str, Any]]:
+    """예외를 흡수하는 _load_json_dict — 대시보드 페이로드 빌드용."""
+    try:
+        return _load_json_dict(path)
+    except Exception:
+        return None
+
+
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
@@ -1249,17 +1265,24 @@ def _build_comparison_from_route_reports(report_dir: Path) -> Path:
 
 
 def _build_route_comparison_input(report_dir: Path) -> Path:
-    comparison_path = _resolve_recon_comparison_path()
-    comparison = _load_json_dict(comparison_path)
-    if not isinstance(comparison, dict):
-        comparison_path = _build_comparison_from_route_reports(report_dir)
-        comparison = _load_json_dict(comparison_path)
-    if not isinstance(comparison, dict):
-        raise ValueError(f"comparison JSON is unavailable: {comparison_path}")
     _ensure_scripts_source_path()
+    # 1) comparison.json 보장(없으면 route_*.json에서 생성) — generate_recon_report 입력.
+    comparison_path = _resolve_recon_comparison_path()
+    if not isinstance(_load_json_dict_safe(comparison_path), dict):
+        _build_comparison_from_route_reports(report_dir)
+    # 2) risk_features.json 보장(수식·LLM 공통 입력). 없으면 generate_recon_report로 on-demand 생성.
+    features_path = _resolve_risk_features_path()
+    features = _load_json_dict_safe(features_path)
+    if not isinstance(features, dict) or "route_A" not in features:
+        import generate_recon_report as grr
+        grr.build_recon_artifacts(report_dir=str(report_dir))
+        features = _load_json_dict_safe(features_path)
+    if not isinstance(features, dict):
+        raise ValueError(f"risk_features JSON is unavailable: {features_path}")
+    # 3) LLM 입력(route_comparison.json) 생성.
     from make_llm_input import build_llm_input
 
-    llm_input = build_llm_input(comparison)
+    llm_input = build_llm_input(features)
     output_path = _resolve_route_comparison_path()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:
@@ -2149,6 +2172,8 @@ def _build_dashboard_payload() -> Dict[str, Any]:
         "staticMap": {},
         "routeCandidates": {},
         "windowsRecon": {},
+        "riskComparison": None,
+        "riskFeatures": None,
     }
 
     try:
@@ -2287,6 +2312,10 @@ def _build_dashboard_payload() -> Dict[str, Any]:
     payload["routeCandidates"] = _sanitize_route_candidates_for_display(
         _load_route_candidates_payload(route_risk_report)
     )
+
+    # 수식 vs LLM 비교(RECON RISK 패널) — 파일→폴링. 신규 토픽 없음.
+    payload["riskComparison"] = _load_json_dict_safe(_resolve_risk_comparison_path())
+    payload["riskFeatures"] = _load_json_dict_safe(_resolve_risk_features_path())
 
     return payload
 

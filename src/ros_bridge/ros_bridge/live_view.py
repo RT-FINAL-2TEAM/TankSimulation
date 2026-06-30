@@ -600,6 +600,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     <div class="panel-title"><span>LEFT PANEL</span><span id="leftPanelTitle">ROUTE</span></div>
                     <div class="left-tabs">
                         <button id="tab-route" class="tab-button active" type="button" onclick="setTab('route')">ROUTE</button>
+                        <button id="tab-risk" class="tab-button" type="button" onclick="setTab('risk')">RISK</button>
                         <button id="tab-ai" class="tab-button" type="button" onclick="setTab('ai')">AI LOG</button>
                         <button id="tab-recon" class="tab-button" type="button" onclick="setTab('recon')">RECON</button>
                         <button id="tab-sensor" class="tab-button" type="button" onclick="setTab('sensor')">SENSOR</button>
@@ -669,10 +670,10 @@ def render_view_page(poll_ms: int = 1000) -> str:
             }
             function setTab(tabName) {
                 activeTab = tabName;
-                for (const tab of ["route", "ai", "recon", "sensor"]) {
+                for (const tab of ["route", "risk", "ai", "recon", "sensor"]) {
                     byId(`tab-${tab}`).classList.toggle("active", tab === tabName);
                 }
-                byId("leftPanelTitle").textContent = tabName === "route" ? "ROUTE" : tabName === "ai" ? "AI LOG" : tabName === "recon" ? "RECON" : "SENSOR";
+                byId("leftPanelTitle").textContent = tabName === "route" ? "ROUTE" : tabName === "risk" ? "RECON RISK" : tabName === "ai" ? "AI LOG" : tabName === "recon" ? "RECON" : "SENSOR";
                 updateLeftPanel(latestState || {});
             }
             function setMapTab(tabName) {
@@ -1438,6 +1439,82 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 setStatusClass(statusValue, lastFetchOk ? (hasFrame ? "status-ok" : "status-warn") : "status-error");
                 updateFeedStatus(state);
             }
+            function riskBandColor(band) {
+                return ({ low: "#39ff88", medium: "#ffd34d", high: "#ff8a3d", critical: "#ff3448" })[band] || "#5a6b62";
+            }
+            function riskOk(v) { return v === true ? "✅" : v === false ? "❌" : "—"; }
+            function renderExposureBars(profile, color) {
+                if (!Array.isArray(profile) || !profile.length) {
+                    return '<div style="color:#5a6b62;font-size:11px;">노출 프로파일 없음</div>';
+                }
+                const bars = profile.map((p) => {
+                    const ratio = Math.max(0, Math.min(1, Number(p.exposed) || 0));
+                    const h = Math.max(2, Math.round(ratio * 26));
+                    return `<span title="pos ${safe(p.pos)}: ${safe(p.exposed)}" style="display:inline-block;width:4px;height:${h}px;background:${color};margin-right:1px;vertical-align:bottom;opacity:${0.35 + 0.65 * ratio};"></span>`;
+                }).join("");
+                return `<div style="height:28px;line-height:0;margin-top:3px;" title="경로 출발→목적지 구간별 노출">${bars}</div>`;
+            }
+            function renderRiskPanel(state) {
+                const cmp = state?.riskComparison;
+                const feat = state?.riskFeatures;
+                if (!cmp) {
+                    return '<div class="empty">RISK 비교 대기 — generate_recon_report.py + route_risk_node 실행 후 표시.</div>';
+                }
+                const w = cmp.winner || {};
+                const per = cmp.per_route || {};
+                let html = '';
+
+                // 블록 1: 정찰 결과 요약
+                if (feat) {
+                    html += '<div style="margin-bottom:10px;"><div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">정찰 결과</div>';
+                    for (const r of ["A", "B"]) {
+                        const f = feat[`route_${r}`];
+                        if (!f) continue;
+                        const th = f.threat || {};
+                        const eff = f.efficiency || {};
+                        const reached = f.reached ? "✅도착" : "❌미도착";
+                        const bc = th.by_class || {};
+                        const bcStr = Object.keys(bc).length ? Object.entries(bc).map(([k, v]) => `${k}${v}`).join("/") : "0";
+                        const near = (th.nearest_dist_m === null || th.nearest_dist_m === undefined) ? "—" : `${numberText(th.nearest_dist_m, 0)}m`;
+                        html += `<div style="font-size:12px;margin:2px 0;"><b>route_${r}</b> ${reached} · ${numberText(eff.distance_m, 0)}m · 확정위협 ${safe(th.confirmed_count, 0)}(${escapeHtml(bcStr)}) · 최근접 ${near}</div>`;
+                    }
+                    html += '</div>';
+                }
+
+                // 블록 2: 수식 vs LLM 한눈
+                html += '<div style="margin-bottom:10px;"><div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">수식 vs LLM</div>';
+                html += `<div style="font-size:12px;margin-bottom:6px;">선택 — 수식 <b>${safe(w.formula)}</b> / LLM <b>${safe(w.llm)}</b> ${riskOk(w.agreement)} · 순위일치 ${riskOk(cmp.rank_agreement)}</div>`;
+                for (const r of ["A", "B"]) {
+                    const pr = per[r];
+                    if (!pr) continue;
+                    const f = pr.formula || {};
+                    const l = pr.llm || {};
+                    const rt = (typeof f.risk_total === "number") ? f.risk_total : null;
+                    const fcol = riskBandColor(f.band);
+                    const lcol = riskBandColor(l.risk_level);
+                    const gw = rt === null ? 0 : Math.round(rt * 100);
+                    const exp = (feat && feat[`route_${r}`] && feat[`route_${r}`].exposure) || {};
+                    html += `<div style="margin:4px 0 8px 0;">
+                        <div style="font-size:12px;"><b>route_${r}</b> ${riskOk(pr.band_match)}</div>
+                        <div style="height:8px;background:#0c2417;border-radius:3px;overflow:hidden;margin:3px 0;"><div style="height:100%;width:${gw}%;background:${fcol};"></div></div>
+                        <div style="font-size:11px;">수식 ${rt === null ? "—" : rt.toFixed(3)} <span style="color:${fcol}">[${(f.band || "—").toUpperCase()}]</span> · LLM <span style="color:${lcol}">[${(l.risk_level || "—").toUpperCase()}]</span></div>
+                        ${renderExposureBars(exp.profile, fcol)}
+                    </div>`;
+                }
+                html += '</div>';
+
+                // 블록 3: 근거/발산
+                const n = cmp.narrative || {};
+                html += '<div><div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">판단 근거</div>';
+                html += `<div style="font-size:11px;margin:2px 0;"><b>수식</b>: ${escapeHtml(safe(n.formula_reason))}</div>`;
+                html += `<div style="font-size:11px;margin:2px 0;"><b>LLM</b>: ${escapeHtml(safe(n.llm_decision_reason || n.llm_summary))}</div>`;
+                if (Array.isArray(cmp.divergence) && cmp.divergence.length) {
+                    const dv = cmp.divergence.map((d) => `route_${d.route} 수식 ${d.formula_band}↔LLM ${d.llm_band}`).join(", ");
+                    html += `<div style="font-size:11px;margin:4px 0;color:#ffd34d;">발산: ${escapeHtml(dv)}</div>`;
+                }
+                html += '</div>';
+                return html;
+            }
             function updateLeftPanel(state) {
                 const latest = latestBridge(state);
                 const yolo = state?.yolo || {};
@@ -1445,6 +1522,10 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 const sensor = state?.sensor || {};
                 if (activeTab === "route") {
                     byId("leftContent").innerHTML = renderRouteComparison(state);
+                    return;
+                }
+                if (activeTab === "risk") {
+                    byId("leftContent").innerHTML = renderRiskPanel(state);
                     return;
                 }
                 if (activeTab === "ai") {

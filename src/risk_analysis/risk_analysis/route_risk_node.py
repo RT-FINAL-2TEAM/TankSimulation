@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from pathlib import Path
 
@@ -16,8 +17,14 @@ class RouteRiskNode(Node):
 
         self.declare_parameter("input_path", "recon_reports/route_comparison.json")
         self.declare_parameter("output_path", "recon_reports/route_risk_result.json")
-        self.declare_parameter("ollama_url", "http://localhost:11434/api/generate")
-        self.declare_parameter("model_name", "qwen3:0.6b")
+        self.declare_parameter(
+            "ollama_url",
+            os.environ.get("TANK_OLLAMA_URL", "http://localhost:11434/api/generate"),
+        )
+        self.declare_parameter(
+            "model_name",
+            os.environ.get("TANK_LLM_MODEL", os.environ.get("TANK_OLLAMA_MODEL", "qwen3:0.6b")),
+        )
         self.declare_parameter("mode", "file_once")
 
         self.input_path = Path(
