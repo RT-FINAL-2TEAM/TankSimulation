@@ -3,8 +3,9 @@
 ROS2 노드: LiDAR 포인트 -> 포탑 카메라 이미지 투영 오버레이.
 
 이 노드는 캘리브레이션 시각화용이며, path_planning/local_path_node.py와 동일한 투영
-수식을 쓴다. 그래서 수동으로 튜닝한 캘리브레이션이 RViz 오버레이와 실제 YOLO-LiDAR
-융합에 모두 반영된다.
+수식을 쓴다. ``config_file``로 전달된 path_planning/config/fusion_mapping.yaml의
+``projection.params``를 읽기 때문에, 오버레이와 실제 YOLO-LiDAR 융합은 같은
+캘리브레이션 값을 사용한다.
 
 구독(Subscribe):
   /tank/camera/image_compressed     sensor_msgs/CompressedImage
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 import json
 import threading
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import cv2
@@ -30,6 +32,11 @@ from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage, Image, PointCloud2
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import String
+
+try:
+    import yaml
+except Exception:  # pragma: no cover - deployment fallback
+    yaml = None
 
 from tank_visual_perception.projection import (
     DEFAULT_PROJECTION_PARAMS,
@@ -85,8 +92,19 @@ class LidarCameraOverlayNode(Node):
         self.declare_parameter("out_image_topic", "/tank/camera/lidar_projection/image")
         self.declare_parameter("out_compressed_topic", "/tank/camera/lidar_projection/compressed")
         self.declare_parameter("out_status_topic", "/tank/camera/lidar_projection/status")
-        for name, value in DEFAULT_PROJECTION_PARAMS.items():
-            self.declare_parameter(name, value)
+
+        # Both launch files pass the exact same custom YAML path to this node
+        # and local_path_node. Direct ROS parameter values still override YAML.
+        self.declare_parameter("config_file", "")
+        config_raw = str(self.get_parameter("config_file").value).strip()
+        self.config_file = Path(config_raw).expanduser() if config_raw else None
+        yaml_projection_params = self._load_projection_params(self.config_file)
+        self.projection_config_loaded = bool(yaml_projection_params)
+
+        # Declare after loading YAML so the YAML values become defaults while
+        # explicit launch/CLI parameter overrides retain higher priority.
+        for name, default_value in DEFAULT_PROJECTION_PARAMS.items():
+            self.declare_parameter(name, yaml_projection_params.get(name, default_value))
         self.declare_parameter("use_only_detected", True)
         self.declare_parameter("min_distance", 1.0)
         self.declare_parameter("max_distance", 35.0)
@@ -126,7 +144,48 @@ class LidarCameraOverlayNode(Node):
         self.get_logger().info(f"subscribe info : {self.info_topic}")
         self.get_logger().info(f"subscribe lidar: {self.lidar_pc2_topic}")
         self.get_logger().info(f"publish image  : {self.out_image_topic}")
-        self.get_logger().info(f"projection params: {self.params}")
+        if self.config_file is not None and self.projection_config_loaded:
+            self.get_logger().info(f"projection config: {self.config_file}")
+        elif self.config_file is not None:
+            self.get_logger().warn(f"projection config unavailable; using defaults: {self.config_file}")
+        else:
+            self.get_logger().warn("projection config_file not set; using built-in defaults")
+        self.get_logger().info(f"effective projection params: {self.params}")
+
+    def _load_projection_params(self, config_file: Optional[Path]) -> Dict[str, float]:
+        """Read projection.params from the shared custom fusion YAML.
+
+        This is intentionally not a ROS parameter YAML parser. The project
+        already uses a custom nested YAML schema in local_path_node, so the
+        overlay reads the same section directly.
+        """
+        if config_file is None:
+            return {}
+        if yaml is None:
+            self.get_logger().warn("PyYAML unavailable; overlay cannot read config_file")
+            return {}
+        if not config_file.exists():
+            self.get_logger().warn(f"projection config not found: {config_file}")
+            return {}
+        try:
+            with config_file.open("r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+        except Exception as exc:
+            self.get_logger().warn(f"failed to load projection config {config_file}: {exc}")
+            return {}
+
+        if not isinstance(data, dict):
+            self.get_logger().warn(f"projection config is not a mapping: {config_file}")
+            return {}
+        projection = data.get("projection")
+        params = projection.get("params") if isinstance(projection, dict) else None
+        if not isinstance(params, dict):
+            self.get_logger().warn(f"projection.params not found in: {config_file}")
+            return {}
+        return {
+            name: to_float(params.get(name), default_value)
+            for name, default_value in DEFAULT_PROJECTION_PARAMS.items()
+        }
 
     def on_info(self, msg: String) -> None:
         try:
@@ -186,12 +245,19 @@ class LidarCameraOverlayNode(Node):
         if lidar_points.size == 0:
             return overlay, 0, 0, 0
 
-        if isinstance(camera_pos, dict):
-            cam_raw_x = float(camera_pos.get("x", 0.0))
-            cam_raw_z = float(camera_pos.get("z", 0.0))
-        else:
-            cam_raw_x = float(getattr(camera_pos, "x", 0.0))
-            cam_raw_z = float(getattr(camera_pos, "z", 0.0))
+        # compute_camera_pose() returns an np.ndarray in Unity raw order
+        # [x, y, z]. Do not use getattr(.x/.z): NumPy arrays have no such
+        # fields and that silently turns the distance-filter origin into (0, 0),
+        # causing every real tank-local LiDAR point to be discarded.
+        try:
+            camera_pos_raw = np.asarray(camera_pos, dtype=np.float64).reshape(-1)
+            if camera_pos_raw.size < 3:
+                raise ValueError(f"camera_pos has {camera_pos_raw.size} values")
+            cam_raw_x = float(camera_pos_raw[0])
+            cam_raw_z = float(camera_pos_raw[2])
+        except Exception as exc:
+            cv2.putText(overlay, f"Invalid camera pose: {exc}", (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+            return overlay, 0, 0, int(lidar_points.shape[0])
 
         projected_count = 0
         used_count = 0
@@ -240,7 +306,9 @@ class LidarCameraOverlayNode(Node):
                 "used_count": used_count,
                 "total_count": total_count,
                 "params": self.params,
-                "method": "shared_projection_math",
+                "config_file": str(self.config_file) if self.config_file is not None else None,
+                "projection_config_loaded": self.projection_config_loaded,
+                "method": "shared_projection_math_and_fusion_yaml",
             },
             ensure_ascii=False,
         )

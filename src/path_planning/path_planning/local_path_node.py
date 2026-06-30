@@ -76,6 +76,7 @@ from path_planning.config import (
     TOPIC_RECON_RAW,
 )
 from tank_visual_perception.projection import (
+    camera_pose_source,
     compute_camera_pose,
     extract_info_payload,
     map_to_raw_xyz,
@@ -184,6 +185,24 @@ class LocalPathNode(Node):
         self.cluster_bbox_margin_px = float(self._cfg(["projection", "cluster_bbox_margin_px"], 18.0))
         self.min_cluster_points = int(self._cfg(["projection", "min_cluster_points"], 2))
         self.use_only_detected_projection_points = bool(self._cfg(["projection", "use_only_detected_points"], True))
+
+        # Cluster centroid 하나만 bbox와 비교하면, 넓거나 비대칭인 물체에서는
+        # centroid가 화면 밖으로 나가도 실제 LiDAR 표면점은 YOLO bbox에 남는다.
+        # DBSCAN 노드가 보내는 points_map 샘플을 함께 투영하여 다수 점 근거로 매칭한다.
+        self.cluster_projected_point_matching_enabled = bool(
+            self._cfg(["projection", "cluster_projected_point_matching_enabled"], True)
+        )
+        self.cluster_projected_min_points_in_detection = max(
+            1,
+            int(self._cfg(["projection", "cluster_projected_min_points_in_detection"], 1)),
+        )
+        self.cluster_projected_bbox_fallback_enabled = bool(
+            self._cfg(["projection", "cluster_projected_bbox_fallback_enabled"], True)
+        )
+        self.cluster_projected_bbox_min_overlap_px2 = max(
+            0.0,
+            float(self._cfg(["projection", "cluster_projected_bbox_min_overlap_px2"], 16.0)),
+        )
 
         self.add_only_unmatched = bool(self._cfg(["static_matching", "add_only_unmatched_to_recon"], True))
         self.static_match_radius_m = float(self._cfg(["static_matching", "static_match_radius_m"], 4.0))
@@ -738,6 +757,12 @@ class LocalPathNode(Node):
             "image_h": float(image_h),
             "projection_enabled": bool(self.use_projection_fusion),
             "projection_context_ok": projection_context is not None,
+            "projection_pose_source": projection_context.get("pose_source") if projection_context else None,
+            "camera_pose_deg": ({
+                "yaw": float(projection_context["camera_yaw"]),
+                "pitch": float(projection_context["camera_pitch"]),
+                "roll": float(projection_context["camera_roll"]),
+            } if projection_context else None),
             "projected_cluster_count": len(projected_clusters),
             "semantic_requires_cluster": self.semantic_requires_cluster,
             "prefer_clusters": self.prefer_clusters,
@@ -914,6 +939,7 @@ class LocalPathNode(Node):
                 "camera_yaw": cam_yaw,
                 "camera_pitch": cam_pitch,
                 "camera_roll": cam_roll,
+                "pose_source": camera_pose_source(self.latest_info),
                 "image_w": image_w,
                 "image_h": image_h,
                 "projection_params": params,
@@ -955,13 +981,59 @@ class LocalPathNode(Node):
             out.append({"x": x, "y": y, "z": z, "u": u, "v": v, "depth": depth, "distance_m": distance, "raw": map_pos})
         return out
 
+    @staticmethod
+    def _bbox_intersection_area(
+        a: Dict[str, float],
+        b: Tuple[float, float, float, float],
+    ) -> float:
+        """Return intersection area for two image-space xyxy boxes."""
+        ax1, ay1 = float(a.get("x1", 0.0)), float(a.get("y1", 0.0))
+        ax2, ay2 = float(a.get("x2", 0.0)), float(a.get("y2", 0.0))
+        bx1, by1, bx2, by2 = [float(v) for v in b]
+        w = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+        h = max(0.0, min(ay2, by2) - max(ay1, by1))
+        return w * h
+
+    @staticmethod
+    def _expanded_image_bbox(
+        bbox: List[float],
+        margin: float,
+        image_w: float,
+        image_h: float,
+    ) -> Tuple[float, float, float, float]:
+        x1, y1, x2, y2 = [float(v) for v in bbox[:4]]
+        m = max(0.0, float(margin))
+        return (
+            max(0.0, x1 - m),
+            max(0.0, y1 - m),
+            min(float(image_w) - 1.0, x2 + m),
+            min(float(image_h) - 1.0, y2 + m),
+        )
+
+    @staticmethod
+    def _median_uv(points: List[Dict[str, float]]) -> Tuple[float, float]:
+        if not points:
+            return 0.0, 0.0
+        us = np.asarray([float(p["u"]) for p in points], dtype=np.float64)
+        vs = np.asarray([float(p["v"]) for p in points], dtype=np.float64)
+        return float(np.median(us)), float(np.median(vs))
+
     def _project_clusters(self, ctx: Dict[str, Any], px: float, py: float, image_w: int, image_h: int) -> List[Dict[str, Any]]:
+        """Project DBSCAN clusters using centroid + sampled member points.
+
+        The DBSCAN publisher now sends a capped ``points_map`` sample for each
+        cluster.  A cluster remains usable when its centroid is outside the
+        image but one or more actual member points are inside it.  This avoids
+        rejecting a wide/partial rock merely because its 3-D centroid is not
+        visible to the camera.
+        """
         payload = self.latest_clusters_payload
         if not isinstance(payload, dict):
             return []
         clusters = payload.get("clusters", [])
         if not isinstance(clusters, list):
             return []
+
         out: List[Dict[str, Any]] = []
         for c in clusters:
             if not isinstance(c, dict):
@@ -969,12 +1041,23 @@ class LocalPathNode(Node):
             count = int(self._as_float(c.get("count"), 0.0))
             if count < self.min_cluster_points:
                 continue
+
             centroid = c.get("centroid") if isinstance(c.get("centroid"), dict) else None
             if centroid is None:
                 continue
-            map_pos = {"x": self._as_float(centroid.get("x")), "y": self._as_float(centroid.get("y")), "z": self._as_float(centroid.get("z"))}
+            map_pos = {
+                "x": self._as_float(centroid.get("x")),
+                "y": self._as_float(centroid.get("y")),
+                "z": self._as_float(centroid.get("z")),
+            }
+            distance = math.hypot(map_pos["x"] - px, map_pos["y"] - py)
+            if distance < self.min_fusion_range_m or distance > self.max_fusion_range_m:
+                continue
+
+            # Centroid projection is retained for compatibility and for final
+            # object-position estimation, but no longer decides visibility alone.
             raw_pos = c.get("centroid_raw") if isinstance(c.get("centroid_raw"), dict) else map_to_raw_xyz(map_pos)
-            projected = project_point(
+            centroid_projected = project_point(
                 vec3_from_dict(raw_pos),
                 ctx["camera_pos"],
                 ctx["camera_yaw"],
@@ -984,15 +1067,113 @@ class LocalPathNode(Node):
                 image_h,
                 ctx.get("projection_params", self.projection_params),
             )
-            if projected is None:
+            centroid_uv: Optional[Dict[str, float]] = None
+            if centroid_projected is not None:
+                cu, cv, cdepth = centroid_projected
+                centroid_uv = {"u": float(cu), "v": float(cv), "depth": float(cdepth)}
+
+            # Actual DBSCAN member-point samples are preferred over synthetic
+            # 3-D bbox corners.  They describe the observed LiDAR surface.
+            sample_map = c.get("points_map", [])
+            projected_samples: List[Dict[str, float]] = []
+            if self.cluster_projected_point_matching_enabled and isinstance(sample_map, list):
+                for point in sample_map:
+                    if not isinstance(point, dict):
+                        continue
+                    raw_point = map_to_raw_xyz(point)
+                    projected = project_point(
+                        vec3_from_dict(raw_point),
+                        ctx["camera_pos"],
+                        ctx["camera_yaw"],
+                        ctx["camera_pitch"],
+                        ctx["camera_roll"],
+                        image_w,
+                        image_h,
+                        ctx.get("projection_params", self.projection_params),
+                    )
+                    if projected is None:
+                        continue
+                    u, v, depth = projected
+                    projected_samples.append({"u": float(u), "v": float(v), "depth": float(depth)})
+
+            # Legacy fallback: old cluster payloads do not have points_map.  In
+            # that case project the 3-D cluster box corners to obtain a coarse
+            # image-space footprint instead of dropping back to centroid only.
+            if not projected_samples:
+                bbox3d = c.get("bbox") if isinstance(c.get("bbox"), dict) else None
+                if isinstance(bbox3d, dict):
+                    try:
+                        xs = [float(bbox3d["x_min"]), float(bbox3d["x_max"])]
+                        ys = [float(bbox3d["y_min"]), float(bbox3d["y_max"])]
+                        zs = [float(bbox3d["z_min"]), float(bbox3d["z_max"])]
+                    except Exception:
+                        xs = ys = zs = []
+                    for x in xs:
+                        for y in ys:
+                            for z in zs:
+                                projected = project_point(
+                                    vec3_from_dict(map_to_raw_xyz({"x": x, "y": y, "z": z})),
+                                    ctx["camera_pos"],
+                                    ctx["camera_yaw"],
+                                    ctx["camera_pitch"],
+                                    ctx["camera_roll"],
+                                    image_w,
+                                    image_h,
+                                    ctx.get("projection_params", self.projection_params),
+                                )
+                                if projected is None:
+                                    continue
+                                u, v, depth = projected
+                                projected_samples.append({"u": float(u), "v": float(v), "depth": float(depth)})
+
+            visible_samples = [
+                p for p in projected_samples
+                if 0.0 <= p["u"] < float(image_w) and 0.0 <= p["v"] < float(image_h)
+            ]
+
+            projected_bbox_2d: Optional[Dict[str, float]] = None
+            if projected_samples:
+                us = [p["u"] for p in projected_samples]
+                vs = [p["v"] for p in projected_samples]
+                projected_bbox_2d = {
+                    "x1": float(min(us)),
+                    "y1": float(min(vs)),
+                    "x2": float(max(us)),
+                    "y2": float(max(vs)),
+                }
+
+            centroid_visible = bool(
+                centroid_uv is not None
+                and 0.0 <= centroid_uv["u"] < float(image_w)
+                and 0.0 <= centroid_uv["v"] < float(image_h)
+            )
+            if not centroid_visible and not visible_samples:
                 continue
-            u, v, depth = projected
-            if not (0 <= u < image_w and 0 <= v < image_h):
-                continue
-            distance = math.hypot(map_pos["x"] - px, map_pos["y"] - py)
-            if distance < self.min_fusion_range_m or distance > self.max_fusion_range_m:
-                continue
-            out.append({"id": int(self._as_float(c.get("id"), -1)), "count": count, "centroid": map_pos, "bbox": c.get("bbox"), "u": u, "v": v, "depth": depth, "distance_m": distance, "raw": c})
+
+            # ``u/v`` are a stable display/debug point: centroid when visible,
+            # otherwise median of visible actual member points.
+            if centroid_visible and centroid_uv is not None:
+                u, v, depth = centroid_uv["u"], centroid_uv["v"], centroid_uv["depth"]
+            else:
+                u, v = self._median_uv(visible_samples)
+                depth = float(np.median([p["depth"] for p in visible_samples]))
+
+            out.append({
+                "id": int(self._as_float(c.get("id"), -1)),
+                "count": count,
+                "centroid": map_pos,
+                "bbox": c.get("bbox"),
+                "u": float(u),
+                "v": float(v),
+                "depth": float(depth),
+                "distance_m": distance,
+                "raw": c,
+                "centroid_uv": centroid_uv,
+                "centroid_visible": centroid_visible,
+                "projected_samples": projected_samples,
+                "visible_sample_count": len(visible_samples),
+                "projected_bbox_2d": projected_bbox_2d,
+            })
         return out
 
     def _normalize_deg_180(self, deg: float) -> float:
@@ -1020,6 +1201,43 @@ class LocalPathNode(Node):
         """
         if not parsed_detections or self.latest_info is None:
             return {}
+
+        pose_source = camera_pose_source(self.latest_info)
+        if pose_source == "lidarRotation":
+            # lidarRotation is the active sensor pose, so changing legacy body
+            # gains cannot affect projection. Keep the pose source explicit, but
+            # still emit the active-pose alignment result so calibration can be
+            # diagnosed from /tank/debug/fusion/status.
+            ctx = self._build_projection_context(image_w, image_h)
+            active_clusters = (
+                self._project_clusters(ctx, px, py, image_w, image_h)
+                if ctx is not None else []
+            )
+            active_best = self._best_projection_alignment(
+                parsed_detections,
+                active_clusters,
+                image_w,
+                image_h,
+            )
+            return {
+                "projection_tuning_debug": {
+                    "pose_source": pose_source,
+                    "body_gains_active": False,
+                    "note": "lidarRotation pose is active; body gain +/- tuning is skipped",
+                    "camera_pose_deg": ({
+                        "yaw": float(ctx["camera_yaw"]),
+                        "pitch": float(ctx["camera_pitch"]),
+                        "roll": float(ctx["camera_roll"]),
+                    } if ctx else None),
+                    # The nearest centroid-to-bbox pairing under the exact active
+                    # lidarRotation pose. It does not alter fusion selection.
+                    "current_best": active_best,
+                    "active_projected_cluster_count": len(active_clusters),
+                    "cluster_bbox_margin_px": float(self.cluster_bbox_margin_px),
+                    "cluster_match_max_center_norm": float(self.cluster_match_max_center_norm),
+                    "cluster_match_max_score": float(self.cluster_match_max_score),
+                }
+            }
 
         current_params = dict(self.projection_params)
         current_pitch_gain = self._as_float(current_params.get("body_pitch_gain"), 0.0)
@@ -1111,6 +1329,89 @@ class LocalPathNode(Node):
             }
         }
 
+    def _cluster_detection_geometry(
+        self,
+        parsed: ParsedDetection,
+        cluster: Dict[str, Any],
+        image_w: float,
+        image_h: float,
+    ) -> Optional[Dict[str, Any]]:
+        """Build detection-specific 2-D evidence for a projected cluster.
+
+        Priority is actual projected member-point hits.  Centroid-only remains
+        a compatibility path, while 2-D box overlap is a last fallback for old
+        cluster messages that lack sampled points.
+        """
+        bbox = parsed.bbox
+        margin = float(self.cluster_bbox_margin_px)
+        expanded = self._expanded_image_bbox(bbox, margin, image_w, image_h)
+        samples = cluster.get("projected_samples", [])
+        samples = samples if isinstance(samples, list) else []
+        hit_samples = [
+            p for p in samples
+            if isinstance(p, dict)
+            and point_inside_bbox(float(p.get("u", 0.0)), float(p.get("v", 0.0)), bbox, margin, image_w, image_h)
+        ]
+        required_hits = min(
+            self.cluster_projected_min_points_in_detection,
+            max(1, len(samples)),
+        )
+
+        centroid_uv = cluster.get("centroid_uv")
+        centroid_inside = bool(
+            isinstance(centroid_uv, dict)
+            and point_inside_bbox(
+                float(centroid_uv.get("u", 0.0)),
+                float(centroid_uv.get("v", 0.0)),
+                bbox,
+                margin,
+                image_w,
+                image_h,
+            )
+        )
+
+        evidence = None
+        if hit_samples and len(hit_samples) >= required_hits:
+            ru, rv = self._median_uv(hit_samples)
+            evidence = "sample_points"
+        elif centroid_inside and isinstance(centroid_uv, dict):
+            ru = float(centroid_uv["u"])
+            rv = float(centroid_uv["v"])
+            evidence = "centroid"
+        else:
+            # Do not allow projected-bbox overlap to override real sampled
+            # points that say the cluster misses the detection.  This fallback
+            # exists only for older publishers without points_map.
+            bbox2d = cluster.get("projected_bbox_2d")
+            if (
+                self.cluster_projected_bbox_fallback_enabled
+                and not samples
+                and isinstance(bbox2d, dict)
+            ):
+                overlap = self._bbox_intersection_area(bbox2d, expanded)
+                if overlap >= self.cluster_projected_bbox_min_overlap_px2:
+                    ix1 = max(float(bbox2d["x1"]), expanded[0])
+                    iy1 = max(float(bbox2d["y1"]), expanded[1])
+                    ix2 = min(float(bbox2d["x2"]), expanded[2])
+                    iy2 = min(float(bbox2d["y2"]), expanded[3])
+                    ru, rv = 0.5 * (ix1 + ix2), 0.5 * (iy1 + iy2)
+                    evidence = "projected_bbox_fallback"
+                else:
+                    return None
+            else:
+                return None
+
+        return {
+            "u": float(ru),
+            "v": float(rv),
+            "evidence": evidence,
+            "sample_hit_count": int(len(hit_samples)),
+            "sample_point_count": int(len(samples)),
+            "required_sample_hits": int(required_hits),
+            "centroid_inside_bbox": bool(centroid_inside),
+            "projected_bbox_2d": cluster.get("projected_bbox_2d"),
+        }
+
     def _best_projection_alignment(
         self,
         parsed_detections: List[ParsedDetection],
@@ -1127,24 +1428,31 @@ class LocalPathNode(Node):
             half_w = max(1.0, 0.5 * bw)
             half_h = max(1.0, 0.5 * bh)
             for cluster in projected_clusters:
-                u = self._as_float(cluster.get("u"), 0.0)
-                v = self._as_float(cluster.get("v"), 0.0)
+                geometry = self._cluster_detection_geometry(parsed, cluster, float(image_w), float(image_h))
+                if geometry is None:
+                    # Debug still needs a nearest cluster when no candidate is
+                    # valid.  Use its display representative, not centroid only.
+                    u = self._as_float(cluster.get("u"), 0.0)
+                    v = self._as_float(cluster.get("v"), 0.0)
+                    evidence = "no_overlap"
+                    sample_hit_count = 0
+                    sample_point_count = len(cluster.get("projected_samples", []) or [])
+                    inside_margin = False
+                    projected_bbox_2d = cluster.get("projected_bbox_2d")
+                else:
+                    u = float(geometry["u"])
+                    v = float(geometry["v"])
+                    evidence = str(geometry["evidence"])
+                    sample_hit_count = int(geometry["sample_hit_count"])
+                    sample_point_count = int(geometry["sample_point_count"])
+                    inside_margin = True
+                    projected_bbox_2d = geometry.get("projected_bbox_2d")
                 du = u - ax
                 dv = v - ay
                 dx_norm = abs(du) / half_w
                 dy_norm = abs(dv) / half_h
                 center_norm = math.sqrt(dx_norm * dx_norm + dy_norm * dy_norm)
                 dist_px = math.hypot(du, dv)
-                inside_margin = point_inside_bbox(
-                    u,
-                    v,
-                    parsed.bbox,
-                    self.cluster_bbox_margin_px,
-                    float(image_w),
-                    float(image_h),
-                )
-                # Match the actual candidate logic as closely as possible: normalized
-                # alignment is primary; pixel distance is only a tie breaker.
                 score = center_norm + 1e-6 * dist_px
                 if score < best_score:
                     x1, y1, x2, y2 = [float(x) for x in parsed.bbox[:4]]
@@ -1164,6 +1472,10 @@ class LocalPathNode(Node):
                         "dx_norm": float(dx_norm),
                         "dy_norm": float(dy_norm),
                         "inside_bbox_with_margin": bool(inside_margin),
+                        "match_evidence": evidence,
+                        "sample_hit_count": int(sample_hit_count),
+                        "sample_point_count": int(sample_point_count),
+                        "projected_bbox_2d": projected_bbox_2d,
                         "distance_m": float(cluster.get("distance_m", 0.0)),
                     }
         return best
@@ -1186,22 +1498,19 @@ class LocalPathNode(Node):
     ) -> Optional[Dict[str, Any]]:
         bbox = parsed.bbox
         class_name = parsed.class_name
-        margin = self.cluster_bbox_margin_px
-        if class_name == "person":
-            # person bbox는 좁고 보통 카메라 이미지 하단에 닿는다.
-            # x 정렬은 의미 있게 유지하면서 수직 여유를 추가로 허용한다.
-            margin = max(margin, self.cluster_bbox_margin_px)
-        if not point_inside_bbox(cluster["u"], cluster["v"], bbox, margin, image_w, image_h):
+        geometry = self._cluster_detection_geometry(parsed, cluster, image_w, image_h)
+        if geometry is None:
             return None
 
+        u = float(geometry["u"])
+        v = float(geometry["v"])
         ax, ay, bw, bh = self._bbox_anchor_uv(bbox, class_name)
         half_w = max(1.0, 0.5 * bw)
         half_h = max(1.0, 0.5 * bh)
-        dx_norm = abs(float(cluster["u"]) - ax) / half_w
-        dy_norm = abs(float(cluster["v"]) - ay) / half_h
+        dx_norm = abs(u - ax) / half_w
+        dy_norm = abs(v - ay) / half_h
 
         if class_name == "person":
-            # person의 경우 LiDAR가 다리/발에 자주 맞으므로 y가 x보다 더 많이 어긋날 수 있다.
             if dx_norm > self.cluster_match_person_x_limit or dy_norm > self.cluster_match_person_y_limit:
                 return None
             center_norm = math.sqrt(dx_norm * dx_norm + 0.35 * dy_norm * dy_norm)
@@ -1226,6 +1535,12 @@ class LocalPathNode(Node):
             "dy_norm": float(dy_norm),
             "bbox_area_norm": float(bbox_area_norm),
             "anchor": {"u": float(ax), "v": float(ay)},
+            "match_evidence": str(geometry["evidence"]),
+            "sample_hit_count": int(geometry["sample_hit_count"]),
+            "sample_point_count": int(geometry["sample_point_count"]),
+            "required_sample_hits": int(geometry["required_sample_hits"]),
+            "projected_bbox_2d": geometry.get("projected_bbox_2d"),
+            "projection_uv": {"u": float(u), "v": float(v)},
             "cluster": cluster,
             "parsed": parsed,
         }
@@ -1295,6 +1610,10 @@ class LocalPathNode(Node):
             "cluster_candidate_classes": per_class_candidates,
             "cluster_best_score": float(candidates[0]["score"]) if candidates else None,
             "cluster_best_center_norm": float(candidates[0]["center_norm"]) if candidates else None,
+            "cluster_best_match_evidence": candidates[0].get("match_evidence") if candidates else None,
+            "cluster_best_sample_hit_count": int(candidates[0].get("sample_hit_count", 0)) if candidates else 0,
+            "cluster_best_sample_point_count": int(candidates[0].get("sample_point_count", 0)) if candidates else 0,
+            "cluster_best_projected_bbox_2d": candidates[0].get("projected_bbox_2d") if candidates else None,
         }
 
         fused: List[Dict[str, Any]] = []
@@ -1318,8 +1637,12 @@ class LocalPathNode(Node):
                 used_lidar_points=int(cluster.get("count", 0)),
                 extra={
                     "cluster_id": int(cluster.get("id", -1)),
-                    "projection_uv": {"u": float(cluster.get("u", 0.0)), "v": float(cluster.get("v", 0.0))},
+                    "projection_uv": cand.get("projection_uv", {"u": float(cluster.get("u", 0.0)), "v": float(cluster.get("v", 0.0))}),
                     "cluster_bbox": cluster.get("bbox"),
+                    "cluster_projected_bbox_2d": cand.get("projected_bbox_2d"),
+                    "cluster_match_evidence": cand.get("match_evidence", "centroid"),
+                    "cluster_sample_hit_count": int(cand.get("sample_hit_count", 0)),
+                    "cluster_sample_point_count": int(cand.get("sample_point_count", 0)),
                     "lidar_match_type": "dbscan_cluster",
                     "semantic_confirmed": True,
                     "discovered_eligible": True,
@@ -1340,15 +1663,18 @@ class LocalPathNode(Node):
         self, class_name: str, confidence: float, bbox: List[float], clusters: List[Dict[str, Any]], assigned_ids: set[int],
         px: float, py: float, pz: float, camera_heading: float, image_w: float, image_h: float,
     ) -> Optional[Dict[str, Any]]:
-        candidates = [
-            c for c in clusters
-            if c["id"] not in assigned_ids
-            and point_inside_bbox(c["u"], c["v"], bbox, self.cluster_bbox_margin_px, image_w, image_h)
-        ]
+        candidates = []
+        parsed = ParsedDetection(class_name=class_name, confidence=confidence, bbox=bbox)
+        for c in clusters:
+            if c["id"] in assigned_ids:
+                continue
+            geometry = self._cluster_detection_geometry(parsed, c, image_w, image_h)
+            if geometry is not None:
+                candidates.append((c, geometry))
         if not candidates:
             return None
-        candidates.sort(key=lambda c: (c["distance_m"], -c["count"]))
-        best = candidates[0]
+        candidates.sort(key=lambda item: (item[0]["distance_m"], -item[0]["count"]))
+        best, best_geometry = candidates[0]
         if best["id"] >= 0:
             assigned_ids.add(best["id"])
         pos = best["centroid"]
@@ -1357,8 +1683,12 @@ class LocalPathNode(Node):
             source="yolo_lidar_projection_cluster_fusion", matched_lidar_points=int(best["count"]),
             used_lidar_points=int(best["count"]), extra={
                 "cluster_id": best["id"],
-                "projection_uv": {"u": best["u"], "v": best["v"]},
+                "projection_uv": {"u": best_geometry["u"], "v": best_geometry["v"]},
                 "cluster_bbox": best.get("bbox"),
+                "cluster_projected_bbox_2d": best_geometry.get("projected_bbox_2d"),
+                "cluster_match_evidence": best_geometry.get("evidence", "centroid"),
+                "cluster_sample_hit_count": int(best_geometry.get("sample_hit_count", 0)),
+                "cluster_sample_point_count": int(best_geometry.get("sample_point_count", 0)),
                 "lidar_match_type": "dbscan_cluster",
                 "semantic_confirmed": True,
                 "discovered_eligible": True,

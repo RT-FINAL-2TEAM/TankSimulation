@@ -28,6 +28,8 @@ fusion:
   max_sync_diff_sec: 0.45
   drop_on_sync_mismatch: false
 projection:
+  # Camera pose uses lidarRotation (x=pitch, y=yaw, z=roll) whenever supplied.
+  # body_*_gain remains only as a fallback for old payloads without lidarRotation.
   enabled: true
   prefer_dbscan_clusters: true
   bbox_margin_px: 16.0
@@ -35,11 +37,17 @@ projection:
   min_projected_lidar_points: 2
   min_cluster_points: 2
   use_only_detected_points: true
+  # DBSCAN centroid만이 아니라 실제 cluster point sample을 투영해 YOLO bbox와 겹침을 판정한다.
+  cluster_projected_point_matching_enabled: true
+  cluster_projected_min_points_in_detection: 1
+  # points_map이 없는 구버전 cluster payload용 안전한 2-D bbox fallback.
+  cluster_projected_bbox_fallback_enabled: true
+  cluster_projected_bbox_min_overlap_px2: 16.0
   params:
     tx: 0.28
     ty: 0.02
     tz: 11.8
-    yaw_offset: -0.9
+    yaw_offset: 1.1
     pitch_offset: 1.5
     roll_offset: -0.3
     hfov: 86.0

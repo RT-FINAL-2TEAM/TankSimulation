@@ -1,0 +1,356 @@
+{
+  "terrainIndex": 5,
+  "map_role": "discovered_runtime_objects",
+  "frame_id": "tank_map",
+  "coordinate_policy": "saved position uses Unity raw convention: x=map.x, y=map.z, z=map.y",
+  "created_wall": 1782713696.706788,
+  "object_count": 10,
+  "candidate_count": 10,
+  "confirmed_count": 10,
+  "save_confirmed_only": true,
+  "obstacles": [
+    {
+      "prefabName": "detected_rock_0001",
+      "position": {
+        "x": 96.23486403084458,
+        "y": 11.619960883715725,
+        "z": 34.54440449389797
+      },
+      "rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "metadata": {
+        "object_id": "detected_rock_0001",
+        "class_name": "rock",
+        "map_x": 96.23486403084458,
+        "map_y": 34.54440449389797,
+        "map_z": 11.619960883715725,
+        "distance_m": 19.535504693691536,
+        "confidence": 0.96533203125,
+        "observation_count": 8,
+        "first_seen_wall": 1782713602.9949167,
+        "last_seen_wall": 1782713605.000231,
+        "source": "yolo_lidar_projection_cluster_fusion",
+        "track_id": null,
+        "class_fixed_id": 3,
+        "class_votes": {
+          "rock": 6.128173828125
+        },
+        "is_confirmed": true,
+        "confirmed_wall": 1782713602.9949167
+      }
+    },
+    {
+      "prefabName": "detected_car_0002",
+      "position": {
+        "x": 135.45906497279674,
+        "y": 10.856320748526988,
+        "z": 60.43239624134134
+      },
+      "rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "metadata": {
+        "object_id": "detected_car_0002",
+        "class_name": "car",
+        "map_x": 135.45906497279674,
+        "map_y": 60.43239624134134,
+        "map_z": 10.856320748526988,
+        "distance_m": 15.595230285230349,
+        "confidence": 0.9775390625,
+        "observation_count": 22,
+        "first_seen_wall": 1782713619.7975583,
+        "last_seen_wall": 1782713623.9996264,
+        "source": "yolo_lidar_projection_cluster_fusion",
+        "track_id": null,
+        "class_fixed_id": 0,
+        "class_votes": {
+          "car": 21.16845703125
+        },
+        "is_confirmed": true,
+        "confirmed_wall": 1782713619.7975583
+      }
+    },
+    {
+      "prefabName": "detected_house_0003",
+      "position": {
+        "x": 139.51524451091737,
+        "y": 13.92503829082155,
+        "z": 32.30323387800536
+      },
+      "rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "metadata": {
+        "object_id": "detected_house_0003",
+        "class_name": "house",
+        "map_x": 139.51524451091737,
+        "map_y": 32.30323387800536,
+        "map_z": 13.92503829082155,
+        "distance_m": 19.307546224093493,
+        "confidence": 0.9814453125,
+        "observation_count": 12,
+        "first_seen_wall": 1782713625.6001825,
+        "last_seen_wall": 1782713628.0009143,
+        "source": "yolo_lidar_projection_cluster_fusion",
+        "track_id": null,
+        "class_fixed_id": 4,
+        "class_votes": {
+          "house": 11.52734375
+        },
+        "is_confirmed": true,
+        "confirmed_wall": 1782713625.6001825
+      }
+    },
+    {
+      "prefabName": "detected_car_0004",
+      "position": {
+        "x": 165.88558244878138,
+        "y": 11.212428308012635,
+        "z": 78.73220451724616
+      },
+      "rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "metadata": {
+        "object_id": "detected_car_0004",
+        "class_name": "car",
+        "map_x": 165.88558244878138,
+        "map_y": 78.73220451724616,
+        "map_z": 11.212428308012635,
+        "distance_m": 12.541804026983959,
+        "confidence": 0.98681640625,
+        "observation_count": 13,
+        "first_seen_wall": 1782713633.8053596,
+        "last_seen_wall": 1782713637.7991164,
+        "source": "yolo_lidar_projection_cluster_fusion",
+        "track_id": null,
+        "class_fixed_id": 0,
+        "class_votes": {
+          "car": 11.63134765625,
+          "rock": 0.87255859375
+        },
+        "is_confirmed": true,
+        "confirmed_wall": 1782713633.8053596
+      }
+    },
+    {
+      "prefabName": "detected_rock_0005",
+      "position": {
+        "x": 145.25542601776124,
+        "y": 10.392986812591552,
+        "z": 81.87114791584015
+      },
+      "rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "metadata": {
+        "object_id": "detected_rock_0005",
+        "class_name": "rock",
+        "map_x": 145.25542601776124,
+        "map_y": 81.87114791584015,
+        "map_z": 10.392986812591552,
+        "distance_m": 21.672855758792537,
+        "confidence": 0.95751953125,
+        "observation_count": 5,
+        "first_seen_wall": 1782713635.004751,
+        "last_seen_wall": 1782713636.0073307,
+        "source": "yolo_lidar_projection_cluster_fusion",
+        "track_id": null,
+        "class_fixed_id": 3,
+        "class_votes": {
+          "rock": 2.645751953125
+        },
+        "is_confirmed": true,
+        "confirmed_wall": 1782713635.004751
+      }
+    },
+    {
+      "prefabName": "detected_rock_0006",
+      "position": {
+        "x": 168.83857186093212,
+        "y": 9.829568219535991,
+        "z": 102.96078251510734
+      },
+      "rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "metadata": {
+        "object_id": "detected_rock_0006",
+        "class_name": "rock",
+        "map_x": 168.83857186093212,
+        "map_y": 102.96078251510734,
+        "map_z": 9.829568219535991,
+        "distance_m": 23.84885790475947,
+        "confidence": 0.970703125,
+        "observation_count": 14,
+        "first_seen_wall": 1782713640.597864,
+        "last_seen_wall": 1782713644.1998222,
+        "source": "yolo_lidar_projection_cluster_fusion",
+        "track_id": null,
+        "class_fixed_id": 3,
+        "class_votes": {
+          "rock": 13.10107421875
+        },
+        "is_confirmed": true,
+        "confirmed_wall": 1782713640.597864
+      }
+    },
+    {
+      "prefabName": "detected_car_0007",
+      "position": {
+        "x": 161.317799294954,
+        "y": 15.484821878107045,
+        "z": 189.90270929102587
+      },
+      "rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "metadata": {
+        "object_id": "detected_car_0007",
+        "class_name": "car",
+        "map_x": 161.317799294954,
+        "map_y": 189.90270929102587,
+        "map_z": 15.484821878107045,
+        "distance_m": 16.69025338638018,
+        "confidence": 0.9736328125,
+        "observation_count": 16,
+        "first_seen_wall": 1782713662.401947,
+        "last_seen_wall": 1782713665.39947,
+        "source": "yolo_lidar_projection_cluster_fusion",
+        "track_id": null,
+        "class_fixed_id": 0,
+        "class_votes": {
+          "car": 15.4248046875
+        },
+        "is_confirmed": true,
+        "confirmed_wall": 1782713662.401947
+      }
+    },
+    {
+      "prefabName": "detected_rock_0008",
+      "position": {
+        "x": 146.26344423189332,
+        "y": 12.482009440423491,
+        "z": 216.9842913565716
+      },
+      "rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "metadata": {
+        "object_id": "detected_rock_0008",
+        "class_name": "rock",
+        "map_x": 146.26344423189332,
+        "map_y": 216.9842913565716,
+        "map_z": 12.482009440423491,
+        "distance_m": 11.980579613885906,
+        "confidence": 0.97265625,
+        "observation_count": 15,
+        "first_seen_wall": 1782713668.5973282,
+        "last_seen_wall": 1782713671.7979052,
+        "source": "yolo_lidar_projection_cluster_fusion",
+        "track_id": null,
+        "class_fixed_id": 3,
+        "class_votes": {
+          "rock": 13.62158203125
+        },
+        "is_confirmed": true,
+        "confirmed_wall": 1782713668.5973282
+      }
+    },
+    {
+      "prefabName": "detected_tank_0009",
+      "position": {
+        "x": 164.08118791100864,
+        "y": 14.460147271374195,
+        "z": 240.26895901644104
+      },
+      "rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "metadata": {
+        "object_id": "detected_tank_0009",
+        "class_name": "house",
+        "map_x": 164.08118791100864,
+        "map_y": 240.26895901644104,
+        "map_z": 14.460147271374195,
+        "distance_m": 18.951199916152344,
+        "confidence": 0.92626953125,
+        "observation_count": 10,
+        "first_seen_wall": 1782713672.5983405,
+        "last_seen_wall": 1782713674.399287,
+        "source": "yolo_lidar_projection_cluster_fusion",
+        "track_id": null,
+        "class_fixed_id": 4,
+        "class_votes": {
+          "tank": 1.8525390625,
+          "house": 6.14599609375
+        },
+        "is_confirmed": true,
+        "confirmed_wall": 1782713672.5983405
+      }
+    },
+    {
+      "prefabName": "detected_rock_0010",
+      "position": {
+        "x": 125.08549878141267,
+        "y": 11.090297744285703,
+        "z": 248.74932652770525
+      },
+      "rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      },
+      "metadata": {
+        "object_id": "detected_rock_0010",
+        "class_name": "rock",
+        "map_x": 125.08549878141267,
+        "map_y": 248.74932652770525,
+        "map_z": 11.090297744285703,
+        "distance_m": 15.57148604884781,
+        "confidence": 0.9716796875,
+        "observation_count": 20,
+        "first_seen_wall": 1782713679.3957148,
+        "last_seen_wall": 1782713683.7956083,
+        "source": "yolo_lidar_projection_cluster_fusion",
+        "track_id": null,
+        "class_fixed_id": 3,
+        "class_votes": {
+          "rock": 16.06103515625,
+          "tank": 1.7939453125
+        },
+        "is_confirmed": true,
+        "confirmed_wall": 1782713679.3957148
+      }
+    }
+  ]
+}

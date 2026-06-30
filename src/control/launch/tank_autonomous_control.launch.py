@@ -28,6 +28,7 @@ def generate_launch_description():
     path_planning_share = get_package_share_directory("path_planning")
     potential_share = get_package_share_directory("potential")
     route_config_file = os.path.join(path_planning_share, "config", "routes.yaml")
+    fusion_mapping_file = os.path.join(path_planning_share, "config", "fusion_mapping.yaml")
     apf_weights_file = os.path.join(potential_share, "config", "apf_weight_profiles.yaml")
 
     mission_type_arg = DeclareLaunchArgument(
@@ -108,6 +109,8 @@ def generate_launch_description():
             executable="lidar_camera_overlay_node",
             name="lidar_camera_overlay_node",
             output="screen",
+            # Overlay and local_path_node must use the same calibration YAML.
+            parameters=[{"config_file": fusion_mapping_file}],
         ),
         Node(
             package="tank_visual_perception",
@@ -153,6 +156,31 @@ def generate_launch_description():
                 "terrain_cost_file": LaunchConfiguration("terrain_cost_file"),
                 "terrain_weight": ParameterValue(
                     LaunchConfiguration("terrain_weight"), value_type=float),
+                "tank_param_file": tank_param_file,
+                "enable_speed_based_inflation": True,
+                "enable_speed_based_emergency_replan": True,
+                "enable_path_feasibility_check": True,
+                "enable_semantic_risk_cost": True,
+                "semantic_risk_weight": 0.06,
+                "semantic_risk_radius_scale": 1.0,
+                "semantic_risk_scores": "tank:100,house:50,car:25,tent:15,rock:10,unknown:5",
+                "semantic_risk_radii": "tank:25,house:18,car:10,tent:8,rock:6,unknown:5",
+                "enable_theta_aware_astar": True,
+                "theta_heading_change_weight": 0.25,
+                # A* polyline corner를 곡선으로 후처리해 꼭짓점 정지/yaw pivot을 줄인다.
+                "enable_curvature_path_smoothing": True,
+                "curvature_smoothing_min_turn_radius_m": 7.0,
+                "curvature_smoothing_max_corner_angle_deg": 25.0,
+                "curvature_smoothing_point_spacing_m": 1.0,
+                "curvature_smoothing_collision_check_margin_m": 2.0,
+                # Dense obstacle에서 새 path가 순간적으로 좌우로 뒤집히는 것을 막는 채택 필터.
+                "enable_replan_acceptance_filter": False,
+                "path_commitment_sec": 0.0,
+                "replan_accept_max_length_ratio": 1.30,
+                "replan_accept_max_sharp_corner_increase": 1,
+                "replan_accept_max_heading_change_increase_deg": 120.0,
+                "enable_avoid_side_lock": False,
+                "avoid_side_lock_sec": 0.0,
                 # Known map 초록점은 자율주행 전 이미 아는 hard no-go다(팀원 fix/control).
                 "static_obstacle_inflate": 2.0,
                 # DBSCAN cluster bboxes are used when dynamic replanning is enabled.
@@ -194,14 +222,19 @@ def generate_launch_description():
                 "lidar_block_min_distance": 0.5,
                 "lidar_block_max_distance": 80.0,
                 "emergency_cluster_replan_enabled": True,
-                "emergency_replan_cooldown_sec": 0.8,
+                # Emergency replan은 one-frame LiDAR/fusion 흔들림에 과민하면 경로가 좌우로 튄다.
+                # 2초 cooldown + 3-hit 안정화로 실제로 지속되는 corridor block만 재계획한다.
+                "emergency_replan_cooldown_sec": 2.0,
                 "emergency_replan_front_distance": 24.0,
                 "emergency_replan_min_distance": 0.0,
-                "emergency_replan_margin": 10.0,
+                "emergency_replan_margin": 9.0,
+                "emergency_replan_required_hits": 3,
+                "emergency_replan_margin_max": 11.0,
                 # Conditional dynamic A*: 현재 보이는 LiDAR cluster가 실제 경로를 막을 때만 재계획한다.
                 "dynamic_replan_max_count": 0,
-                "dynamic_replan_min_progress_m": 0.0,
-                "dynamic_replan_progress_guard_sec": 0.0,
+                # 같은 위치에서 경로가 번갈아 뒤집히는 것을 막기 위한 progress guard.
+                "dynamic_replan_min_progress_m": 2.0,
+                "dynamic_replan_progress_guard_sec": 4.0,
                 "lidar_cluster_eps": 2.0,
                 "lidar_cluster_min_samples": 3,
                 "lidar_history_resolution": 0.5,
@@ -223,7 +256,7 @@ def generate_launch_description():
             name="tank_local_path_node",
             output="screen",
             parameters=[{
-                "config_file": os.path.join(path_planning_share, "config", "fusion_mapping.yaml"),
+                "config_file": fusion_mapping_file,
                 # 도착 로깅(route_*.json의 reached) 기준을 컨트롤러 정지 기준(10m)과 일치시킨다.
                 # (불일치 시 컨트롤러는 ~8m에서 종료해도 local_path는 5m 기준이라 reached가 안 찍힘)
                 "goal_tolerance": 10.0,
@@ -330,6 +363,9 @@ def generate_launch_description():
             output="screen",
             parameters=[{
                 "tank_param_file": tank_param_file,
+                "enable_dynamic_speed_policy": True,
+                "enable_stopping_distance_model": True,
+                "enable_curvature_speed_limit": True,
                 "controller_hz": 10.0,
                 "enable_local_target": False,
                 "target_ttl_sec": 2.0,
@@ -371,10 +407,10 @@ def generate_launch_description():
                 # 경로가 급격히 꺾일 때는 W를 끊고 차체 yaw를 먼저 맞춘다.
                 # 큰 원을 그리며 경로 밖으로 밀려나는 현상을 줄인다.
                 "enable_sharp_turn_stop_pivot": True,
-                "sharp_turn_stop_angle_deg": 105.0,
-                "sharp_turn_release_angle_deg": 55.0,
+                "sharp_turn_stop_angle_deg": 130.0,
+                "sharp_turn_release_angle_deg": 70.0,
                 "sharp_turn_min_target_distance": 4.0,
-                "sharp_turn_max_sec": 0.45,
+                "sharp_turn_max_sec": 0.25,
                 "sharp_turn_cooldown_sec": 1.5,
                 "sharp_turn_block_when_apf_side_pass": True,
                 # 실제 속도가 높은 상태에서 급커브/장애물 앞을 W로 밀고 들어가면 관성으로 오버슛한다.

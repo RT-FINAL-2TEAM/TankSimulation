@@ -26,13 +26,14 @@ DEFAULT_PROJECTION_PARAMS: Dict[str, float] = {
     "ty": 0.02,
     "tz": 11.80,
     "yaw_offset": -0.9,
-    # simulator tank pitch가 흔들릴 때 playerBodyY 보정을 더해서 쓸 기준 offset.
+    # LiDAR와 카메라의 고정 장착 오차(도 단위).
+    # lidarRotation이 있으면 카메라의 기준 자세는 lidarRotation이며,
+    # 이 값들만 LiDAR→카메라 외부파라미터 보정으로 더한다.
     "pitch_offset": 1.5,
     "roll_offset": -0.3,
     "hfov": 86.0,
     "vfov": 60.2,
-    # playerBodyY/Z를 카메라 pitch/roll에 반영하는 gain.
-    # 0.0으로 두면 기존 동작과 동일하고, 1.0이면 body 자세를 그대로 보정한다.
+    # legacy fallback 전용: lidarRotation이 없는 오래된 /info payload에서만 사용한다.
     "body_pitch_gain": 1.0,
     "body_roll_gain": 1.0,
 }
@@ -121,20 +122,59 @@ def extract_info_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return payload
 
 
+def camera_pose_source(info: Dict[str, Any]) -> str:
+    """Return the pose source used for camera projection.
+
+    The camera and LiDAR rotate together in yaw with the turret, while the gun
+    elevation does not move the camera.  Therefore an available lidarRotation
+    is the authoritative sensor/platform orientation.
+    """
+    lidar_rotation = info.get("lidarRotation") if isinstance(info, dict) else None
+    if isinstance(lidar_rotation, dict):
+        return "lidarRotation"
+    return "legacy_turret_body_fallback"
+
+
 def compute_camera_pose(info: Dict[str, Any], params: Dict[str, float]) -> Tuple[np.ndarray, float, float, float]:
+    """Compute camera world pose in Unity raw coordinates.
+
+    Primary path
+    ------------
+    ``lidarRotation`` is used whenever the simulator supplies it.  In this
+    project the values are Unity-style Euler fields: ``x=pitch, y=yaw, z=roll``.
+    It already follows the turret's horizontal rotation and does *not* change
+    when only the gun elevation (``playerTurretY``) moves.  This matches the
+    physical camera mounting described for the tank.
+
+    Fallback path
+    -------------
+    Older payloads without ``lidarRotation`` retain the former behavior:
+    turret yaw + body pitch/roll.  Gun elevation is intentionally excluded
+    from both paths because the camera is not mounted on the elevating gun.
+    """
     lidar_origin = vec3_from_dict(info["lidarOrigin"])
-    turret_yaw, turret_pitch = get_turret_angle(info)
 
-    # playerBodyY/Z는 simulator에서 0~360 범위로 들어올 수 있다.
-    # 예: 357.9도는 실제로 -2.1도 roll에 가까우므로 반드시 정규화한다.
-    body_pitch = normalize_deg_180(to_float(info.get("playerBodyY"), 0.0))
-    body_roll = normalize_deg_180(to_float(info.get("playerBodyZ"), 0.0))
-    body_pitch_gain = to_float(params.get("body_pitch_gain"), 0.0)
-    body_roll_gain = to_float(params.get("body_roll_gain"), 0.0)
+    lidar_rotation = info.get("lidarRotation")
+    if isinstance(lidar_rotation, dict):
+        # Unity raw Euler convention confirmed from /tank/api/info/compact:
+        # lidarRotation.x = pitch, lidarRotation.y = yaw, lidarRotation.z = roll.
+        base_pitch = normalize_deg_180(to_float(lidar_rotation.get("x"), 0.0))
+        base_yaw = normalize_deg_180(to_float(lidar_rotation.get("y"), 0.0))
+        base_roll = normalize_deg_180(to_float(lidar_rotation.get("z"), 0.0))
+    else:
+        # Compatibility fallback only. playerTurretY (gun elevation) is not a
+        # camera rotation and must not be included here.
+        turret_yaw, _gun_pitch = get_turret_angle(info)
+        body_pitch = normalize_deg_180(to_float(info.get("playerBodyY"), 0.0))
+        body_roll = normalize_deg_180(to_float(info.get("playerBodyZ"), 0.0))
+        base_yaw = normalize_deg_180(turret_yaw)
+        base_pitch = to_float(params.get("body_pitch_gain"), 0.0) * body_pitch
+        base_roll = to_float(params.get("body_roll_gain"), 0.0) * body_roll
 
-    camera_yaw = turret_yaw + to_float(params.get("yaw_offset"))
-    camera_pitch = turret_pitch + to_float(params.get("pitch_offset")) + body_pitch_gain * body_pitch
-    camera_roll = to_float(params.get("roll_offset")) + body_roll_gain * body_roll
+    # Fixed LiDAR→camera extrinsic calibration offsets.
+    camera_yaw = base_yaw + to_float(params.get("yaw_offset"))
+    camera_pitch = base_pitch + to_float(params.get("pitch_offset"))
+    camera_roll = base_roll + to_float(params.get("roll_offset"))
 
     r_cam_to_world = rotation_matrix_yaw_pitch_roll(camera_yaw, camera_pitch, camera_roll)
     offset = np.array(
