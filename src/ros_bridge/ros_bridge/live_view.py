@@ -646,7 +646,31 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 .right-panel { min-height: 360px; }
                 .bottom { min-height: 36px; flex-wrap: wrap; padding: 8px; white-space: normal; }
             }
+            /* === 현대로템 C2 정체성: 헤더/타이포/패널 크롬 (오버라이드) === */
+            body { font-family: "Pretendard", "Pretendard Variable", "Noto Sans KR", system-ui, sans-serif; }
+            .metric b, .bottom span b, .tele .value, .feed-status-text, #timeValue, .t3d-hud .v { font-family: "Cascadia Mono", "Consolas", monospace; }
+            .mfd { grid-template-rows: 64px minmax(0, 1fr) 36px; }
+            .header { flex-direction: column; gap: 0; padding: 0; align-items: stretch; }
+            .header-main { display: flex; align-items: center; gap: 14px; padding: 0 14px; flex: 1 1 auto; min-width: 0; }
+            .brand { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; }
+            .logo { display: flex; align-items: center; gap: 2px; }
+            .logo-h { color: #5a93ff; font-weight: 700; font-size: 12px; letter-spacing: 2.5px; }
+            .logo-r { color: #ffffff; font-weight: 800; font-size: 19px; letter-spacing: 0.3px; }
+            .logo-accent { display: inline-block; width: 13px; height: 14px; margin-left: 4px; background: var(--red); clip-path: polygon(35% 0, 100% 0, 65% 100%, 0 100%); }
+            .sysname { color: var(--text); font-weight: 700; font-size: 15px; padding-left: 14px; border-left: 2px solid var(--red); letter-spacing: 0.5px; }
+            .classbar { display: flex; align-items: center; justify-content: space-between; height: 20px; padding: 0 14px; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: #b9c8e8; background: linear-gradient(90deg, rgba(255, 68, 68, 0.18), rgba(42, 83, 154, 0.14) 55%, transparent); border-top: 1px solid var(--line-dim); }
+            .panel { position: relative; }
+            .panel-title { border-left: 3px solid var(--green); padding-right: 34px; }
+            .panel::before, .panel::after { content: ""; position: absolute; width: 10px; height: 10px; border-color: var(--line); border-style: solid; opacity: 0.5; pointer-events: none; z-index: 3; }
+            .panel::before { top: 0; left: 0; border-width: 1px 0 0 1px; }
+            .panel::after { bottom: 0; right: 0; border-width: 0 1px 1px 0; }
+            .maxbtn { position: absolute; top: 5px; right: 7px; z-index: 6; background: rgba(8, 19, 40, 0.9); border: 1px solid var(--line-dim); color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 3px 7px; }
+            .maxbtn:hover { color: var(--green); border-color: var(--green); }
+            .panel.maximized { top: 68px; }
+            .rosbtn { background: #0a1730; color: var(--muted); border: 1px solid var(--line-dim); font: inherit; font-size: 10px; font-weight: 700; padding: 3px 9px; cursor: pointer; letter-spacing: 0.5px; }
+            .rosbtn.on { color: var(--green); border-color: var(--green); }
         </style>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
         <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
@@ -654,14 +678,20 @@ def render_view_page(poll_ms: int = 1000) -> str:
     <body>
         <div class="mfd">
             <header class="header">
-                <div class="brand">TANK-CV MFD</div>
-                <div class="header-metrics">
-                    <div class="metric"><strong>MODE</strong><b id="modeValue">WAIT</b></div>
-                    <div class="metric"><strong>YOLO</strong><b id="yoloValue">WAIT</b></div>
-                    <div class="metric"><strong>ROS</strong><b id="rosValue">WAIT</b></div>
-                    <div class="metric"><strong>TIME</strong><b id="timeValue">--:--:--</b></div>
-                    <div class="metric"><strong>STATUS</strong><b id="statusValue">BOOT</b></div>
+                <div class="header-main">
+                    <div class="brand">
+                        <span class="logo"><span class="logo-h">HYUNDAI</span><span class="logo-r">Rotem</span><i class="logo-accent"></i></span>
+                        <span class="sysname">AI 자율전차 지휘통제</span>
+                    </div>
+                    <div class="header-metrics">
+                        <div class="metric"><strong>MODE</strong><b id="modeValue">WAIT</b></div>
+                        <div class="metric"><strong>YOLO</strong><b id="yoloValue">WAIT</b></div>
+                        <div class="metric"><strong>ROS</strong><b id="rosValue">WAIT</b></div>
+                        <div class="metric"><strong>TIME</strong><b id="timeValue">--:--:--</b></div>
+                        <div class="metric"><strong>STATUS</strong><b id="statusValue">BOOT</b></div>
+                    </div>
                 </div>
+                <div class="classbar"><span>통제용 · OFFICIAL USE ONLY</span><span>AI 자율전차 지휘통제 체계 · 실시간 운용</span></div>
             </header>
             <main class="main-grid">
                 <section class="panel">
@@ -690,6 +720,10 @@ def render_view_page(poll_ms: int = 1000) -> str:
                             </div>
                             <div style="position:relative;flex:1 1 auto;min-height:0;">
                                 <div id="rosGraph" style="position:absolute;inset:0;"></div>
+                                <div id="rosGraphTools" style="position:absolute;top:6px;right:8px;z-index:5;display:flex;gap:5px;">
+                                    <button class="rosbtn" type="button" onclick="cyRosFit()">FIT</button>
+                                    <button id="rosFlowBtn" class="rosbtn on" type="button" onclick="toggleRosFlow()">흐름만</button>
+                                </div>
                                 <div id="rosServices" class="scroll" style="position:absolute;inset:0;display:none;"></div>
                                 <div id="rosTf" class="scroll" style="position:absolute;inset:0;display:none;"></div>
                                 <div id="rosParams" class="scroll" style="position:absolute;inset:0;display:none;"></div>
@@ -757,7 +791,15 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 byId("leftPanelTitle").textContent = tabName === "route" ? "ROUTE" : tabName === "risk" ? "RECON RISK" : tabName === "ai" ? "AI LOG" : tabName === "recon" ? "RECON" : "SENSOR";
                 updateLeftPanel(latestState || {});
             }
-            let cyRos = null, cyRosSig = "", cyDashTimer = null;
+            let cyRos = null, cyRosSig = "", cyDashTimer = null, rosFlowMode = true;
+            function cyRosFit() { if (cyRos) { try { cyRos.resize(); cyRos.fit(undefined, 10); } catch (e) {} } }
+            function toggleRosFlow() {
+                rosFlowMode = !rosFlowMode;
+                byId("rosFlowBtn").classList.toggle("on", rosFlowMode);
+                byId("rosFlowBtn").textContent = rosFlowMode ? "흐름만" : "전체";
+                cyRosSig = "";  // 강제 재레이아웃
+                renderRosGraph(latestState || {});
+            }
             function rosShort(id) {
                 if (id.startsWith("t:")) { const p = id.slice(2).split("/").filter(Boolean); return "/" + p.slice(-2).join("/"); }
                 const p = id.split("/").filter(Boolean); return p[p.length - 1] || id;
@@ -797,10 +839,25 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 }
                 const cy = ensureCyRos();
                 if (!cy) { cont.innerHTML = '<div style="color:#5a6b62;font-size:12px;padding:14px">cytoscape 로드 실패(CDN 확인)</div>'; return; }
+                let nodes = g.nodes || [], topics = g.topics || [], edges = g.edges || [];
+                // 흐름만: 발행·구독을 둘 다 가진 토픽(=노드↔노드 데이터흐름)만. 노드<2면 허브 전체 표시.
+                if (rosFlowMode && nodes.length >= 2) {
+                    const hasPub = new Set(), hasSub = new Set();
+                    edges.forEach((e) => { if (String(e.target).startsWith("t:")) hasPub.add(e.target); if (String(e.source).startsWith("t:")) hasSub.add(e.source); });
+                    const keep = new Set(topics.filter((t) => hasPub.has(t.id) && hasSub.has(t.id)).map((t) => t.id));
+                    if (keep.size) {  // 흐름 토픽이 있을 때만 필터(없으면 전체 유지)
+                        topics = topics.filter((t) => keep.has(t.id));
+                        edges = edges.filter((e) => keep.has(e.source) || keep.has(e.target));
+                        const used = new Set();
+                        edges.forEach((e) => { if (!String(e.source).startsWith("t:")) used.add(e.source); if (!String(e.target).startsWith("t:")) used.add(e.target); });
+                        nodes = nodes.filter((n) => used.has(n.id));
+                    }
+                }
                 const els = [];
-                (g.nodes || []).forEach((n) => els.push({ data: { id: n.id, kind: "node", label: rosShort(n.id) } }));
-                (g.topics || []).forEach((t) => { const hz = t.hz; els.push({ data: { id: t.id, kind: "topic", label: rosShort(t.id) + (hz ? ` ${hz}Hz` : ""), hz: hz || 0 } }); });
-                (g.edges || []).forEach((e) => { const hz = e.hz || 0; els.push({ data: { id: e.id, source: e.source, target: e.target, w: hzWidth(hz), c: hzColor(hz), active: hz > 0 ? 1 : 0 } }); });
+                nodes.forEach((n) => els.push({ data: { id: n.id, kind: "node", label: rosShort(n.id) } }));
+                topics.forEach((t) => { const hz = t.hz; els.push({ data: { id: t.id, kind: "topic", label: rosShort(t.id) + (hz ? ` ${hz}Hz` : ""), hz: hz || 0 } }); });
+                edges.forEach((e) => { const hz = e.hz || 0; els.push({ data: { id: e.id, source: e.source, target: e.target, w: hzWidth(hz), c: hzColor(hz), active: hz > 0 ? 1 : 0 } }); });
+                if (nodes.length <= 1) cont.dataset.hub = "1"; else delete cont.dataset.hub;
                 const sig = els.map((x) => x.data.id).sort().join("|");
                 if (sig !== cyRosSig) {
                     cyRos.json({ elements: els });
@@ -823,6 +880,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 rosSubTab = ["graph", "services", "tf", "params"].includes(s) ? s : "graph";
                 ["graph", "services", "tf", "params"].forEach((k) => byId("ros-sub-" + k).classList.toggle("active", k === rosSubTab));
                 byId("rosGraph").style.display = rosSubTab === "graph" ? "block" : "none";
+                byId("rosGraphTools").style.display = rosSubTab === "graph" ? "flex" : "none";
                 byId("rosServices").style.display = rosSubTab === "services" ? "block" : "none";
                 byId("rosTf").style.display = rosSubTab === "tf" ? "block" : "none";
                 byId("rosParams").style.display = rosSubTab === "params" ? "block" : "none";
@@ -840,7 +898,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 const c = byId("rosServices"); const svc = (state && state.rosGraph && state.rosGraph.services) || [];
                 const sig = svc.map((s) => s.name + (s.nodes || []).join()).join("|");
                 if (c.dataset.sig === sig) return; c.dataset.sig = sig;
-                if (!svc.length) { c.innerHTML = '<div style="color:var(--muted);padding:12px">서비스 없음 (자율 스택 실행 시 표시)</div>'; return; }
+                if (!svc.length) { c.innerHTML = '<div style="color:var(--muted);padding:12px;line-height:1.6">서비스 없음<br><span style="color:#5a6b62;font-size:11px">자율 스택(run_recon_scenario.py / tank_autonomous_control.launch) 실행 시 표시됩니다.<br>지금은 브릿지 노드만 동작 중입니다.</span></div>'; return; }
                 let h = '<table style="width:100%;border-collapse:collapse;font-size:11px"><tr style="color:var(--muted);text-align:left"><th style="padding:4px">서비스</th><th>타입</th><th>노드</th></tr>';
                 svc.forEach((s) => { h += `<tr style="border-top:1px solid var(--line-dim)"><td style="padding:4px;color:var(--cyan)">${escapeHtml(rosShort("t:" + s.name))}</td><td style="color:var(--muted)">${escapeHtml((s.type || "").split("/").pop())}</td><td>${escapeHtml((s.nodes || []).map((n) => n.split("/").pop()).join(", "))}</td></tr>`; });
                 c.innerHTML = h + "</table>";
@@ -849,7 +907,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 const c = byId("rosTf"); const tf = (state && state.rosGraph && state.rosGraph.tf) || [];
                 const sig = tf.map((t) => t.parent + ">" + t.child).join("|");
                 if (c.dataset.sig === sig) return; c.dataset.sig = sig;
-                if (!tf.length) { c.innerHTML = '<div style="color:var(--muted);padding:12px">TF 없음 (/tf 미발행)</div>'; return; }
+                if (!tf.length) { c.innerHTML = '<div style="color:var(--muted);padding:12px;line-height:1.6">TF 없음<br><span style="color:#5a6b62;font-size:11px">자율 스택 실행 시 /tf·/tf_static 프레임 트리가 표시됩니다.</span></div>'; return; }
                 const children = {}, allKids = new Set();
                 tf.forEach((t) => { (children[t.parent] = children[t.parent] || []).push(t); allKids.add(t.child); });
                 const roots = [...new Set(tf.map((t) => t.parent))].filter((p) => !allKids.has(p));
@@ -2345,9 +2403,13 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 }, 60);
             }
             function initPanelMax() {
-                document.querySelectorAll(".main-grid > .panel > .panel-title").forEach((t) => {
-                    t.title = "더블클릭: 패널 확대/복원";
-                    t.addEventListener("dblclick", () => toggleMax(t.closest(".panel")));
+                document.querySelectorAll(".main-grid > .panel").forEach((p) => {
+                    const t = p.querySelector(".panel-title");
+                    if (t) { t.title = "더블클릭: 패널 확대/복원"; t.addEventListener("dblclick", () => toggleMax(p)); }
+                    const b = document.createElement("button");
+                    b.className = "maxbtn"; b.type = "button"; b.textContent = "⛶"; b.title = "확대 / 복원";
+                    b.addEventListener("click", (e) => { e.stopPropagation(); toggleMax(p); });
+                    p.appendChild(b);
                 });
             }
             initPanelMax();
