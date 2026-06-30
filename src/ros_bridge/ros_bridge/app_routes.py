@@ -54,7 +54,7 @@ except Exception:  # pragma: no cover - optional runtime dependency
 #
 # request:
 # - 시뮬레이터가 보낸 JSON body 또는 image multipart file을 읽는 객체이다.
-from flask import Flask, jsonify, request, abort, send_file
+from flask import Flask, jsonify, request, abort, send_file, redirect
 
 
 ############################################################
@@ -109,6 +109,7 @@ from .config import (
 #   bridge handler에 데이터를 넘기는 구조이다.
 from .ros_runtime import get_bridge, ros_status
 from . import live_view
+from .system_metrics import get_system_metrics
 from .async_yolo import AsyncYoloService
 
 # compact_info:
@@ -2174,6 +2175,7 @@ def _build_dashboard_payload() -> Dict[str, Any]:
         "windowsRecon": {},
         "riskComparison": None,
         "riskFeatures": None,
+        "rosGraph": None,
     }
 
     try:
@@ -2287,6 +2289,7 @@ def _build_dashboard_payload() -> Dict[str, Any]:
         "playerPose": latest.get("player_pose_map") or latest.get("get_action_pose_map"),
         "enemyPose": latest.get("enemy_pose_map"),
         "routeCounts": payload.get("bridge", {}).get("routeCounts") or payload.get("bridge", {}).get("route_counts") or {},
+        "systemMetrics": get_system_metrics(),  # CPU/메모리/GPU (C2 ③ 패널, graceful)
     }
 
     try:
@@ -2316,6 +2319,13 @@ def _build_dashboard_payload() -> Dict[str, Any]:
     # 수식 vs LLM 비교(RECON RISK 패널) — 파일→폴링. 신규 토픽 없음.
     payload["riskComparison"] = _load_json_dict_safe(_resolve_risk_comparison_path())
     payload["riskFeatures"] = _load_json_dict_safe(_resolve_risk_features_path())
+
+    # ROS 계산 그래프(노드↔토픽 + Hz) — ② 패널 ROS 탭(Cytoscape) 실시간 렌더용.
+    try:
+        graph_mon = getattr(bridge, "ros_graph", None) if bridge is not None else None
+        payload["rosGraph"] = graph_mon.get_payload() if graph_mon else None
+    except Exception:
+        payload["rosGraph"] = None
 
     return payload
 
@@ -2386,6 +2396,98 @@ def route_video_feed():
     if not LIVE_VIEW_ENABLED:
         return jsonify({"enabled": False, "error": "TANK_LIVE_VIEW is false"}), 404
     return live_view.video_response(web_fps=LIVE_VIEW_FPS, jpeg_quality=LIVE_VIEW_JPEG_QUALITY)
+
+
+@app.route("/rviz3d", methods=["GET"])
+def route_rviz3d_view():
+    """RViz-like 3D 뷰어를 메인 브릿지(:5000)에서 직접 서빙한다(C2 ② 패널 iframe).
+
+    rviz_web 패키지의 HTML_PAGE를 재사용하되 별도 5055 서버는 띄우지 않는다.
+    데이터는 브라우저 JS가 rosbridge(ws://host:9090)로 직접 구독한다.
+    """
+    try:
+        from rviz_web.web_server_node import HTML_PAGE
+    except Exception as exc:  # rviz_web 미빌드 등
+        return (
+            "<!doctype html><meta charset=utf-8>"
+            "<body style='background:#050806;color:#9ec5f0;font-family:monospace;padding:16px'>"
+            f"rviz_web 뷰어를 불러올 수 없습니다: {exc}<br>"
+            "colcon build --packages-select rviz_web 후 다시 시도하세요.</body>",
+            503,
+        )
+    return HTML_PAGE
+
+
+@app.route("/api/config", methods=["GET"])
+def route_rviz_viewer_config():
+    """3D 뷰어 JS가 fetch하는 설정(토픽·rosbridge 포트). 같은 :5000에서 제공."""
+    try:
+        from rviz_web.web_server_node import DEFAULT_CONFIG
+        payload = deepcopy(DEFAULT_CONFIG)
+    except Exception as exc:
+        return jsonify({"error": f"rviz_web unavailable: {exc}"}), 503
+    frame = request.args.get("frame")
+    if frame:
+        payload["fixedFrame"] = frame
+    # rosbridge 호스트 미지정 → 브라우저가 현재 접속 host:9090으로 연결(같은 LAN). 포트 env override.
+    try:
+        payload["rosbridgePort"] = int(
+            os.environ.get("TANK_RVIZ_WEB_ROSBRIDGE_PORT", payload.get("rosbridgePort", 9090))
+        )
+    except (TypeError, ValueError):
+        pass
+    return jsonify(payload)
+
+
+@app.route("/api/rviz3d/config", methods=["GET"])
+def route_rviz3d_config():
+    """대시보드용 3D 뷰어 메타(같은 :5000 origin에서 서빙됨을 알림)."""
+    return jsonify({
+        "enabled": True,
+        "servedBy": "ros_bridge:5000",
+        "viewer": "rviz_web_html_on_main_bridge",
+        "url": "/rviz3d?frame=tank_map&cloud=detected&rays=1",
+        "rosbridgePort": int(os.environ.get("TANK_RVIZ_WEB_ROSBRIDGE_PORT", "9090")),
+        "note": "data via rosbridge websocket (auto-launched with the stack if installed).",
+    })
+
+
+@app.route("/api/ros/params", methods=["GET"])
+def route_ros_params():
+    """노드 파라미터 목록+값 (ROS 그래프 탭 파라미터 뷰). on-demand 서비스 호출."""
+    bridge = get_bridge()
+    target = request.args.get("node", "").strip()
+    if bridge is None:
+        return jsonify({"ok": False, "error": "bridge not ready"}), 503
+    if not target:
+        return jsonify({"ok": False, "error": "node required"}), 400
+    try:
+        from .ros_graph import list_node_params
+        params = list_node_params(bridge, target)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    if params is None:
+        return jsonify({"ok": False, "error": "파라미터 서비스 미응답(노드 확인)"}), 504
+    return jsonify({"ok": True, "node": target, "params": params})
+
+
+@app.route("/api/ros/params/set", methods=["POST"])
+def route_ros_params_set():
+    """노드 파라미터 설정(편집). {node, name, value}."""
+    bridge = get_bridge()
+    if bridge is None:
+        return jsonify({"ok": False, "error": "bridge not ready"}), 503
+    data = request.get_json(silent=True) or {}
+    target = str(data.get("node", "")).strip()
+    name = str(data.get("name", "")).strip()
+    if not target or not name:
+        return jsonify({"ok": False, "error": "node, name required"}), 400
+    try:
+        from .ros_graph import set_node_param
+        res = set_node_param(bridge, target, name, data.get("value"))
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    return jsonify(res)
 
 
 @app.route("/debug/live_view", methods=["GET"])

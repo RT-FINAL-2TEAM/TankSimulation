@@ -14,10 +14,38 @@ Prerequisite:
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import SetEnvironmentVariable, DeclareLaunchArgument
+from launch.actions import SetEnvironmentVariable, DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+
+
+def _maybe_rosbridge(context, *args, **kwargs):
+    """rosbridge_server가 설치돼 있으면 websocket 노드를 띄운다(웹 3D 뷰어 데이터 소켓 :9090).
+
+    미설치면 graceful skip — 코어 스택은 영향 없음. start_rosbridge:=false로 끌 수 있음.
+    웹 RViz는 ros_bridge(:5000)가 서빙하고, 토픽 데이터는 이 rosbridge가 ws로 중계한다.
+    """
+    flag = LaunchConfiguration("start_rosbridge").perform(context).strip().lower()
+    if flag not in ("1", "true", "yes", "y"):
+        return []
+    try:
+        get_package_share_directory("rosbridge_server")
+    except Exception:
+        print("[launch] rosbridge_server 미설치 — 웹 3D RViz 데이터 소켓 생략 "
+              "(sudo apt install ros-humble-rosbridge-suite)")
+        return []
+    try:
+        port = int(os.environ.get("TANK_RVIZ_WEB_ROSBRIDGE_PORT", "9090"))
+    except (TypeError, ValueError):
+        port = 9090
+    return [Node(
+        package="rosbridge_server",
+        executable="rosbridge_websocket",
+        name="rosbridge_websocket",
+        output="screen",
+        parameters=[{"port": port}],
+    )]
 
 
 def generate_launch_description():
@@ -80,6 +108,11 @@ def generate_launch_description():
         'recon_report_dir', default_value='./recon_reports',
         description='ReconLogger output dir for route_*.json (scenario2 overrides to isolate from recon).'
     )
+    # 웹 3D RViz 뷰어(:5000)용 데이터 소켓(rosbridge :9090) 자동 실행. 미설치면 graceful skip.
+    start_rosbridge_arg = DeclareLaunchArgument(
+        'start_rosbridge', default_value='true',
+        description='Auto-start rosbridge_websocket(:9090) for the web 3D viewer if installed.'
+    )
 
     return LaunchDescription([
         mission_type_arg,
@@ -91,6 +124,8 @@ def generate_launch_description():
         recon_min_confirm_age_arg,
         terrain_weight_arg,
         recon_report_dir_arg,
+        start_rosbridge_arg,
+        OpaqueFunction(function=_maybe_rosbridge),
         SetEnvironmentVariable("TANK_START_CONTROL", "start"),
         SetEnvironmentVariable("TANK_APF_PASSTHROUGH_WHEN_CLEAR", "true"),
 

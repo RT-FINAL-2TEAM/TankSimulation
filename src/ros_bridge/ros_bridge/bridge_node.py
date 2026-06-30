@@ -380,6 +380,15 @@ class RosBridge(Node):
             callback_group=self.timer_callback_group,
         )
 
+        # ROS 계산 그래프(노드↔토픽) 실시간 introspection + 토픽 Hz 모니터(웹 ROS 그래프 패널용).
+        # 별도 콜백그룹 타이머라 제어 핫패스 비차단. TANK_ROS_GRAPH=false로 끌 수 있음.
+        try:
+            from .ros_graph import RosGraphMonitor
+            self.ros_graph = RosGraphMonitor(self)
+        except Exception as exc:  # noqa: BLE001
+            self.ros_graph = None
+            self.get_logger().warning(f"ros_graph monitor disabled: {exc}")
+
         # 실행 터미널에 bridge 초기화 상태를 ROS2 logger로 출력한다.
         self.get_logger().info("Tank Challenge ROS2 final bridge initialized")
         # 실행 터미널에 bridge 초기화 상태를 ROS2 logger로 출력한다.

@@ -244,17 +244,28 @@ def render_view_page(poll_ms: int = 1000) -> str:
         <style>
             :root {
                 color-scheme: dark;
-                --bg: #050806;
-                --panel: #08110c;
-                --line: #1e6f44;
-                --line-dim: #18462f;
-                --text: #d8ffe9;
-                --muted: #74a98c;
-                --green: #39ff88;
-                --amber: #ffca4f;
-                --red: #ff5b64;
-                --cyan: #44d9ff;
+                /* 현대로템 지휘통제(C2) 팔레트 — Rotem Blue(#0A2369)·Rotem Red(#FF0000) 기반 다크 네이비 콘솔 */
+                --bg: #06101f;
+                --panel: #0c1c3a;
+                --line: #2a539a;       /* Rotem 블루 라인 */
+                --line-dim: #1a3358;
+                --text: #e8eefc;
+                --muted: #8ea6cf;      /* 블루-그레이 */
+                --green: #4f8dff;      /* 주 강조 = Rotem 블루(밝게). 타이틀/보더/활성 */
+                --amber: #ffb74d;      /* 경고 */
+                --red: #ff4444;        /* Rotem 레드 = 위협/경보/임계 */
+                --cyan: #5ac8ff;       /* 정보 */
+                --ok: #36d17a;         /* 정상/안전(상태표시 전용) */
             }
+            /* 패널 더블클릭 확대 + 여백/폰트 ↑ (C2 가독성) */
+            .panel.maximized {
+                position: fixed; top: 54px; left: 10px; right: 10px; bottom: 42px; z-index: 60;
+                box-shadow: 0 0 0 1px var(--line), 0 14px 44px rgba(0, 0, 0, 0.65);
+            }
+            .main-grid { gap: 10px; padding: 10px; }
+            .panel-title { height: 34px; font-size: 13px; letter-spacing: 0.4px; }
+            .scroll { padding: 12px; }
+            .tele .value { font-size: 16px; }
             * { box-sizing: border-box; }
             html, body { width: 100%; height: 100%; }
             body {
@@ -320,13 +331,14 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 color: var(--text);
                 font-weight: 800;
             }
-            .status-ok { color: var(--green) !important; }
+            .status-ok { color: var(--ok) !important; }
             .status-warn { color: var(--amber) !important; }
             .status-error { color: var(--red) !important; }
             .main-grid {
                 min-height: 0;
                 display: grid;
-                grid-template-columns: minmax(210px, 22vw) minmax(360px, 1fr) minmax(250px, 26vw);
+                grid-template-columns: 1fr 1fr;
+                grid-template-rows: 1fr 1fr;
                 gap: 8px;
                 padding: 8px;
             }
@@ -387,7 +399,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 height: 38px;
                 flex: 0 0 auto;
                 display: grid;
-                grid-template-columns: repeat(2, minmax(0, 1fr));
+                grid-template-columns: repeat(3, minmax(0, 1fr));
                 gap: 6px;
                 padding: 6px;
                 border-bottom: 1px solid var(--line-dim);
@@ -424,6 +436,59 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 display: block;
                 background: #050806;
             }
+            #rvizFrame {
+                position: absolute;
+                inset: 0;
+                width: 100%;
+                height: 100%;
+                border: 0;
+                background: #050806;
+            }
+            .tele-grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 6px;
+            }
+            .tele {
+                border: 1px solid var(--line-dim);
+                background: rgba(7, 18, 12, 0.82);
+                padding: 6px 8px;
+            }
+            .tele .label { color: var(--muted); font-size: 11px; }
+            .tele .value { color: var(--text); font-size: 15px; font-weight: 800; }
+            .bar { height: 8px; background: #0c2417; border-radius: 3px; overflow: hidden; margin-top: 3px; }
+            .bar > span { display: block; height: 100%; background: var(--green); }
+            .sec-title { font-weight: 800; color: var(--green); margin: 8px 0 5px; font-size: 12px; }
+            /* CSS 3D 전차 자세 인디케이터 */
+            .tank3d-stage {
+                position: relative;
+                perspective: 600px;
+                height: 210px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: radial-gradient(circle at 50% 72%, #0b1e14, #050806);
+                border: 1px solid var(--line-dim);
+                margin-bottom: 8px;
+                overflow: hidden;
+            }
+            .tank3d-view { transform-style: preserve-3d; transform: rotateX(-24deg) rotateY(-32deg); }
+            .tank3d { position: relative; width: 0; height: 0; transform-style: preserve-3d; transition: transform 0.15s linear; }
+            .t3d-grp { position: absolute; left: 0; top: 0; transform-style: preserve-3d; }
+            .t3d-face { position: absolute; left: 0; top: 0; box-sizing: border-box; border: 1px solid #2a539a; background: rgba(26, 56, 110, 0.62); }
+            .t3d-face.turret { background: rgba(40, 78, 150, 0.85); border-color: #4f8dff; }
+            .t3d-face.barrel { background: #4f8dff; border-color: #aaccff; }
+            /* 3D 전차 위 HUD 오버레이 */
+            .t3d-hud { position: absolute; z-index: 2; pointer-events: none; line-height: 1.25; }
+            .t3d-hud .k { color: var(--muted); font-size: 10px; letter-spacing: 0.5px; }
+            .t3d-hud .v { color: var(--text); font-weight: 800; font-size: 13px; }
+            .t3d-hud .big { font-size: 22px; color: var(--cyan); }
+            .t3d-hud.tl { top: 8px; left: 10px; }
+            .t3d-hud.tr { top: 8px; right: 10px; text-align: right; }
+            .t3d-hud.bl { bottom: 26px; left: 10px; }
+            .t3d-hud.br { bottom: 26px; right: 10px; text-align: right; }
+            .t3d-hud.bc { left: 0; right: 0; bottom: 6px; text-align: center; font-size: 11px; color: var(--muted); }
+            .t3d-hud.bc b { color: var(--cyan); font-weight: 800; }
             .readout-list { display: grid; gap: 8px; }
             .route-compare {
                 display: grid;
@@ -582,6 +647,9 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 .bottom { min-height: 36px; flex-wrap: wrap; padding: 8px; white-space: normal; }
             }
         </style>
+        <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
     </head>
     <body>
         <div class="mfd">
@@ -596,36 +664,49 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 </div>
             </header>
             <main class="main-grid">
-                <section class="panel left-panel">
-                    <div class="panel-title"><span>LEFT PANEL</span><span id="leftPanelTitle">ROUTE</span></div>
-                    <div class="left-tabs">
-                        <button id="tab-route" class="tab-button active" type="button" onclick="setTab('route')">ROUTE</button>
-                        <button id="tab-risk" class="tab-button" type="button" onclick="setTab('risk')">RISK</button>
-                        <button id="tab-ai" class="tab-button" type="button" onclick="setTab('ai')">AI LOG</button>
-                        <button id="tab-recon" class="tab-button" type="button" onclick="setTab('recon')">RECON</button>
-                        <button id="tab-sensor" class="tab-button" type="button" onclick="setTab('sensor')">SENSOR</button>
-                    </div>
-                    <div id="leftContent" class="scroll"></div>
-                </section>
-                <section class="panel center-panel">
-                    <div class="panel-title"><span>CENTER PANEL</span><span id="feedStatusText" class="feed-status-text">det=0 sync</span></div>
+                <section class="panel">
+                    <div class="panel-title"><span>① CAMERA · YOLO</span><span id="feedStatusText" class="feed-status-text">det=0 sync</span></div>
                     <div class="feed-wrap">
                         <img id="driveFeed" src="/video_feed" alt="drive feed">
                         <canvas id="driveOverlay"></canvas>
                     </div>
                 </section>
-                <section class="panel right-panel">
-                    <div class="panel-title"><span>RIGHT PANEL</span><span id="mapPanelTitle">TERRAIN MAP</span></div>
+                <section class="panel">
+                    <div class="panel-title"><span>② RVIZ 3D / MAP</span><span id="mapPanelTitle">TERRAIN MAP</span></div>
                     <div class="map-tabs">
                         <button id="map-tab-terrain" class="tab-button active" type="button" onclick="setMapTab('terrain')">TERRAIN</button>
                         <button id="map-tab-ros" class="tab-button" type="button" onclick="setMapTab('ros')">ROS</button>
+                        <button id="map-tab-rviz" class="tab-button" type="button" onclick="setMapTab('rviz')">RVIZ 3D</button>
                     </div>
                     <div class="map-wrap">
                         <canvas id="mapCanvas"></canvas>
+                        <iframe id="rvizFrame" title="RViz 3D" style="display:none;"></iframe>
+                        <div id="rosWrap" style="display:none;position:absolute;inset:0;flex-direction:column;background:var(--bg);">
+                            <div class="map-tabs" style="grid-template-columns:repeat(4,minmax(0,1fr));height:32px;">
+                                <button id="ros-sub-graph" class="tab-button active" type="button" onclick="setRosSub('graph')">GRAPH</button>
+                                <button id="ros-sub-services" class="tab-button" type="button" onclick="setRosSub('services')">SERVICES</button>
+                                <button id="ros-sub-tf" class="tab-button" type="button" onclick="setRosSub('tf')">TF</button>
+                                <button id="ros-sub-params" class="tab-button" type="button" onclick="setRosSub('params')">PARAMS</button>
+                            </div>
+                            <div style="position:relative;flex:1 1 auto;min-height:0;">
+                                <div id="rosGraph" style="position:absolute;inset:0;"></div>
+                                <div id="rosServices" class="scroll" style="position:absolute;inset:0;display:none;"></div>
+                                <div id="rosTf" class="scroll" style="position:absolute;inset:0;display:none;"></div>
+                                <div id="rosParams" class="scroll" style="position:absolute;inset:0;display:none;"></div>
+                            </div>
+                        </div>
                         <div id="mapLegend" class="map-legend">
                             <span>SELF</span><span>ENEMY</span><span>TARGET</span><span>WATER</span><span>RIDGE</span><span>HIGH</span><span>TREE</span><span>ROCK</span><span>HOUSE</span><span>ROUTE</span>
                         </div>
                     </div>
+                </section>
+                <section class="panel">
+                    <div class="panel-title"><span>③ TANK STATE · SYSTEM</span><span id="tankStatusText" class="feed-status-text">-</span></div>
+                    <div id="tankSystemContent" class="scroll"></div>
+                </section>
+                <section class="panel">
+                    <div class="panel-title"><span>④ LLM · RECON RISK</span><span id="riskStatusText" class="feed-status-text">-</span></div>
+                    <div id="riskContent" class="scroll"></div>
                 </section>
             </main>
             <footer class="bottom">
@@ -676,13 +757,156 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 byId("leftPanelTitle").textContent = tabName === "route" ? "ROUTE" : tabName === "risk" ? "RECON RISK" : tabName === "ai" ? "AI LOG" : tabName === "recon" ? "RECON" : "SENSOR";
                 updateLeftPanel(latestState || {});
             }
+            let cyRos = null, cyRosSig = "", cyDashTimer = null;
+            function rosShort(id) {
+                if (id.startsWith("t:")) { const p = id.slice(2).split("/").filter(Boolean); return "/" + p.slice(-2).join("/"); }
+                const p = id.split("/").filter(Boolean); return p[p.length - 1] || id;
+            }
+            function hzWidth(hz) { return (!hz || hz <= 0) ? 1.2 : Math.min(11, 1.6 + Math.log10(1 + hz) * 3.4); }
+            function hzColor(hz) { if (!hz || hz <= 0) return "#2c5a44"; if (hz < 2) return "#39ff88"; if (hz < 15) return "#ffd34d"; return "#ff8a3d"; }
+            function ensureCyRos() {
+                if (cyRos) return cyRos;
+                if (typeof cytoscape === "undefined") return null;
+                try { if (window.cytoscapeDagre) cytoscape.use(window.cytoscapeDagre); } catch (e) {}
+                cyRos = cytoscape({
+                    container: byId("rosGraph"), elements: [], wheelSensitivity: 0.2,
+                    style: [
+                        { selector: 'node[kind="node"]', style: { shape: "round-rectangle", "background-color": "#0d2147", "border-color": "#4f8dff", "border-width": 1.5, label: "data(label)", color: "#dbe6ff", "font-size": 10, "font-weight": "bold", "text-valign": "center", "text-halign": "center", width: "label", height: 20, "padding": "7px", "text-wrap": "wrap", "text-max-width": "130px" } },
+                        { selector: 'node[kind="topic"]', style: { shape: "round-rectangle", "background-color": "#0a1730", "border-color": "#5ac8ff", "border-width": 1, label: "data(label)", color: "#bfe0ff", "font-size": 9, "text-valign": "center", "text-halign": "center", width: "label", height: 15, "padding": "4px" } },
+                        { selector: "edge", style: { "curve-style": "bezier", "target-arrow-shape": "triangle", width: "data(w)", "line-color": "data(c)", "target-arrow-color": "data(c)", "arrow-scale": 0.7, opacity: 0.8 } },
+                        { selector: "edge[active = 1]", style: { "line-style": "dashed", "line-dash-pattern": [6, 4] } },
+                    ],
+                    layout: { name: "preset" },
+                });
+                if (!cyDashTimer) {
+                    let off = 0;
+                    cyDashTimer = setInterval(() => {
+                        if (!cyRos || byId("rosGraph").style.display === "none") return;
+                        off -= 1; cyRos.edges("[active = 1]").style("line-dash-offset", off);
+                    }, 80);
+                }
+                return cyRos;
+            }
+            function renderRosGraph(state) {
+                const cont = byId("rosGraph");
+                const g = state && state.rosGraph;
+                if (!g || !g.available) {
+                    if (cyRos) { cyRos.destroy(); cyRos = null; cyRosSig = ""; }
+                    cont.innerHTML = '<div style="color:#5a6b62;font-size:12px;padding:14px">ROS 그래프 대기 — 자율 스택 실행 시 노드/토픽 표시</div>';
+                    return;
+                }
+                const cy = ensureCyRos();
+                if (!cy) { cont.innerHTML = '<div style="color:#5a6b62;font-size:12px;padding:14px">cytoscape 로드 실패(CDN 확인)</div>'; return; }
+                const els = [];
+                (g.nodes || []).forEach((n) => els.push({ data: { id: n.id, kind: "node", label: rosShort(n.id) } }));
+                (g.topics || []).forEach((t) => { const hz = t.hz; els.push({ data: { id: t.id, kind: "topic", label: rosShort(t.id) + (hz ? ` ${hz}Hz` : ""), hz: hz || 0 } }); });
+                (g.edges || []).forEach((e) => { const hz = e.hz || 0; els.push({ data: { id: e.id, source: e.source, target: e.target, w: hzWidth(hz), c: hzColor(hz), active: hz > 0 ? 1 : 0 } }); });
+                const sig = els.map((x) => x.data.id).sort().join("|");
+                if (sig !== cyRosSig) {
+                    cyRos.json({ elements: els });
+                    cyRosSig = sig;
+                    try { cyRos.layout({ name: "dagre", rankDir: "LR", nodeSep: 14, rankSep: 44, edgeSep: 6, fit: true, padding: 8 }).run(); }
+                    catch (e) { try { cyRos.layout({ name: "breadthfirst", directed: true, spacingFactor: 0.85, fit: true, padding: 8 }).run(); } catch (e2) {} }
+                } else {
+                    cyRos.batch(() => {
+                        els.forEach((x) => {
+                            const el = cyRos.getElementById(x.data.id);
+                            if (!el || !el.length) return;
+                            if (x.data.kind === "topic") { el.data("label", x.data.label); el.data("hz", x.data.hz); }
+                            if (x.data.w != null) { el.data("w", x.data.w); el.data("c", x.data.c); el.data("active", x.data.active); }
+                        });
+                    });
+                }
+            }
+            let rosSubTab = "graph", rosParamNode = "";
+            function setRosSub(s) {
+                rosSubTab = ["graph", "services", "tf", "params"].includes(s) ? s : "graph";
+                ["graph", "services", "tf", "params"].forEach((k) => byId("ros-sub-" + k).classList.toggle("active", k === rosSubTab));
+                byId("rosGraph").style.display = rosSubTab === "graph" ? "block" : "none";
+                byId("rosServices").style.display = rosSubTab === "services" ? "block" : "none";
+                byId("rosTf").style.display = rosSubTab === "tf" ? "block" : "none";
+                byId("rosParams").style.display = rosSubTab === "params" ? "block" : "none";
+                byId("rosServices").dataset.sig = ""; byId("rosTf").dataset.sig = ""; byId("rosParams").dataset.count = "";
+                renderRosActive(latestState || {});
+                if (rosSubTab === "graph" && cyRos) { setTimeout(() => { try { cyRos.resize(); cyRos.fit(undefined, 8); } catch (e) {} }, 50); }
+            }
+            function renderRosActive(state) {
+                if (rosSubTab === "services") renderRosServices(state);
+                else if (rosSubTab === "tf") renderRosTf(state);
+                else if (rosSubTab === "params") renderRosParams(state);
+                else renderRosGraph(state);
+            }
+            function renderRosServices(state) {
+                const c = byId("rosServices"); const svc = (state && state.rosGraph && state.rosGraph.services) || [];
+                const sig = svc.map((s) => s.name + (s.nodes || []).join()).join("|");
+                if (c.dataset.sig === sig) return; c.dataset.sig = sig;
+                if (!svc.length) { c.innerHTML = '<div style="color:var(--muted);padding:12px">서비스 없음 (자율 스택 실행 시 표시)</div>'; return; }
+                let h = '<table style="width:100%;border-collapse:collapse;font-size:11px"><tr style="color:var(--muted);text-align:left"><th style="padding:4px">서비스</th><th>타입</th><th>노드</th></tr>';
+                svc.forEach((s) => { h += `<tr style="border-top:1px solid var(--line-dim)"><td style="padding:4px;color:var(--cyan)">${escapeHtml(rosShort("t:" + s.name))}</td><td style="color:var(--muted)">${escapeHtml((s.type || "").split("/").pop())}</td><td>${escapeHtml((s.nodes || []).map((n) => n.split("/").pop()).join(", "))}</td></tr>`; });
+                c.innerHTML = h + "</table>";
+            }
+            function renderRosTf(state) {
+                const c = byId("rosTf"); const tf = (state && state.rosGraph && state.rosGraph.tf) || [];
+                const sig = tf.map((t) => t.parent + ">" + t.child).join("|");
+                if (c.dataset.sig === sig) return; c.dataset.sig = sig;
+                if (!tf.length) { c.innerHTML = '<div style="color:var(--muted);padding:12px">TF 없음 (/tf 미발행)</div>'; return; }
+                const children = {}, allKids = new Set();
+                tf.forEach((t) => { (children[t.parent] = children[t.parent] || []).push(t); allKids.add(t.child); });
+                const roots = [...new Set(tf.map((t) => t.parent))].filter((p) => !allKids.has(p));
+                const node = (frame, depth) => {
+                    let h = `<div style="padding:2px 0 2px ${depth * 16}px;font-size:11px">${depth > 0 ? "└ " : ""}<b style="color:var(--text)">${escapeHtml(frame)}</b></div>`;
+                    (children[frame] || []).forEach((ch) => { h += node(ch.child, depth + 1); });
+                    return h;
+                };
+                c.innerHTML = '<div style="padding:8px">' + roots.map((r) => node(r, 0)).join("") + "</div>";
+            }
+            function renderRosParams(state) {
+                const c = byId("rosParams"); const nodes = (state && state.rosGraph && state.rosGraph.nodes) || [];
+                if (c.dataset.count === String(nodes.length)) return;  // 노드 수 동일하면 재구성 안 함(편집 중 깜빡임 방지)
+                c.dataset.count = String(nodes.length);
+                const opts = nodes.map((n) => `<option value="${escapeHtml(n.id)}" ${n.id === rosParamNode ? "selected" : ""}>${escapeHtml(n.id)}</option>`).join("");
+                c.innerHTML = `<div style="padding:8px">
+                    <select id="rosParamSel" onchange="loadRosParams(this.value)" style="width:100%;background:#0a1730;color:var(--text);border:1px solid var(--line);padding:6px;font:inherit;font-size:12px">
+                    <option value="">노드 선택…</option>${opts}</select>
+                    <div id="rosParamTable" style="margin-top:8px"></div></div>`;
+                if (rosParamNode) loadRosParams(rosParamNode);
+            }
+            async function loadRosParams(node) {
+                rosParamNode = node; const t = byId("rosParamTable"); if (!t) return;
+                if (!node) { t.innerHTML = ""; return; }
+                t.innerHTML = '<div style="color:var(--muted)">로딩…</div>';
+                try {
+                    const d = await (await fetch("/api/ros/params?node=" + encodeURIComponent(node), { cache: "no-store" })).json();
+                    if (!d.ok) { t.innerHTML = `<div style="color:var(--red)">${escapeHtml(d.error || "실패")}</div>`; return; }
+                    if (!d.params.length) { t.innerHTML = '<div style="color:var(--muted)">파라미터 없음</div>'; return; }
+                    let h = '<table style="width:100%;border-collapse:collapse;font-size:11px"><tr style="color:var(--muted);text-align:left"><th style="padding:3px">이름</th><th>타입</th><th>값</th><th></th></tr>';
+                    d.params.forEach((p, i) => { const val = Array.isArray(p.value) ? p.value.join(",") : String(p.value); h += `<tr style="border-top:1px solid var(--line-dim)"><td style="padding:3px;color:var(--cyan)">${escapeHtml(p.name)}</td><td style="color:var(--muted)">${escapeHtml(p.type)}</td><td><input id="pp${i}" value="${escapeHtml(val)}" style="width:88px;background:#0a1730;color:var(--text);border:1px solid var(--line-dim);font:inherit;font-size:11px"></td><td><button class="tab-button" style="padding:2px 7px" onclick="setRosParam('${escapeHtml(node)}','${escapeHtml(p.name)}','pp${i}')">SET</button></td></tr>`; });
+                    t.innerHTML = h + "</table>";
+                } catch (e) { t.innerHTML = `<div style="color:var(--red)">오류: ${escapeHtml(String(e))}</div>`; }
+            }
+            async function setRosParam(node, name, inputId) {
+                const inp = byId(inputId); if (!inp) return;
+                try {
+                    const d = await (await fetch("/api/ros/params/set", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node, name, value: inp.value }) })).json();
+                    inp.style.borderColor = d.ok ? "var(--ok)" : "var(--red)";
+                    if (!d.ok) alert("설정 실패: " + (d.reason || d.error || ""));
+                } catch (e) { alert("오류: " + e); }
+            }
             function setMapTab(tabName) {
-                activeMapTab = tabName === "ros" ? "ros" : "terrain";
+                activeMapTab = ["terrain", "ros", "rviz"].includes(tabName) ? tabName : "terrain";
                 byId("map-tab-terrain").classList.toggle("active", activeMapTab === "terrain");
                 byId("map-tab-ros").classList.toggle("active", activeMapTab === "ros");
-                byId("mapPanelTitle").textContent = activeMapTab === "ros" ? "ROS MAP" : "TERRAIN MAP";
-                updateMapLegend();
-                drawMap(latestState || {});
+                byId("map-tab-rviz").classList.toggle("active", activeMapTab === "rviz");
+                const isTerrain = activeMapTab === "terrain", isRos = activeMapTab === "ros", isRviz = activeMapTab === "rviz";
+                byId("mapCanvas").style.display = isTerrain ? "block" : "none";
+                byId("mapLegend").style.display = isTerrain ? "flex" : "none";
+                byId("rosWrap").style.display = isRos ? "flex" : "none";
+                const frame = byId("rvizFrame");
+                frame.style.display = isRviz ? "block" : "none";
+                if (isRviz && !frame.src) { frame.src = "/rviz3d?frame=tank_map&cloud=detected&rays=1"; }
+                byId("mapPanelTitle").textContent = isRviz ? "RVIZ 3D" : (isRos ? "ROS MONITOR" : "TERRAIN MAP");
+                if (isTerrain) { updateMapLegend(); drawMap(latestState || {}); }
+                if (isRos) { renderRosActive(latestState || {}); }
             }
             function updateMapLegend() {
                 const terrain = ["SELF", "ENEMY", "WATER", "RIDGE", "HIGH", "TREE", "ROCK"];
@@ -1515,7 +1739,84 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 html += '</div>';
                 return html;
             }
+            function fmtCmd(cmd) {
+                if (!cmd || typeof cmd !== "object") return "STOP";
+                const pick = (v) => (v && typeof v === "object") ? (v.command ?? v.dir ?? "") : (v ?? "");
+                const ws = pick(cmd.moveWS), ad = pick(cmd.moveAD);
+                const parts = [ws, ad].filter(Boolean).join(" ");
+                return (parts || "STOP") + (cmd.fire ? " · FIRE" : "");
+            }
+            function normDeg(v) {
+                v = Number(v);
+                if (!Number.isFinite(v)) return 0;
+                return ((v % 360) + 540) % 360 - 180;  // 0~360 → -180~180 (0=수평)
+            }
+            function t3dCube(w, h, d, cls) {
+                const f = (W, H, tf) => `<div class="t3d-face ${cls}" style="width:${W}px;height:${H}px;transform:translate(-50%,-50%) ${tf}"></div>`;
+                return f(w, h, `translateZ(${d / 2}px)`)
+                     + f(w, h, `rotateY(180deg) translateZ(${d / 2}px)`)
+                     + f(d, h, `rotateY(90deg) translateZ(${w / 2}px)`)
+                     + f(d, h, `rotateY(-90deg) translateZ(${w / 2}px)`)
+                     + f(w, d, `rotateX(90deg) translateZ(${h / 2}px)`)
+                     + f(w, d, `rotateX(-90deg) translateZ(${h / 2}px)`);
+            }
+            function renderTank3d(pitch, roll, yaw, tYaw, tPitch) {
+                const hull = `<div class="t3d-grp">${t3dCube(60, 15, 38, "")}</div>`;
+                const barrel = `<div class="t3d-grp" style="transform:translateZ(11px) rotateX(${-tPitch}deg)">`
+                    + `<div class="t3d-grp" style="transform:translateZ(16px)">${t3dCube(5, 5, 30, "barrel")}</div></div>`;
+                const turret = `<div class="t3d-grp" style="transform:translateY(-15px) rotateY(${tYaw}deg)">`
+                    + t3dCube(28, 13, 22, "turret") + barrel + `</div>`;
+                return `<div class="tank3d-view">`
+                    + `<div class="tank3d" style="transform:rotateY(${yaw}deg) rotateX(${-pitch}deg) rotateZ(${roll}deg)">`
+                    + hull + turret + `</div></div>`;
+            }
+            function renderTankState(state) {
+                const latest = latestBridge(state);
+                const sim = latest.sim_status || {};
+                const ps = latest.player_state || {};
+                const body = ps.body || {};
+                const turret = ps.turret || {};
+                const pose = ps.pose_map || latest.player_pose_map || {};
+                const cmd = (latest.get_action_response || {}).command;
+                const speed = (ps.speed ?? sim.player_speed);
+                const health = (ps.health ?? sim.player_health);
+                const pitch = normDeg(body.z), roll = normDeg(body.y), yaw = normDeg(body.x);
+                const tYaw = normDeg((Number(turret.x) || 0) - (Number(body.x) || 0)), tPitch = normDeg(turret.y);
+                const posTxt = (pose && pose.x != null) ? `${numberText(pose.x,0)}, ${numberText(pose.y,0)}` : "-";
+                const hud =
+                    `<div class="t3d-hud tl"><div class="k">속도 m/s</div><div class="v big">${numberText(speed,2)}</div></div>`
+                  + `<div class="t3d-hud tr"><div class="k">체력</div><div class="v big">${numberText(health,0)}</div></div>`
+                  + `<div class="t3d-hud bl"><div class="k">자세 P/R/Y°</div><div class="v">${numberText(pitch,1)} / ${numberText(roll,1)} / ${numberText(yaw,1)}</div></div>`
+                  + `<div class="t3d-hud br"><div class="k">포탑 H/P°</div><div class="v">${numberText(turret.x,1)} / ${numberText(turret.y,1)}</div></div>`
+                  + `<div class="t3d-hud bc">제어 <b>${escapeHtml(fmtCmd(cmd))}</b> · 위치 <b>${posTxt}</b> · <b>${numberText(sim.sim_time,0)}s</b> / <b>${numberText(sim.distance,0)}m</b></div>`;
+                const stage = `<div class="tank3d-stage">${renderTank3d(pitch, roll, yaw, tYaw, tPitch)}${hud}</div>`;
+                return `<div class="sec-title">전차 상태</div>${stage}`;
+            }
+            function renderSystem(state) {
+                const m = (state?.sensor || {}).systemMetrics || {};
+                const bar = (label, pct, extra) => {
+                    const p = Number.isFinite(Number(pct)) ? Math.max(0, Math.min(100, Number(pct))) : null;
+                    const col = p===null ? "#5a6b62" : (p>85?"#ff3448":p>60?"#ffd34d":"#39ff88");
+                    return `<div class="tele"><div class="label">${escapeHtml(label)} ${p===null?"(N/A)":(p.toFixed(0)+"%")}${extra?(" · "+escapeHtml(extra)):""}</div><div class="bar"><span style="width:${p||0}%;background:${col}"></span></div></div>`;
+                };
+                let html = '<div class="sec-title">시스템 자원</div><div class="tele-grid" style="grid-template-columns:1fr;">';
+                html += bar("CPU", m.cpuPercent);
+                html += bar("MEM", m.memoryPercent, (m.memoryUsedMb!=null)?`${numberText(m.memoryUsedMb,0)}/${numberText(m.memoryTotalMb,0)}MB`:"");
+                if (m.gpuAvailable) {
+                    const gmem = (m.gpuMemoryTotalMb)? (100*m.gpuMemoryUsedMb/m.gpuMemoryTotalMb):null;
+                    html += bar("GPU", m.gpuPercent);
+                    html += bar("GPU MEM", gmem, `${numberText(m.gpuMemoryUsedMb,0)}/${numberText(m.gpuMemoryTotalMb,0)}MB`);
+                } else {
+                    html += `<div class="tele"><div class="label">GPU</div><div class="value" style="font-size:12px;color:#5a6b62;">없음(이 PC)</div></div>`;
+                }
+                html += '</div>';
+                return html;
+            }
             function updateLeftPanel(state) {
+                // C2 4분할: 패널 ③(전차상태+시스템)·④(LLM/위험도) 렌더. 아래 legacy 5탭 코드는 unreachable.
+                byId("tankSystemContent").innerHTML = renderTankState(state) + renderSystem(state);
+                byId("riskContent").innerHTML = renderRiskPanel(state);
+                return;
                 const latest = latestBridge(state);
                 const yolo = state?.yolo || {};
                 const liveView = state?.liveView || {};
@@ -1831,6 +2132,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 ctx.restore();
             }
             function drawMap(state) {
+                if (activeMapTab !== "terrain") return;  // ros=그래프, rviz=iframe → 캔버스는 terrain 전용
                 try {
                     const canvas = byId("mapCanvas");
                     const rect = canvas.getBoundingClientRect();
@@ -1968,6 +2270,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     updateHeader(latestState);
                     updateLeftPanel(latestState);
                     drawMap(latestState);
+                    if (activeMapTab === "ros") renderRosActive(latestState);
                     updateBottomStatus(latestState);
                     drawFeedOverlay(latestState);
                 } catch (err) {
@@ -2032,6 +2335,22 @@ def render_view_page(poll_ms: int = 1000) -> str:
             updateMapLegend();
             if (new URLSearchParams(window.location.search).get("map") === "ros") setMapTab("ros");
             fetchStaticMap();
+            function toggleMax(panel) {
+                if (!panel) return;
+                const on = panel.classList.toggle("maximized");
+                document.querySelectorAll(".main-grid > .panel").forEach((p) => { if (p !== panel) p.style.visibility = on ? "hidden" : ""; });
+                setTimeout(() => {
+                    try { if (cyRos) { cyRos.resize(); cyRos.fit(undefined, 8); } } catch (e) {}
+                    if (activeMapTab === "terrain") drawMap(latestState || {});
+                }, 60);
+            }
+            function initPanelMax() {
+                document.querySelectorAll(".main-grid > .panel > .panel-title").forEach((t) => {
+                    t.title = "더블클릭: 패널 확대/복원";
+                    t.addEventListener("dblclick", () => toggleMax(t.closest(".panel")));
+                });
+            }
+            initPanelMax();
             fetchDashboardState();
             setInterval(fetchDashboardState, 300);
         </script>

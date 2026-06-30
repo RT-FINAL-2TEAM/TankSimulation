@@ -1,0 +1,39 @@
+fixed_frame: tank_map
+rosbridge_port: 9090
+web_port: 5055
+coordinate_policy: "Unity raw(x,y,z) -> ROS tank_map(x=raw.x,y=raw.z,z=raw.y) -> Three.js(x=map.x,y=map.z,z=-map.y)"
+marker_arrays:
+  - /tank/rviz/object_markers
+  - /tank/rviz/obstacle_markers
+  - /tank/rviz/lidar_markers
+  - /tank/rviz/risk_markers
+  - /tank/rviz/potential_markers
+  - /tank/rviz/potential_field_markers
+  - /tank/rviz/lidar_cluster_markers
+  - /tank/rviz/fused_object_markers
+  - /tank/rviz/discovered_object_markers
+  - /tank/rviz/recon_map_markers
+  - /tank/rviz/terrain_markers
+  - /tank/rviz/mission_map_markers
+  - /tank/rviz/map_diff_markers
+paths:
+  - /tank/global_path
+pointclouds:
+  detected: /tank/sensor/lidar/detected_points_map
+  all: /tank/sensor/lidar/all_detected_points_map
+  terrain: /tank/sensor/lidar/terrain_points_map
+  final: /tank/terrain/final_accumulated_cloud
+  ground: /tank/terrain/final_ground_points
+  nonground: /tank/terrain/final_non_ground_points
+ray_cloud: /tank/sensor/lidar/all_detected_points_map
+poses:
+  - /tank/player/pose
+  - /tank/enemy/pose
+  - /tank/local_target/pose
+  - /tank/goal/pose
+  - /tank/latest_pose
+vectors:
+  attractive: /tank/potential/attractive_vector
+  repulsive: /tank/potential/repulsive_vector
+  result: /tank/potential/result_vector
+lidar_origin: /tank/sensor/lidar/origin
