@@ -1,0 +1,16 @@
+[INFO] [launch]: All log files can be found below /home/tankcc/.ros/log/2026-07-01-12-32-49-165753-tankcc-OMEN-by-HP-Gaming-Laptop-16-k0xxx-125641
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [static_map_loader_node-1]: process started with pid [125645]
+[INFO] [rviz_visualizer_node-2]: process started with pid [125647]
+[INFO] [terrain_record_finalize_node-3]: process started with pid [125649]
+[INFO] [rviz2-4]: process started with pid [125651]
+[rviz2-4] Warning: Ignoring XDG_SESSION_TYPE=wayland on Gnome. Use QT_QPA_PLATFORM=wayland to run on Wayland anyway.
+[rviz2-4] [INFO] [1782876769.649412868] [rviz2]: Stereo is NOT SUPPORTED
+[rviz2-4] [INFO] [1782876769.649520116] [rviz2]: OpenGl version: 4.6 (GLSL 4.6)
+[rviz2-4] [INFO] [1782876769.677850283] [rviz2]: Stereo is NOT SUPPORTED
+[rviz_visualizer_node-2] [INFO] [1782876769.724286153] [tank_rviz_visualizer_node]: tank_rviz_visualizer_node started
+[rviz2-4] [INFO] [1782876769.859992290] [rviz2]: Stereo is NOT SUPPORTED
+[static_map_loader_node-1] [INFO] [1782876770.009222683] [tank_static_map_loader_node]: Loaded static map (finalmap): 315 objects from /home/tankcc/tankcc/recon_reports/recon_map/scenario2_map.map
+[static_map_loader_node-1] [INFO] [1782876770.009694767] [tank_static_map_loader_node]: Static map mode=recon_only, publish_mission=False, publish_diff=False, publish_grids=True
+[terrain_record_finalize_node-3] [INFO] [1782876773.701896728] [terrain_saved_map_visualizer_node]: 저장 terrain map 로드 완료: file=/home/tankcc/tankcc/recon_reports/recon_map/scenario2_terrain.npz, accumulated=342223, ground=309327, non_ground=36683, frame=tank_map
+[terrain_record_finalize_node-3] [INFO] [1782876774.864933124] [terrain_saved_map_visualizer_node]: terrain_record_finalize_node started. Recording preclassified terrain=/tank/sensor/lidar/terrain_points_map, obstacle=/tank/sensor/lidar/detected_points_map. Mode=recording disabled, save_file=/home/tankcc/tankcc/recon_reports/recon_map/scenario2_terrain.npz. Call /tank/terrain/finalize_map when driving is finished.

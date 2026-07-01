@@ -14,38 +14,10 @@ Prerequisite:
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import SetEnvironmentVariable, DeclareLaunchArgument, OpaqueFunction
+from launch.actions import SetEnvironmentVariable, DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
-
-
-def _maybe_rosbridge(context, *args, **kwargs):
-    """rosbridge_server가 설치돼 있으면 websocket 노드를 띄운다(웹 3D 뷰어 데이터 소켓 :9090).
-
-    미설치면 graceful skip — 코어 스택은 영향 없음. start_rosbridge:=false로 끌 수 있음.
-    웹 RViz는 ros_bridge(:5000)가 서빙하고, 토픽 데이터는 이 rosbridge가 ws로 중계한다.
-    """
-    flag = LaunchConfiguration("start_rosbridge").perform(context).strip().lower()
-    if flag not in ("1", "true", "yes", "y"):
-        return []
-    try:
-        get_package_share_directory("rosbridge_server")
-    except Exception:
-        print("[launch] rosbridge_server 미설치 — 웹 3D RViz 데이터 소켓 생략 "
-              "(sudo apt install ros-humble-rosbridge-suite)")
-        return []
-    try:
-        port = int(os.environ.get("TANK_RVIZ_WEB_ROSBRIDGE_PORT", "9090"))
-    except (TypeError, ValueError):
-        port = 9090
-    return [Node(
-        package="rosbridge_server",
-        executable="rosbridge_websocket",
-        name="rosbridge_websocket",
-        output="screen",
-        parameters=[{"port": port}],
-    )]
 
 
 def generate_launch_description():
@@ -133,11 +105,6 @@ def generate_launch_description():
         'recon_report_dir', default_value='./recon_reports',
         description='ReconLogger output dir for route_*.json (scenario2 overrides to isolate from recon).'
     )
-    # 웹 3D RViz 뷰어(:5000)용 데이터 소켓(rosbridge :9090) 자동 실행. 미설치면 graceful skip.
-    start_rosbridge_arg = DeclareLaunchArgument(
-        'start_rosbridge', default_value='true',
-        description='Auto-start rosbridge_websocket(:9090) for the web 3D viewer if installed.'
-    )
     require_turret_completion_for_reached_arg = DeclareLaunchArgument(
         'require_turret_completion_for_reached', default_value='false',
         description='Gate route report completion on /tank/turret/status terminal phase.'
@@ -159,8 +126,6 @@ def generate_launch_description():
         recon_min_confirm_age_arg,
         terrain_weight_arg,
         recon_report_dir_arg,
-        start_rosbridge_arg,
-        OpaqueFunction(function=_maybe_rosbridge),
         require_turret_completion_for_reached_arg,
         SetEnvironmentVariable("TANK_START_CONTROL", "start"),
         SetEnvironmentVariable("TANK_APF_PASSTHROUGH_WHEN_CLEAR", "true"),
@@ -227,31 +192,6 @@ def generate_launch_description():
                 "terrain_cost_file": LaunchConfiguration("terrain_cost_file"),
                 "terrain_weight": ParameterValue(
                     LaunchConfiguration("terrain_weight"), value_type=float),
-                "tank_param_file": tank_param_file,
-                "enable_speed_based_inflation": True,
-                "enable_speed_based_emergency_replan": True,
-                "enable_path_feasibility_check": True,
-                "enable_semantic_risk_cost": True,
-                "semantic_risk_weight": 0.06,
-                "semantic_risk_radius_scale": 1.0,
-                "semantic_risk_scores": "tank:100,house:50,car:25,tent:15,rock:10,unknown:5",
-                "semantic_risk_radii": "tank:25,house:18,car:10,tent:8,rock:6,unknown:5",
-                "enable_theta_aware_astar": True,
-                "theta_heading_change_weight": 0.25,
-                # A* polyline corner를 곡선으로 후처리해 꼭짓점 정지/yaw pivot을 줄인다.
-                "enable_curvature_path_smoothing": True,
-                "curvature_smoothing_min_turn_radius_m": 7.0,
-                "curvature_smoothing_max_corner_angle_deg": 25.0,
-                "curvature_smoothing_point_spacing_m": 1.0,
-                "curvature_smoothing_collision_check_margin_m": 2.0,
-                # Dense obstacle에서 새 path가 순간적으로 좌우로 뒤집히는 것을 막는 채택 필터.
-                "enable_replan_acceptance_filter": False,
-                "path_commitment_sec": 0.0,
-                "replan_accept_max_length_ratio": 1.30,
-                "replan_accept_max_sharp_corner_increase": 1,
-                "replan_accept_max_heading_change_increase_deg": 120.0,
-                "enable_avoid_side_lock": False,
-                "avoid_side_lock_sec": 0.0,
                 # Known map 초록점은 자율주행 전 이미 아는 hard no-go다(팀원 fix/control).
                 "static_obstacle_inflate": 2.0,
                 # DBSCAN cluster bboxes are used when dynamic replanning is enabled.
@@ -293,19 +233,14 @@ def generate_launch_description():
                 "lidar_block_min_distance": 0.5,
                 "lidar_block_max_distance": 80.0,
                 "emergency_cluster_replan_enabled": True,
-                # Emergency replan은 one-frame LiDAR/fusion 흔들림에 과민하면 경로가 좌우로 튄다.
-                # 2초 cooldown + 3-hit 안정화로 실제로 지속되는 corridor block만 재계획한다.
-                "emergency_replan_cooldown_sec": 2.0,
+                "emergency_replan_cooldown_sec": 0.8,
                 "emergency_replan_front_distance": 24.0,
                 "emergency_replan_min_distance": 0.0,
-                "emergency_replan_margin": 9.0,
-                "emergency_replan_required_hits": 3,
-                "emergency_replan_margin_max": 11.0,
+                "emergency_replan_margin": 10.0,
                 # Conditional dynamic A*: 현재 보이는 LiDAR cluster가 실제 경로를 막을 때만 재계획한다.
                 "dynamic_replan_max_count": 0,
-                # 같은 위치에서 경로가 번갈아 뒤집히는 것을 막기 위한 progress guard.
-                "dynamic_replan_min_progress_m": 2.0,
-                "dynamic_replan_progress_guard_sec": 4.0,
+                "dynamic_replan_min_progress_m": 0.0,
+                "dynamic_replan_progress_guard_sec": 0.0,
                 "lidar_cluster_eps": 2.0,
                 "lidar_cluster_min_samples": 3,
                 "lidar_history_resolution": 0.5,
@@ -439,9 +374,6 @@ def generate_launch_description():
             output="screen",
             parameters=[{
                 "tank_param_file": tank_param_file,
-                "enable_dynamic_speed_policy": True,
-                "enable_stopping_distance_model": True,
-                "enable_curvature_speed_limit": True,
                 "controller_hz": 10.0,
                 "enable_local_target": False,
                 "target_ttl_sec": 2.0,
@@ -483,10 +415,10 @@ def generate_launch_description():
                 # 경로가 급격히 꺾일 때는 W를 끊고 차체 yaw를 먼저 맞춘다.
                 # 큰 원을 그리며 경로 밖으로 밀려나는 현상을 줄인다.
                 "enable_sharp_turn_stop_pivot": True,
-                "sharp_turn_stop_angle_deg": 130.0,
-                "sharp_turn_release_angle_deg": 70.0,
+                "sharp_turn_stop_angle_deg": 105.0,
+                "sharp_turn_release_angle_deg": 55.0,
                 "sharp_turn_min_target_distance": 4.0,
-                "sharp_turn_max_sec": 0.25,
+                "sharp_turn_max_sec": 0.45,
                 "sharp_turn_cooldown_sec": 1.5,
                 "sharp_turn_block_when_apf_side_pass": True,
                 # 실제 속도가 높은 상태에서 급커브/장애물 앞을 W로 밀고 들어가면 관성으로 오버슛한다.

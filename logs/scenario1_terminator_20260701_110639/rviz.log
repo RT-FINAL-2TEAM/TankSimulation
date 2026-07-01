@@ -1,0 +1,16 @@
+[INFO] [launch]: All log files can be found below /home/tankcc/.ros/log/2026-07-01-11-06-40-823489-tankcc-OMEN-by-HP-Gaming-Laptop-16-k0xxx-3653
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [static_map_loader_node-1]: process started with pid [3665]
+[INFO] [rviz_visualizer_node-2]: process started with pid [3667]
+[INFO] [terrain_record_finalize_node-3]: process started with pid [3669]
+[INFO] [rviz2-4]: process started with pid [3671]
+[rviz2-4] Warning: Ignoring XDG_SESSION_TYPE=wayland on Gnome. Use QT_QPA_PLATFORM=wayland to run on Wayland anyway.
+[terrain_record_finalize_node-3] [INFO] [1782871601.274291158] [terrain_record_finalize_node]: terrain_record_finalize_node started. Recording preclassified terrain=/tank/sensor/lidar/terrain_points_map, obstacle=/tank/sensor/lidar/detected_points_map. Mode=recording enabled, save_file=/home/tankcc/tankcc/tank_terrain_maps/terrain_map_latest.npz. Call /tank/terrain/finalize_map when driving is finished.
+[rviz2-4] [INFO] [1782871601.289993171] [rviz2]: Stereo is NOT SUPPORTED
+[rviz2-4] [INFO] [1782871601.290065957] [rviz2]: OpenGl version: 4.6 (GLSL 4.6)
+[rviz_visualizer_node-2] [INFO] [1782871601.311111698] [tank_rviz_visualizer_node]: tank_rviz_visualizer_node started
+[rviz2-4] [INFO] [1782871601.316344389] [rviz2]: Stereo is NOT SUPPORTED
+[static_map_loader_node-1] [INFO] [1782871601.429680067] [tank_static_map_loader_node]: Loaded static map (finalmap): 301 objects from /home/tankcc/tankcc/install/rviz_visualization/share/rviz_visualization/map/finalmap.map
+[static_map_loader_node-1] [INFO] [1782871601.429926309] [tank_static_map_loader_node]: Static map mode=recon_only, publish_mission=False, publish_diff=False, publish_grids=True
+[rviz2-4] [INFO] [1782871601.465074943] [rviz2]: Stereo is NOT SUPPORTED
+[terrain_record_finalize_node-3] [INFO] [1782871618.018158267] [terrain_record_finalize_node]: 기록된 LiDAR와 최종 지도 결과를 초기화했습니다.

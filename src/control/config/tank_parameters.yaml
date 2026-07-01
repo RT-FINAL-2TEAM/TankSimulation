@@ -3,42 +3,6 @@
 # 좌표/yaw 해석은 기존 컨트롤러와 동일하게 유지한다.
 yaw_axis: body_x
 
-vehicle:
-  # Simulator Q&A: Player 하단 몸체 bounding box (x,y,z) = (3.667, 1.582, 8.066) m
-  body_width_m: 3.667
-  body_height_m: 1.582
-  body_length_m: 8.066
-  turret_width_m: 3.297
-  turret_height_m: 2.779
-  turret_length_m: 5.891
-
-planning:
-  # 기존 TANK_HALF_WIDTH=2.0을 YAML 단일 출처로 이동. 실제 반폭 1.8335m + 보수 여유.
-  half_width_m: 2.0
-  half_length_m: 4.03
-  safety_margin_m: 1.0
-  command_latency_sec: 0.30
-  base_static_inflate_m: 2.0
-  base_dynamic_inflate_m: 4.5
-  base_discovered_inflate_m: 2.0
-  base_lidar_memory_inflate_m: 3.0
-  speed_inflation_scale: 0.45
-  max_speed_inflation_extra_m: 3.5
-  emergency_front_base_m: 24.0
-  emergency_front_min_m: 12.0
-  emergency_front_max_m: 45.0
-  turn_preparation_distance_m: 6.0
-
-controller_speed_policy:
-  enabled: true
-  cruise_speed_mps: 4.6
-  slow_turn_speed_mps: 2.4
-  crawl_turn_speed_mps: 1.6
-  crawl_pivot_speed_mps: 1.0
-  min_forward_speed_mps: 0.7
-  goal_approach_speed_mps: 0.9
-  obstacle_slow_speed_mps: 1.0
-
 dynamics_model:
   forward_speed_mps_per_weight: 13.6
   reverse_speed_mps_per_weight: 8.33
@@ -89,11 +53,6 @@ stopping:
   nominal_distance: 2.0
   safety_distance: 3.0
   controller_goal_margin: 10.0
-  # 속도 기반 정지거리 모델: d_stop = v*reaction_time + v^2/(2*decel) + safety_distance
-  reaction_time_sec: 0.30
-  decel_mps2: 3.0
-  min_stop_distance_m: 1.0
-  max_stop_distance_m: 12.0
 
 turning_radii_examples:
   - w_ws: 1.0

@@ -1,0 +1,5058 @@
+[INFO] [1782875684.952555215] [tank_ros_bridge_node]: Tank Challenge ROS2 final bridge initialized
+[INFO] [1782875684.952818136] [tank_ros_bridge_node]: TANK_MODE=auto, COMMAND_TTL_SEC=5.0, AUTO_FALLBACK=stop
+[INFO] [1782875684.953049630] [tank_ros_bridge_node]: ROS2 command input: /tank/control/command
+ * Tip: There are .env files present. Install python-dotenv to use them.
+[ENV] loaded: /home/tankcc/tankcc/.env
+============================================================
+Tank Challenge Flask Endpoint + ROS2 Bridge
+Mode: auto
+Listening: http://0.0.0.0:5000
+ROS2 command input: /tank/control/command
+Coordinate: raw=(x,y,z), map=(x,z,y)
+============================================================
+ * Serving Flask app 'ros_bridge.app_routes'
+ * Debug mode: off
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.0.32:5000
+Press CTRL+C to quit
+[WARN] [1782875685.044844023] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:45] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:45] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:45] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:45] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875685.402388192] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:45] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:45] "POST /info HTTP/1.1" 200 -
+127.0.0.1 - - [01/Jul/2026 12:14:45] "GET /health HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:45] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:45] "POST /info HTTP/1.1" 200 -
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /get_action
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /detect
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 178.01905822753906,
+  "distance": 26.504440307617188,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 8.002049446105957,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.2168259471654892,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 178.18138122558594,
+  "distance": 26.504533767700195,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.997950553894043,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.02525145746767521,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 178.7288360595703,
+  "distance": 26.50483512878418,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.984814643859863,
+    "z": 277.69598388671875
+  },
+  "playerSpeed": 0.029990151524543762,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /get_action
+[REQ] 192.168.0.82 POST /info
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 177.60208129882812,
+  "distance": 26.504562377929688,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.996697902679443,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.061196569353342056,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 127.0.0.1 GET /health
+[info] compact
+{
+  "time": 176.95982360839844,
+  "distance": 26.504470825195312,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 8.000711441040039,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.03713415190577507,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 178.864990234375,
+  "distance": 26.50467872619629,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.991618633270264,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.04997318610548973,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+192.168.0.82 - - [01/Jul/2026 12:14:45] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:45] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:45] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:45] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:45] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:45] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:45] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875685.977647576] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /get_action HTTP/1.1" 200 -
+{
+  "time": 177.09609985351562,
+  "distance": 26.505136489868164,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.97197961807251,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.21083515882492065,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 177.46676635742188,
+  "distance": 26.504751205444336,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.988417148590088,
+    "z": 277.69598388671875
+  },
+  "playerSpeed": 0.05161859840154648,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 176.41455078125,
+  "distance": 26.50507164001465,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.97471284866333,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.055428702384233475,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 175.2608642578125,
+  "distance": 26.504512786865234,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.998919486999512,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.1441948115825653,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 176.8227081298828,
+  "distance": 26.504587173461914,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.995619773864746,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.04780249297618866,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 179.0034942626953,
+  "distance": 26.50461769104004,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.9942626953125,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.01909014582633972,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 179.14405822753906,
+  "distance": 26.504640579223633,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.993271827697754,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.007049229461699724,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /get_action
+[REQ] 192.168.0.82 POST /info
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[info] compact
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+{
+  "time": 176.68638610839844,
+  "distance": 26.504730224609375,
+  "playerPos": {
+    "x": 108.9751968383789,
+    "y": 7.989103317260742,
+    "z": 277.696044921875
+  },
+  "playerSpeed": 0.07038461416959763,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 177.2335968017578,
+  "distance": 26.505033493041992,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.976381301879883,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.03201295807957649,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 177.87655639648438,
+  "distance": 26.505155563354492,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.971151351928711,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.02143891341984272,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 178.45376586914062,
+  "distance": 26.50503921508789,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.976065635681152,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.06100938841700554,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 178.59115600585938,
+  "distance": 26.504932403564453,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.980685710906982,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.03362741693854332,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 178.31845092773438,
+  "distance": 26.50523567199707,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.967810153961182,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.2198910415172577,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 179.42063903808594,
+  "distance": 26.50450325012207,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.999326229095459,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.020336098968982697,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 179.2822265625,
+  "distance": 26.504566192626953,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.996511459350586,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.02344699017703533,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875686.354677165] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+{
+  "time": 176.5517578125,
+  "distance": 26.50495719909668,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.97962760925293,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.03582003340125084,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /get_action
+[info] compact
+{
+  "time": 179.55929565429688,
+  "distance": 26.50444984436035,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 8.001703262329102,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.017143309116363525,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[info] compact
+{
+  "time": 179.69692993164062,
+  "distance": 26.505170822143555,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.970561981201172,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.22626107931137085,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 179.85345458984375,
+  "distance": 26.50502586364746,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.976693630218506,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.03917369246482849,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 179.95457458496094,
+  "distance": 26.50507164001465,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.9747114181518555,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.019602572545409203,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 180.09652709960938,
+  "distance": 26.50515365600586,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.971278190612793,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.024185746908187866,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 177.7382354736328,
+  "distance": 26.505226135253906,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.968185901641846,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.2094096690416336,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875686.796418518] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:46] "POST /info HTTP/1.1" 200 -
+/home/tankcc/.local/lib/python3.10/site-packages/matplotlib/projections/__init__.py:63: UserWarning: Unable to import Axes3D. This may be due to multiple versions of Matplotlib being installed (e.g. as a system package and as a pip package). As a result, the 3D projection is not available.
+  warnings.warn("Unable to import Axes3D. This may be due to multiple versions of "
+192.168.0.82 - - [01/Jul/2026 12:14:47] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875687.043563225] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:47] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:47] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875687.266566777] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:47] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:47] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:47] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875687.496326326] [tank_ros_bridge_node]: no control command has been received by bridge yet
+{
+  "time": 180.2359619140625,
+  "distance": 26.505128860473633,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.97227144241333,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.0071234130300581455,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /get_action
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[info] compact
+{
+  "time": 180.37460327148438,
+  "distance": 26.50507354736328,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.974666118621826,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.017272451892495155,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 180.53860473632812,
+  "distance": 26.505239486694336,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.9676127433776855,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.043007999658584595,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 180.674560546875,
+  "distance": 26.50507164001465,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.974752426147461,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.052514731884002686,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /get_action
+[REQ] 192.168.0.82 POST /info
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[info] compact
+{
+  "time": 180.8135223388672,
+  "distance": 26.505027770996094,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.976572036743164,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.013094322755932808,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[info] compact
+{
+  "time": 180.95252990722656,
+  "distance": 26.504987716674805,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.978326797485352,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.012623490765690804,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 181.08929443359375,
+  "distance": 26.504854202270508,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.984029769897461,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.041699208319187164,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+192.168.0.82 - - [01/Jul/2026 12:14:47] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:47] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:47] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875687.736849070] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:47] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:47] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875687.940563767] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:47] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:48] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:48] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:48] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875688.331931063] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:48] "POST /get_action HTTP/1.1" 200 -
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 181.2268524169922,
+  "distance": 26.50475311279297,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.988351821899414,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.03141985461115837,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 181.36355590820312,
+  "distance": 26.504619598388672,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.9941558837890625,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.042457304894924164,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 181.50172424316406,
+  "distance": 26.504539489746094,
+  "playerPos": {
+    "x": 108.9751968383789,
+    "y": 7.99741268157959,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.02357129566371441,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[info] compact
+{
+  "time": 181.6382598876953,
+  "distance": 26.505226135253906,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.968221187591553,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.2138012796640396,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 181.7751922607422,
+  "distance": 26.505098342895508,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.9736127853393555,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.03937416523694992,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 181.91453552246094,
+  "distance": 26.505069732666016,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.974788665771484,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.008438731543719769,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+WARNING ‚ö†Ô∏è Unable to automatically guess model task, assuming 'task=detect'. Explicitly define task for your model, i.e. 'task=detect', 'segment', 'classify', 'pose', 'obb' or 'semantic'.
+Loading /home/tankcc/tankcc/src/vision/models/best_final.engine for TensorRT inference...
+[07/01/2026-12:14:48] [TRT] [I] Loaded engine size: 8 MiB
+[07/01/2026-12:14:48] [TRT] [E] IRuntime::deserializeCudaEngine: Error Code 1: Serialization (Serialization assertion stdVersionRead == kSERIALIZATION_VERSION failed.Version tag does not match. Note: Current Version: 243, Serialized Engine Version: 240 In stdArchiveReaderInitCommon at /_src/runtime/deserialization/stdArchiveReader.cpp:49)
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+ERROR ‚ùå TensorRT model exported with a different version than expected
+
+[WARN] [1782875688.678098909] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:48] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:48] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:48] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:48] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:48] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:48] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875689.110553783] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:49] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:49] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:49] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875689.319584871] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:49] "POST /get_action HTTP/1.1" 200 -
+[vision] YOLO load failed, trying fallback model: 'str' object has no attribute 'names'
+[REQ] 192.168.0.82 POST /get_action
+[info] compact
+{
+  "time": 182.22802734375,
+  "distance": 26.50480079650879,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.986293792724609,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.04525843262672424,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[info] compact
+{
+  "time": 182.05252075195312,
+  "distance": 26.504985809326172,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.978350639343262,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.02581416629254818,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 182.36607360839844,
+  "distance": 26.50472068786621,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.989769458770752,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.025177545845508575,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 182.5030517578125,
+  "distance": 26.50459861755371,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.995094299316406,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.03887365013360977,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 182.6392059326172,
+  "distance": 26.504451751708984,
+  "playerPos": {
+    "x": 108.97518157958984,
+    "y": 8.001893043518066,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.04993418976664543,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 182.88307189941406,
+  "distance": 26.50459861755371,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.9950714111328125,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.02797289378941059,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 183.0151824951172,
+  "distance": 26.505096435546875,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.973686695098877,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.1618698090314865,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+192.168.0.82 - - [01/Jul/2026 12:14:49] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:49] "POST /detect HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:49] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875689.575689328] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:49] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:49] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875689.948684775] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:49] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:50] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:50] "POST /detect HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:50] "POST /info HTTP/1.1" 200 -
+[INFO] [1782875690.168309514] [tank_ros_bridge_node]: episode control queued for next /info response: reset
+[WARN] [1782875690.180219405] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:50] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:50] "POST /info HTTP/1.1" 200 -
+[vision] YOLO loaded: model=/home/tankcc/tankcc/src/vision/models/best_final.pt, labels={0: 'car', 1: 'person', 2: 'tank', 3: 'rock', 4: 'house'}, public={0: 'car', 1: 'person', 2: 'tank', 3: 'rock', 4: 'house'}, device=0, half=True, imgsz=416, tracking=False, tracker=bytetrack.yaml, persist=False
+[info] compact
+{
+  "time": 183.15260314941406,
+  "distance": 26.504989624023438,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.978222846984863,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.03300924226641655,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 183.28836059570312,
+  "distance": 26.50481414794922,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.985745906829834,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.05541544780135155,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 183.42567443847656,
+  "distance": 26.504703521728516,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.990497589111328,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.03460453823208809,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /detect
+[REQ] 192.168.0.82 POST /get_action
+[REQ] 192.168.0.82 POST /info
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 183.56417846679688,
+  "distance": 26.5046443939209,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.993144512176514,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.019110802561044693,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 183.70985412597656,
+  "distance": 26.50487518310547,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.983119010925293,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.06882070004940033,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] sending episode control to sim: reset
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[info] compact
+{
+  "time": 183.84512329101562,
+  "distance": 26.504680633544922,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.991489410400391,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.061879582703113556,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+192.168.0.82 - - [01/Jul/2026 12:14:50] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:50] "POST /update_obstacle HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:50] "GET /init HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:50] "POST /update_obstacle HTTP/1.1" 200 -
+[WARN] [1782875690.389262860] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:50] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:50] "POST /detect HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:50] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875690.945006064] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:50] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:51] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:51] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875691.251578120] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:51] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:51] "POST /detect HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:51] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:51] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875691.469502829] [tank_ros_bridge_node]: no control command has been received by bridge yet
+{
+  "time": 183.98367309570312,
+  "distance": 26.504623413085938,
+  "playerPos": {
+    "x": 108.97518920898438,
+    "y": 7.994055271148682,
+    "z": 277.6960144042969
+  },
+  "playerSpeed": 0.018519410863518715,
+  "playerHealth": 100.0,
+  "playerTurretX": 147.74847412109375,
+  "playerTurretY": -0.054687026888132095,
+  "playerBodyX": 74.3833999633789,
+  "playerBodyY": 359.9826965332031,
+  "playerBodyZ": 359.937744140625,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599991798400879,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": 0.0,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": -3.2016503155318787e-06,
+  "enemyBodyZ": 1.534197508590296e-05,
+  "lidarOrigin": {
+    "x": 109.31404876708984,
+    "y": 12.467105865478516,
+    "z": 277.7817077636719
+  },
+  "lidarRotation": {
+    "x": 0.054687026888132095,
+    "y": 147.74847412109375,
+    "z": 359.9656066894531
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /update_obstacle
+ü™® /update_obstacle received
+[REQ] 192.168.0.82 GET /init
+[init] config
+{
+  "startMode": "start",
+  "blStartX": 60.0,
+  "blStartY": 8.0,
+  "blStartZ": 30.0,
+  "rdStartX": 135.46,
+  "rdStartY": 10.0,
+  "rdStartZ": 276.87,
+  "trackingMode": true,
+  "detectMode": true,
+  "detactMode": true,
+  "logMode": true,
+  "stereoCameraMode": false,
+  "enemyTracking": false,
+  "saveSnapshot": false,
+  "saveStereoCamera": false,
+  "saveLog": false,
+  "saveLidarData": false,
+  "lux": 30000,
+  "destoryObstaclesOnHit": true,
+  "destroyObstaclesOnHit": true
+}
+[REQ] 192.168.0.82 POST /update_obstacle
+ü™® /update_obstacle received
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /detect
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 0.3333333432674408,
+  "distance": 258.14892578125,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.987168312072754,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": -0.0008090681512840092,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 9.350275993347168,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": -9.383577707922086e-05,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": -1.4284160136065833e-17,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": 1.4284160136065833e-17,
+  "enemyBodyZ": 8.725333486836462e-07,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.479307174682617,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /detect
+[info] compact
+{
+  "time": 0.48347076773643494,
+  "distance": 258.1465148925781,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.969199180603027,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.11968456208705902,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.75527572631836,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 3.9630377292633057,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": -1.4284160136065833e-17,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": 1.4284160136065833e-17,
+  "enemyBodyZ": 8.725333486836462e-07,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.472087860107422,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /get_action
+[info] compact
+{
+  "time": 0.6314604878425598,
+  "distance": 258.14605712890625,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.988518714904785,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.1305464655160904,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.46002197265625,
+    "y": 8.599985122680664,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 1.0493336915969849,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": -3.799606201937422e-05,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": 3.799606201937422e-05,
+  "enemyBodyZ": -2.8726351956720464e-05,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.469572067260742,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 0.7729792594909668,
+  "distance": 258.14605712890625,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.985669136047363,
+    "z": 30.000003814697266
+  },
+  "playerSpeed": 0.020135700702667236,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.46002197265625,
+    "y": 8.599992752075195,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 5.391082959249616e-05,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9999542236328,
+  "enemyTurretY": -2.267978561576456e-05,
+  "enemyBodyX": 179.9999542236328,
+  "enemyBodyY": 2.267978561576456e-05,
+  "enemyBodyZ": -2.168756145692896e-05,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468694686889648,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 0.9170660972595215,
+  "distance": 258.1460876464844,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.978381156921387,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.0505804680287838,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.46002197265625,
+    "y": 8.599992752075195,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9999237060547,
+  "enemyTurretY": -2.0506551663856953e-05,
+  "enemyBodyX": 179.9999237060547,
+  "enemyBodyY": 2.0506551663856953e-05,
+  "enemyBodyZ": -2.0529205357888713e-05,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468694686889648,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+192.168.0.82 - - [01/Jul/2026 12:14:51] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:51] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875691.732914102] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:51] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:51] "POST /detect HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:51] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:52] "POST /info HTTP/1.1" 200 -
+[INFO] [1782875692.059015141] [tank_ros_bridge_node]: episode control queued for next /info response: reset
+[WARN] [1782875692.060394216] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:52] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:52] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:52] "POST /update_obstacle HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:52] "POST /update_obstacle HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:52] "GET /init HTTP/1.1" 200 -
+[WARN] [1782875692.413802251] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:52] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:52] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:52] "POST /detect HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:52] "POST /detect HTTP/1.1" 200 -
+[WARN] [1782875693.042609613] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:53] "POST /get_action HTTP/1.1" 200 -
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 1.0610649585723877,
+  "distance": 258.1460876464844,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.971261978149414,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.04943913221359253,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0001061714137904346,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468387603759766,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /detect
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 1.317063331604004,
+  "distance": 258.14605712890625,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.978252410888672,
+    "z": 30.0
+  },
+  "playerSpeed": 0.027306552976369858,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.46828842163086,
+    "z": 30.349878311157227
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /get_action
+[info] compact
+{
+  "time": 1.4587205648422241,
+  "distance": 258.1460876464844,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.97531795501709,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.02071519009768963,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468244552612305,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 1.6019206047058105,
+  "distance": 258.1460876464844,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.969662666320801,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.039492227137088776,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468233108520508,
+    "z": 30.349882125854492
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[info] sending episode control to sim: reset
+[REQ] 192.168.0.82 POST /detect
+[REQ] 192.168.0.82 POST /update_obstacle
+ü™® /update_obstacle received
+[REQ] 192.168.0.82 POST /update_obstacle
+ü™® /update_obstacle received
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 GET /init
+[init] config
+{
+  "startMode": "start",
+  "blStartX": 60.0,
+  "blStartY": 8.0,
+  "blStartZ": 30.0,
+  "rdStartX": 135.46,
+  "rdStartY": 10.0,
+  "rdStartZ": 276.87,
+  "trackingMode": true,
+  "detectMode": true,
+  "detactMode": true,
+  "logMode": true,
+  "stereoCameraMode": false,
+  "enemyTracking": false,
+  "saveSnapshot": false,
+  "saveStereoCamera": false,
+  "saveLog": false,
+  "saveLidarData": false,
+  "lux": 30000,
+  "destoryObstaclesOnHit": true,
+  "destroyObstaclesOnHit": true
+}
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[info] compact
+{
+  "time": 1.8452004194259644,
+  "distance": 258.1460266113281,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.999180793762207,
+    "z": 30.0
+  },
+  "playerSpeed": 0.12133406102657318,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.46822738647461,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /detect
+[REQ] 192.168.0.82 POST /get_action
+[REQ] 192.168.0.82 POST /info
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /detect
+[REQ] 192.168.0.82 POST /info
+[info] compact
+192.168.0.82 - - [01/Jul/2026 12:14:53] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:53] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875693.310910892] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:53] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:53] "POST /detect HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:53] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875693.602552888] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:53] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:53] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875693.959613650] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:53] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:53] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:54] "POST /info HTTP/1.1" 200 -
+[INFO] [1782875694.028563236] [tank_ros_bridge_node]: episode control queued for next /info response: reset
+192.168.0.82 - - [01/Jul/2026 12:14:54] "POST /detect HTTP/1.1" 200 -
+{
+  "time": 0.17617079615592957,
+  "distance": 258.15228271484375,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.984216690063477,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": -0.0008088891045190394,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 9.878161430358887,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": -0.00023512229381594807,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": -1.4284160136065833e-17,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": 1.4284160136065833e-17,
+  "enemyBodyZ": 8.725333486836462e-07,
+  "lidarOrigin": {
+    "x": 59.3570442199707,
+    "y": 12.500009536743164,
+    "z": 27.579885482788086
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 0.3786811828613281,
+  "distance": 258.1490173339844,
+  "playerPos": {
+    "x": 60.0,
+    "y": 8.001602172851562,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.085849829018116,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 9.382187843322754,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 2.449126720428467,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": -1.4284160136065833e-17,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": 1.4284160136065833e-17,
+  "enemyBodyZ": 8.725333486836462e-07,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.479307174682617,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /get_action
+[REQ] 192.168.0.82 POST /info
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[info] compact
+{
+  "time": 0.5184144973754883,
+  "distance": 258.1466979980469,
+  "playerPos": {
+    "x": 60.0,
+    "y": 8.001994132995605,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.0028050586115568876,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.843961715698242,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 3.8518097400665283,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": -1.4284160136065833e-17,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": 1.4284160136065833e-17,
+  "enemyBodyZ": 8.725333486836462e-07,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.472087860107422,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /get_action
+[info] compact
+{
+  "time": 0.6613089442253113,
+  "distance": 258.1460266113281,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.997034072875977,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.034711357206106186,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599944114685059,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 1.7076772451400757,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.99993896484375,
+  "enemyTurretY": -0.00015696354967076331,
+  "enemyBodyX": 179.99993896484375,
+  "enemyBodyY": 0.00015696354967076331,
+  "enemyBodyZ": 7.06327919033356e-05,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.469720840454102,
+    "z": 30.349882125854492
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /detect
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /get_action
+[info] compact
+{
+  "time": 0.8046660423278809,
+  "distance": 258.1460266113281,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.991107940673828,
+    "z": 30.000003814697266
+  },
+  "playerSpeed": 0.04133825749158859,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599992752075195,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0003392743819858879,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -1.511272057541646e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 1.511272057541646e-05,
+  "enemyBodyZ": -4.0777184040052816e-05,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.469720840454102,
+    "z": 30.349882125854492
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[info] compact
+{
+  "time": 0.974254846572876,
+  "distance": 258.1460876464844,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.974188327789307,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.09976845234632492,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 5.623450761049753e-06,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.99989318847656,
+  "enemyTurretY": -2.1373691197368316e-05,
+  "enemyBodyX": 179.99989318847656,
+  "enemyBodyY": 2.1373691197368316e-05,
+  "enemyBodyZ": -1.3681880773219746e-05,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468746185302734,
+    "z": 30.349882125854492
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+192.168.0.82 - - [01/Jul/2026 12:14:54] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:54] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:54] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:54] "POST /update_obstacle HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:54] "GET /init HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:54] "POST /update_obstacle HTTP/1.1" 200 -
+[WARN] [1782875694.387074355] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:54] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:54] "POST /detect HTTP/1.1" 200 -
+[WARN] [1782875695.028218728] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:55] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:55] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:55] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:55] "POST /detect HTTP/1.1" 200 -
+[WARN] [1782875695.388479945] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:55] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:55] "POST /info HTTP/1.1" 200 -
+{
+  "time": 1.1146211624145508,
+  "distance": 258.1460876464844,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.973450183868408,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.005258697085082531,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468387603759766,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[info] sending episode control to sim: reset
+[info] compact
+{
+  "time": 1.2571440935134888,
+  "distance": 258.1460876464844,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.9689555168151855,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.03153644874691963,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.46828842163086,
+    "z": 30.349878311157227
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 1.3989834785461426,
+  "distance": 258.1460266113281,
+  "playerPos": {
+    "x": 60.0,
+    "y": 8.0009765625,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.22575567662715912,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.46828842163086,
+    "z": 30.349878311157227
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /update_obstacle
+ü™® /update_obstacle received
+[REQ] 192.168.0.82 POST /update_obstacle
+[REQ] 192.168.0.82 GET /init
+[init] config
+{
+  "startMode": "start",
+  "blStartX": 60.0,
+  "blStartY": 8.0,
+  "blStartZ": 30.0,
+  "rdStartX": 135.46,
+  "rdStartY": 10.0,
+  "rdStartZ": 276.87,
+  "trackingMode": true,
+  "detectMode": true,
+  "detactMode": true,
+  "logMode": true,
+  "stereoCameraMode": false,
+  "enemyTracking": false,
+  "saveSnapshot": false,
+  "saveStereoCamera": false,
+  "saveLog": false,
+  "saveLidarData": false,
+  "lux": 30000,
+  "destoryObstaclesOnHit": true,
+  "destroyObstaclesOnHit": true
+}
+ü™® /update_obstacle received
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /detect
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /get_action
+[info] compact
+{
+  "time": 0.3333333432674408,
+  "distance": 258.14892578125,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.9872941970825195,
+    "z": 30.0
+  },
+  "playerSpeed": -0.000808333104941994,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.45999145507812,
+    "y": 9.350555419921875,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": -9.382668213220313e-05,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": -1.4284160136065833e-17,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": 1.4284160136065833e-17,
+  "enemyBodyZ": 8.725333486836462e-07,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.479307174682617,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[info] compact
+{
+  "time": 0.4848945438861847,
+  "distance": 258.14642333984375,
+  "playerPos": {
+    "x": 60.0,
+    "y": 8.000003814697266,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.08385799080133438,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.749089241027832,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 3.968470573425293,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.0,
+  "enemyTurretY": -1.4284160136065833e-17,
+  "enemyBodyX": 180.0,
+  "enemyBodyY": 1.4284160136065833e-17,
+  "enemyBodyZ": 8.725333486836462e-07,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.472087860107422,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /detect
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[info] compact
+{
+  "time": 0.6270349025726318,
+  "distance": 258.1460266113281,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.99625825881958,
+    "z": 30.0
+  },
+  "playerSpeed": 0.026351111009716988,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.46002197265625,
+    "y": 8.599983215332031,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 1.0490055084228516,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.00001525878906,
+  "enemyTurretY": -4.439512122189626e-05,
+  "enemyBodyX": 180.00001525878906,
+  "enemyBodyY": 4.439512122189626e-05,
+  "enemyBodyZ": -3.673800893011503e-05,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.469572067260742,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+192.168.0.82 - - [01/Jul/2026 12:14:55] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:55] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:55] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875695.752896010] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:55] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:55] "POST /detect HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:55] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875696.033590950] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:56] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:56] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:56] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875696.407025660] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:56] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:56] "POST /detect HTTP/1.1" 200 -
+{
+  "time": 0.7820611000061035,
+  "distance": 258.1460876464844,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.96998929977417,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.16944850981235504,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.46002197265625,
+    "y": 8.599992752075195,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 6.151697743916884e-05,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 180.00001525878906,
+  "enemyTurretY": -2.1719399228459224e-05,
+  "enemyBodyX": 180.00001525878906,
+  "enemyBodyY": 2.1719399228459224e-05,
+  "enemyBodyZ": -4.7314755647676066e-05,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468694686889648,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 0.9250782132148743,
+  "distance": 258.1460266113281,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.999558925628662,
+    "z": 30.000003814697266
+  },
+  "playerSpeed": 0.2067558616399765,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.00010690023191273212,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468694686889648,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 1.0703282356262207,
+  "distance": 258.1460266113281,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.9903059005737305,
+    "z": 30.0
+  },
+  "playerSpeed": 0.06370412558317184,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468387603759766,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /detect
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 1.315101981163025,
+  "distance": 258.14605712890625,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.981858730316162,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.03451011702418327,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468280792236328,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 1.456608533859253,
+  "distance": 258.14605712890625,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.979191303253174,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.01885020174086094,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468246459960938,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 1.5970418453216553,
+  "distance": 258.14605712890625,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.978422164916992,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.005476893857121468,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468233108520508,
+    "z": 30.349882125854492
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /detect
+[REQ] 192.168.0.82 POST /get_action
+[REQ] 192.168.0.82 POST /info
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[info] compact
+192.168.0.82 - - [01/Jul/2026 12:14:56] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875696.702869122] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:56] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:56] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:56] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:56] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:57] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:57] "POST /detect HTTP/1.1" 200 -
+[WARN] [1782875697.153550156] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:57] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:57] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:57] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875697.509275581] [tank_ros_bridge_node]: no control command has been received by bridge yet
+{
+  "time": 1.7388367652893066,
+  "distance": 258.1460876464844,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.975251197814941,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.022363051772117615,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468233108520508,
+    "z": 30.349882125854492
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[info] compact
+{
+  "time": 2.033128261566162,
+  "distance": 258.14605712890625,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.985328197479248,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.0145788649097085,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468225479125977,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 2.175610303878784,
+  "distance": 258.14605712890625,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.980944633483887,
+    "z": 30.0
+  },
+  "playerSpeed": 0.030765732750296593,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468225479125977,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /detect
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 2.4149374961853027,
+  "distance": 258.14605712890625,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.982132434844971,
+    "z": 30.000003814697266
+  },
+  "playerSpeed": 0.004963111598044634,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468225479125977,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 2.5564470291137695,
+  "distance": 258.14605712890625,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.979466915130615,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.018836330622434616,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468225479125977,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[info] compact
+{
+  "time": 2.8295810222625732,
+  "distance": 258.1460266113281,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.99159049987793,
+    "z": 30.0
+  },
+  "playerSpeed": 0.04438694939017296,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468225479125977,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /get_action
+[REQ] 192.168.0.82 POST /detect
+üéÆ /get_action response
+ì}  ∞	ï}  ∞íXï}  ∞¸&Éì}  ∞	ï}  PjÉì}  ∞Á\ï}  “&Éì}  ∞	ï}  –ﬁjÉì}  ∞Á\ï}  Ì&Éì}  ∞	ï}  Ä jÉì}  íXï}  ∞Á\ï}  Í&Éì}  ∞	ï}  ∞‡ï}  ∞Á\ï}  0÷&Éì}  ∞	ï}  0Ô&Éì}  íXï}  ∞Á\ï}  ∞íXï}  ˝&Éì}  ∞	ï}  ∞&Éì}  ∞Á\ï}  ˘&Éì}  ∞	ï}  ˜&Éì}  ∞Á\ï}  ∞ˆ&Éì}  ∞	ï}  ∞‹&Éì}  ∞Á\ï}  ∞‘&Éì}  ∞	ï}  ∞íXï}  pÕ&Éì}  ∞	ï}  ∞÷jÉì}  ∞Á\ï}  ∞¡&Éì}  ∞	ï}  0ŸjÉì}  ∞Á\ï}  p«&Éì}  ∞	ï}  p˝jÉì}  íXï}  ∞Á\ï}  0È&Éì}  ∞	ï}  ∞‡ï}  ∞Á\ï}  0¸&Éì}  ∞	ï}  Ó&Éì}  íXï}  ∞Á\ï}  ∞íXï}  ∞Ò&Éì}  ∞	ï}  ∞˙&Éì}  ∞Á\ï}  ∆&Éì}  ∞	ï}  p∆&Éì}  ∞Á\ï}  p»&Éì}  ∞	ï}  p—&Éì}  ∞Á\ï}  0»&Éì}  ∞	ï}  ∞íXï}  p“&Éì}  ∞	ï}  @˚jÉì}  ∞Á\ï}  ‘&Éì}  ∞	ï}   ·jÉì}  ∞Á\ï}  0€&Éì}  ∞	ï}   “jÉì}  íXï}  ∞Á\ï}  ∞⁄&Éì}  ∞	ï}  ∞‡ï}  ∞Á\ï}  pÚ&Éì}  ∞	ï}  Ï&Éì}  íXï}  ∞Á\ï}  ∞íXï}  0–&Éì}  ∞	ï}  »&Éì}  ∞Á\ï}  0˛&Éì}  ∞	ï}  pÏ&Éì}  ∞Á\ï}  p’&Éì}  ∞	ï}  ∞Û&Éì}  ∞Á\ï}  ∞Ú&Éì}  ∞	ï}  ∞íXï}  ∞¬&Éì}  ∞	ï}  ›&Éì}  ∞Á\ï}  „&Éì}  ∞	ï}   ’jÉì}  ∞Á\ï}  &Éì}  ∞	ï}  †ıjÉì}  íXï}  ∞Á\ï}  pÀ&Éì}  ∞	ï}  ∞‡ï}  ∞Á\ï192.168.0.82 - - [01/Jul/2026 12:14:57] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:57] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:57] "POST /detect HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:57] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875697.773021490] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:57] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:57] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:58] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875698.175354837] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:58] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:58] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:58] "POST /info HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:58] "POST /detect HTTP/1.1" 200 -
+127.0.0.1 - - [01/Jul/2026 12:14:58] "GET /health HTTP/1.1" 200 -
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 2.9336392879486084,
+  "distance": 258.14605712890625,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.984424114227295,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.0688689723610878,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468225479125977,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 3.0979480743408203,
+  "distance": 258.1460876464844,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.976815700531006,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.0463055819272995,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468225479125977,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /get_action
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[info] compact
+{
+  "time": 3.2417662143707275,
+  "distance": 258.1460876464844,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.970073699951172,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.04687865078449249,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.007041931152344,
+    "y": 12.468225479125977,
+    "z": 30.349878311157227
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 3.384889841079712,
+  "distance": 258.1460266113281,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.999874114990234,
+    "z": 30.0
+  },
+  "playerSpeed": 0.20821450650691986,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468225479125977,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /detect
+[REQ] 192.168.0.82 POST /get_action
+[REQ] 192.168.0.82 POST /info
+üéÆ /get_action response
+{
+  "moveWS": {
+    "command": "STOP",
+    "weight": 1.0
+  },
+  "moveAD": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretQE": {
+    "command": "",
+    "weight": 0.0
+  },
+  "turretRF": {
+    "command": "",
+    "weight": 0.0
+  },
+  "fire": false
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 3.5269391536712646,
+  "distance": 258.1460266113281,
+  "playerPos": {
+    "x": 60.000003814697266,
+    "y": 7.996255874633789,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.02547173760831356,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468225479125977,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 192.168.0.82 POST /info
+[info] compact
+{
+  "time": 3.6818432807922363,
+  "distance": 258.1460876464844,
+  "playerPos": {
+    "x": 60.0,
+    "y": 7.969937801361084,
+    "z": 30.000001907348633
+  },
+  "playerSpeed": 0.1698991060256958,
+  "playerHealth": 100.0,
+  "playerTurretX": 2.9181717042803257e-09,
+  "playerTurretY": 0.0,
+  "playerBodyX": 2.9181717042803257e-09,
+  "playerBodyY": -3.256887814995224e-11,
+  "playerBodyZ": -9.338149453697042e-08,
+  "enemyPos": {
+    "x": 135.4600067138672,
+    "y": 8.599993705749512,
+    "z": 276.8699951171875
+  },
+  "enemySpeed": 0.0,
+  "enemyHealth": 100.0,
+  "enemyTurretX": 179.9998779296875,
+  "enemyTurretY": -2.283843969053123e-05,
+  "enemyBodyX": 179.9998779296875,
+  "enemyBodyY": 2.283843969053123e-05,
+  "enemyBodyZ": -2.115595407303772e-06,
+  "lidarOrigin": {
+    "x": 60.00704574584961,
+    "y": 12.468225479125977,
+    "z": 30.34988021850586
+  },
+  "lidarRotation": {
+    "x": -3.256887814995224e-11,
+    "y": 2.9181717042803257e-09,
+    "z": -9.338149453697042e-08
+  },
+  "lidarPoints_count": 5760
+}
+[REQ] 127.0.0.1 GET /health
+[info] compact
+192.168.0.82 - - [01/Jul/2026 12:14:58] "POST /info HTTP/1.1" 200 -
+[WARN] [1782875698.459297006] [tank_ros_bridge_node]: no control command has been received by bridge yet
+192.168.0.82 - - [01/Jul/2026 12:14:58] "POST /get_action HTTP/1.1" 200 -
+192.168.0.82 - - [01/Jul/2026 12:14:58] "POST /info HTTP/1.1" 200 -

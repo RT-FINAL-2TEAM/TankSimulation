@@ -1,0 +1,24 @@
+[INFO] [launch]: All log files can be found below /home/tankcc/.ros/log/2026-07-01-12-24-55-979882-tankcc-OMEN-by-HP-Gaming-Laptop-16-k0xxx-110509
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [static_map_loader_node-1]: process started with pid [110523]
+[INFO] [rviz_visualizer_node-2]: process started with pid [110525]
+[INFO] [terrain_record_finalize_node-3]: process started with pid [110527]
+[INFO] [rviz2-4]: process started with pid [110529]
+[rviz2-4] Warning: Ignoring XDG_SESSION_TYPE=wayland on Gnome. Use QT_QPA_PLATFORM=wayland to run on Wayland anyway.
+[rviz2-4] [INFO] [1782876296.362176631] [rviz2]: Stereo is NOT SUPPORTED
+[rviz2-4] [INFO] [1782876296.362237621] [rviz2]: OpenGl version: 4.6 (GLSL 4.6)
+[rviz2-4] [INFO] [1782876296.381453368] [rviz2]: Stereo is NOT SUPPORTED
+[terrain_record_finalize_node-3] [INFO] [1782876296.443121869] [terrain_record_finalize_node]: terrain_record_finalize_node started. Recording preclassified terrain=/tank/sensor/lidar/terrain_points_map, obstacle=/tank/sensor/lidar/detected_points_map. Mode=recording enabled, save_file=/home/tankcc/tankcc/tank_terrain_maps/terrain_map_latest.npz. Call /tank/terrain/finalize_map when driving is finished.
+[rviz_visualizer_node-2] [INFO] [1782876296.462961390] [tank_rviz_visualizer_node]: tank_rviz_visualizer_node started
+[rviz2-4] [INFO] [1782876296.524307367] [rviz2]: Stereo is NOT SUPPORTED
+[static_map_loader_node-1] [INFO] [1782876296.559673142] [tank_static_map_loader_node]: Loaded static map (finalmap): 301 objects from /home/tankcc/tankcc/install/rviz_visualization/share/rviz_visualization/map/finalmap.map
+[static_map_loader_node-1] [INFO] [1782876296.560028000] [tank_static_map_loader_node]: Static map mode=recon_only, publish_mission=False, publish_diff=False, publish_grids=True
+[terrain_record_finalize_node-3] [INFO] [1782876311.696774029] [terrain_record_finalize_node]: 기록된 LiDAR와 최종 지도 결과를 초기화했습니다.
+[terrain_record_finalize_node-3] [INFO] [1782876317.403273639] [terrain_record_finalize_node]: Recording LiDAR terrain_frames=25, terrain_points=52500, obstacle_frames=25, obstacle_points=2375, stored_terrain=52500, stored_obstacle=2375
+[terrain_record_finalize_node-3] [INFO] [1782876321.176443752] [terrain_record_finalize_node]: Recording LiDAR terrain_frames=50, terrain_points=105000, obstacle_frames=50, obstacle_points=4750, stored_terrain=105000, stored_obstacle=4750
+[terrain_record_finalize_node-3] [INFO] [1782876324.955439736] [terrain_record_finalize_node]: Recording LiDAR terrain_frames=75, terrain_points=157500, obstacle_frames=75, obstacle_points=7125, stored_terrain=157500, stored_obstacle=7125
+[terrain_record_finalize_node-3] [INFO] [1782876329.271663934] [terrain_record_finalize_node]: Recording LiDAR terrain_frames=100, terrain_points=210000, obstacle_frames=100, obstacle_points=9500, stored_terrain=210000, stored_obstacle=9500
+[terrain_record_finalize_node-3] [INFO] [1782876333.104077636] [terrain_record_finalize_node]: Recording LiDAR terrain_frames=125, terrain_points=262500, obstacle_frames=125, obstacle_points=11875, stored_terrain=262500, stored_obstacle=11875
+[terrain_record_finalize_node-3] [INFO] [1782876336.973431247] [terrain_record_finalize_node]: Recording LiDAR terrain_frames=150, terrain_points=315000, obstacle_frames=150, obstacle_points=14250, stored_terrain=315000, stored_obstacle=14250
+[terrain_record_finalize_node-3] [INFO] [1782876340.693372483] [terrain_record_finalize_node]: Recording LiDAR terrain_frames=175, terrain_points=367500, obstacle_frames=175, obstacle_points=16625, stored_terrain=367500, stored_obstacle=16625
+[terrain_record_finalize_node-3] [INFO] [1782876344.837094551] [terrain_record_finalize_node]: Recording LiDAR terrain_frames=200, terrain_points=420000, obstacle_frames=200, obstacle_points=19000, stored_terrain=420000, stored_obstacle=19000

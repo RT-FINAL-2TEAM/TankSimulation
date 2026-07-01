@@ -1,0 +1,11 @@
+[OK] scenario2 map 생성: /home/tankcc/tankcc/recon_reports/recon_map/scenario2_map.map
+     발견맵 입력      : 2 개 ['discovered_objects_route_A.map', 'discovered_objects_route_B.map']
+     base 객체        : 301
+     발견 유지(회피)  : 14 (candidate=14, confirmed=14)
+     합본 obstacles   : 315
+     targets(tank)    : 2
+     terrain cells    : 33682 → /home/tankcc/tankcc/recon_reports/recon_map/scenario2_terrain.json
+     terrain npz(뷰) : /home/tankcc/tankcc/recon_reports/recon_map/scenario2_terrain.npz (['terrain_map_route_A.npz', 'terrain_map_route_B.npz'])
+
+시나리오2 실행:  ros2 launch control tank_scenario2.launch.py
+정찰 결과 뷰:    ros2 launch rviz_visualization tank_scenario2_map_view.launch.py

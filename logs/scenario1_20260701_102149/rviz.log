@@ -1,0 +1,108 @@
+[INFO] [launch]: All log files can be found below /home/tankcc/.ros/log/2026-07-01-10-21-52-009394-tankcc-OMEN-by-HP-Gaming-Laptop-16-k0xxx-7191
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [static_map_loader_node-1]: process started with pid [7231]
+[INFO] [rviz_visualizer_node-2]: process started with pid [7233]
+[INFO] [terrain_record_finalize_node-3]: process started with pid [7235]
+[INFO] [rviz2-4]: process started with pid [7237]
+[rviz2-4] Warning: Ignoring XDG_SESSION_TYPE=wayland on Gnome. Use QT_QPA_PLATFORM=wayland to run on Wayland anyway.
+[rviz2-4] [INFO] [1782868912.405484405] [rviz2]: Stereo is NOT SUPPORTED
+[rviz2-4] [INFO] [1782868912.405588351] [rviz2]: OpenGl version: 4.6 (GLSL 4.6)
+[rviz_visualizer_node-2] [INFO] [1782868912.430057206] [tank_rviz_visualizer_node]: tank_rviz_visualizer_node started
+[rviz2-4] [INFO] [1782868912.431302240] [rviz2]: Stereo is NOT SUPPORTED
+[terrain_record_finalize_node-3] [INFO] [1782868912.453531096] [terrain_record_finalize_node]: terrain_record_finalize_node started. Recording preclassified terrain=/tank/sensor/lidar/terrain_points_map, obstacle=/tank/sensor/lidar/detected_points_map. Mode=recording enabled, save_file=/home/tankcc/tankcc/tank_terrain_maps/terrain_map_latest.npz. Call /tank/terrain/finalize_map when driving is finished.
+[rviz2-4] [INFO] [1782868912.554451711] [rviz2]: Stereo is NOT SUPPORTED
+[static_map_loader_node-1] [INFO] [1782868912.562107263] [tank_static_map_loader_node]: Loaded static map (finalmap): 301 objects from /home/tankcc/tankcc/install/rviz_visualization/share/rviz_visualization/map/finalmap.map
+[static_map_loader_node-1] [INFO] [1782868912.562512300] [tank_static_map_loader_node]: Static map mode=recon_only, publish_mission=False, publish_diff=False, publish_grids=True
+[terrain_record_finalize_node-3] [INFO] [1782868914.850766764] [terrain_record_finalize_node]: 기록된 LiDAR와 최종 지도 결과를 초기화했습니다.
+[rviz2-4] [INFO] [1782868923.247237790] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[terrain_record_finalize_node-3] Traceback (most recent call last):
+[terrain_record_finalize_node-3]   File "/home/tankcc/tankcc/build/ground_division/ground_division/terrain_record_finalize_node.py", line 891, in main
+[terrain_record_finalize_node-3]     rclpy.spin(node)
+[terrain_record_finalize_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[terrain_record_finalize_node-3]     executor.spin_once()
+[terrain_record_finalize_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+[terrain_record_finalize_node-3]     self._spin_once_impl(timeout_sec)
+[terrain_record_finalize_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 797, in _spin_once_impl
+[terrain_record_finalize_node-3]     handler, entity, node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
+[terrain_record_finalize_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 780, in wait_for_ready_callbacks
+[terrain_record_finalize_node-3]     return next(self._cb_iter)
+[terrain_record_finalize_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 681, in _wait_for_ready_callbacks
+[terrain_record_finalize_node-3]     raise ExternalShutdownException()
+[terrain_record_finalize_node-3] rclpy.executors.ExternalShutdownException
+[terrain_record_finalize_node-3] 
+[terrain_record_finalize_node-3] During handling of the above exception, another exception occurred:
+[terrain_record_finalize_node-3] 
+[terrain_record_finalize_node-3] Traceback (most recent call last):
+[terrain_record_finalize_node-3]   File "/home/tankcc/tankcc/install/ground_division/lib/ground_division/terrain_record_finalize_node", line 33, in <module>
+[terrain_record_finalize_node-3]     sys.exit(load_entry_point('ground-division', 'console_scripts', 'terrain_record_finalize_node')())
+[terrain_record_finalize_node-3]   File "/home/tankcc/tankcc/build/ground_division/ground_division/terrain_record_finalize_node.py", line 894, in main
+[terrain_record_finalize_node-3]     rclpy.shutdown()
+[terrain_record_finalize_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 130, in shutdown
+[terrain_record_finalize_node-3]     _shutdown(context=context)
+[terrain_record_finalize_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/utilities.py", line 58, in shutdown
+[terrain_record_finalize_node-3]     return context.shutdown()
+[terrain_record_finalize_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/context.py", line 102, in shutdown
+[terrain_record_finalize_node-3]     self.__context.shutdown()
+[terrain_record_finalize_node-3] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:241
+[static_map_loader_node-1] Traceback (most recent call last):
+[static_map_loader_node-1]   File "/home/tankcc/tankcc/build/rviz_visualization/rviz_visualization/static_map_loader_node.py", line 750, in main
+[static_map_loader_node-1]     rclpy.spin(node)
+[static_map_loader_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[static_map_loader_node-1]     executor.spin_once()
+[static_map_loader_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+[static_map_loader_node-1]     self._spin_once_impl(timeout_sec)
+[static_map_loader_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 797, in _spin_once_impl
+[static_map_loader_node-1]     handler, entity, node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
+[static_map_loader_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 780, in wait_for_ready_callbacks
+[static_map_loader_node-1]     return next(self._cb_iter)
+[static_map_loader_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 681, in _wait_for_ready_callbacks
+[static_map_loader_node-1]     raise ExternalShutdownException()
+[static_map_loader_node-1] rclpy.executors.ExternalShutdownException
+[static_map_loader_node-1] 
+[static_map_loader_node-1] During handling of the above exception, another exception occurred:
+[static_map_loader_node-1] 
+[static_map_loader_node-1] Traceback (most recent call last):
+[static_map_loader_node-1]   File "/home/tankcc/tankcc/install/rviz_visualization/lib/rviz_visualization/static_map_loader_node", line 33, in <module>
+[static_map_loader_node-1]     sys.exit(load_entry_point('rviz-visualization', 'console_scripts', 'static_map_loader_node')())
+[static_map_loader_node-1]   File "/home/tankcc/tankcc/build/rviz_visualization/rviz_visualization/static_map_loader_node.py", line 753, in main
+[static_map_loader_node-1]     rclpy.shutdown()
+[static_map_loader_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 130, in shutdown
+[static_map_loader_node-1]     _shutdown(context=context)
+[static_map_loader_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/utilities.py", line 58, in shutdown
+[static_map_loader_node-1]     return context.shutdown()
+[static_map_loader_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/context.py", line 102, in shutdown
+[static_map_loader_node-1]     self.__context.shutdown()
+[static_map_loader_node-1] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:241
+[rviz_visualizer_node-2] Traceback (most recent call last):
+[rviz_visualizer_node-2]   File "/home/tankcc/tankcc/build/rviz_visualization/rviz_visualization/rviz_visualizer_node.py", line 1921, in main
+[rviz_visualizer_node-2]     rclpy.spin(node)
+[rviz_visualizer_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[rviz_visualizer_node-2]     executor.spin_once()
+[rviz_visualizer_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+[rviz_visualizer_node-2]     self._spin_once_impl(timeout_sec)
+[rviz_visualizer_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 797, in _spin_once_impl
+[rviz_visualizer_node-2]     handler, entity, node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
+[rviz_visualizer_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 780, in wait_for_ready_callbacks
+[rviz_visualizer_node-2]     return next(self._cb_iter)
+[rviz_visualizer_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 681, in _wait_for_ready_callbacks
+[rviz_visualizer_node-2]     raise ExternalShutdownException()
+[rviz_visualizer_node-2] rclpy.executors.ExternalShutdownException
+[rviz_visualizer_node-2] 
+[rviz_visualizer_node-2] During handling of the above exception, another exception occurred:
+[rviz_visualizer_node-2] 
+[rviz_visualizer_node-2] Traceback (most recent call last):
+[rviz_visualizer_node-2]   File "/home/tankcc/tankcc/install/rviz_visualization/lib/rviz_visualization/rviz_visualizer_node", line 33, in <module>
+[rviz_visualizer_node-2]     sys.exit(load_entry_point('rviz-visualization', 'console_scripts', 'rviz_visualizer_node')())
+[rviz_visualizer_node-2]   File "/home/tankcc/tankcc/build/rviz_visualization/rviz_visualization/rviz_visualizer_node.py", line 1928, in main
+[rviz_visualizer_node-2]     rclpy.shutdown()
+[rviz_visualizer_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 130, in shutdown
+[rviz_visualizer_node-2]     _shutdown(context=context)
+[rviz_visualizer_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/utilities.py", line 58, in shutdown
+[rviz_visualizer_node-2]     return context.shutdown()
+[rviz_visualizer_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/context.py", line 102, in shutdown
+[rviz_visualizer_node-2]     self.__context.shutdown()
+[rviz_visualizer_node-2] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:241
+[ERROR] [terrain_record_finalize_node-3]: process has died [pid 7235, exit code 1, cmd '/home/tankcc/tankcc/install/ground_division/lib/ground_division/terrain_record_finalize_node --ros-args -r __node:=terrain_record_finalize_node --params-file /tmp/launch_params_fjkrrc97'].
+[ERROR] [rviz_visualizer_node-2]: process has died [pid 7233, exit code 1, cmd '/home/tankcc/tankcc/install/rviz_visualization/lib/rviz_visualization/rviz_visualizer_node --ros-args -r __node:=tank_rviz_visualizer_node'].
+[ERROR] [static_map_loader_node-1]: process has died [pid 7231, exit code 1, cmd '/home/tankcc/tankcc/install/rviz_visualization/lib/rviz_visualization/static_map_loader_node --ros-args -r __node:=tank_static_map_loader_node --params-file /tmp/launch_params_argd6z3p'].
+[INFO] [rviz2-4]: process has finished cleanly [pid 7237]

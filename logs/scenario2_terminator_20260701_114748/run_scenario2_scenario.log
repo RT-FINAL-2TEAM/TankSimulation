@@ -1,0 +1,211 @@
+[INFO] [launch]: All log files can be found below /home/tankcc/.ros/log/2026-07-01-11-48-05-978308-tankcc-OMEN-by-HP-Gaming-Laptop-16-k0xxx-70617
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [lidar_processor_node-1]: process started with pid [70647]
+[INFO] [lidar_camera_overlay_node-2]: process started with pid [70649]
+[INFO] [lidar_dbscan_cluster_node-3]: process started with pid [70651]
+[INFO] [map_astar_planner_node-4]: process started with pid [70653]
+[INFO] [local_path_node-5]: process started with pid [70655]
+[INFO] [tank_controller_node-6]: process started with pid [70657]
+[INFO] [ballistic_turret_node-7]: process started with pid [70659]
+[tank_controller_node-6] [INFO] [1782874086.623463279] [tank_team_path_controller_node]: Team path controller initialized: max_speed=13.60, max_yaw_rate=40.00, local_target=False
+[ballistic_turret_node-7] [INFO] [1782874086.690128760] [tank_ballistic_turret_node]: BallisticTurretNode ready: engagements=[1:enemy_mid@(48.0,224.0), 2:enemy_final@(50.0,260.0)], return=(59.0,27.0), k=0.001520, muzzle_h=3.199m, attitude_comp=False, pitch_sign=+1, roll_sign=+1, center_after_fire=True
+[lidar_camera_overlay_node-2] [INFO] [1782874086.701349778] [lidar_camera_overlay_node]: LiDAR-camera overlay node started
+[lidar_camera_overlay_node-2] [INFO] [1782874086.702023848] [lidar_camera_overlay_node]: subscribe image: /tank/camera/image_compressed
+[lidar_camera_overlay_node-2] [INFO] [1782874086.702626519] [lidar_camera_overlay_node]: subscribe info : /tank/api/info/compact
+[lidar_camera_overlay_node-2] [INFO] [1782874086.703228641] [lidar_camera_overlay_node]: subscribe lidar: /tank/sensor/lidar/detected_points_map
+[lidar_camera_overlay_node-2] [INFO] [1782874086.703854117] [lidar_camera_overlay_node]: publish image  : /tank/camera/lidar_projection/image
+[lidar_camera_overlay_node-2] [INFO] [1782874086.705045588] [lidar_camera_overlay_node]: projection config: /home/tankcc/tankcc/install/path_planning/share/path_planning/config/fusion_mapping.yaml
+[lidar_camera_overlay_node-2] [INFO] [1782874086.705657702] [lidar_camera_overlay_node]: effective projection params: {'tx': 0.28, 'ty': 0.02, 'tz': 11.8, 'yaw_offset': 1.1, 'pitch_offset': 1.5, 'roll_offset': -0.3, 'hfov': 86.0, 'vfov': 60.2, 'body_pitch_gain': 1.0, 'body_roll_gain': 1.0}
+[local_path_node-5] [INFO] [1782874086.735065661] [tank_local_path_node]: local_path_node started (PC2 Optimized Version)
+[local_path_node-5] [INFO] [1782874087.302903796] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[lidar_dbscan_cluster_node-3] [INFO] [1782874087.368825528] [lidar_dbscan_cluster_node]: lidar_dbscan_cluster_node started: input=/tank/sensor/lidar/detected_points_map(PC2), eps=1.5, min_samples=2, min_cluster_size=2, cluster_point_sample_limit=64
+[lidar_processor_node-1] [INFO] [1782874087.370069096] [tank_lidar_processor_node]: LiDAR processor started: sub=/tank/api/info/raw, pub=/tank/sensor/lidar/detected_points_map obstacle-only, pub=/tank/sensor/lidar/terrain_points_map terrain-only, pub=/tank/sensor/lidar/all_detected_points_map all hits, legacy_json=False, ground_filter=True, grid=0.5, climb_limit=0.4
+[map_astar_planner_node-4] [INFO] [1782874087.375321596] [tank_team_dynamic_astar_planner_node]: static map obstacles loaded: 316 from /home/tankcc/tankcc/recon_reports/recon_map/scenario2_map.map
+[map_astar_planner_node-4] [INFO] [1782874087.438234668] [tank_team_dynamic_astar_planner_node]: terrain grid loaded: 13636 rough cells / 16574 z cells (weight=0.0) from /home/tankcc/tankcc/recon_reports/recon_map/scenario2_terrain.json
+[map_astar_planner_node-4] [INFO] [1782874087.450849862] [tank_team_dynamic_astar_planner_node]: Team Dynamic A* planner initialized: use_gt_obstacles=False, dynamic_replan=True, goal=(50.0, 260.0), resolution=1.0, inflate=4.5, route_waypoints=True:finalmap/A, cluster_bboxes=True, cluster_memory=True, static_inflate=2.0, discovered_astar=True, route_lock=6.0s, route_index_never_decrease=True, lidar_memory_block_trigger=False
+[local_path_node-5] [INFO] [1782874088.293866240] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874088.467355423] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=initial, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/3, points=7, rounded=2, unrounded=1, obstacles=1, lidar_bboxes=1, discovered_bboxes=0
+[local_path_node-5] [INFO] [1782874089.286347974] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874090.293330644] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874091.309795016] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874092.299090211] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874093.291114484] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874094.291116940] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874095.290914826] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874096.289267968] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874097.289999449] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874098.289527120] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874099.306384857] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874099.548275864] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/3, points=11, rounded=3, unrounded=0, obstacles=7, lidar_bboxes=7, discovered_bboxes=0
+[local_path_node-5] [INFO] [1782874100.289304136] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874100.424828038] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/3, points=12, rounded=3, unrounded=0, obstacles=7, lidar_bboxes=7, discovered_bboxes=0
+[local_path_node-5] [INFO] [1782874101.289821209] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874101.317013639] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/3, points=12, rounded=3, unrounded=0, obstacles=8, lidar_bboxes=8, discovered_bboxes=0
+[map_astar_planner_node-4] [INFO] [1782874102.238542858] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/3, points=12, rounded=3, unrounded=0, obstacles=9, lidar_bboxes=9, discovered_bboxes=0
+[local_path_node-5] [INFO] [1782874102.290906799] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874103.150359319] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/3, points=6, rounded=2, unrounded=0, obstacles=12, lidar_bboxes=12, discovered_bboxes=0
+[local_path_node-5] [INFO] [1782874103.294591212] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874104.028213763] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/3, points=6, rounded=2, unrounded=0, obstacles=13, lidar_bboxes=12, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782874104.295170153] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874104.994493072] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/3, points=7, rounded=2, unrounded=0, obstacles=13, lidar_bboxes=12, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782874105.311032644] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874105.931753315] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/3, points=7, rounded=2, unrounded=0, obstacles=15, lidar_bboxes=14, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782874106.289607813] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874106.837110750] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/3, points=7, rounded=2, unrounded=0, obstacles=14, lidar_bboxes=13, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782874107.289547744] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874107.767792442] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/3, points=7, rounded=2, unrounded=0, obstacles=16, lidar_bboxes=15, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782874108.288474155] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874108.725582436] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/3, points=7, rounded=2, unrounded=0, obstacles=17, lidar_bboxes=16, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782874109.291846806] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874109.629007598] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/3, points=7, rounded=2, unrounded=0, obstacles=19, lidar_bboxes=18, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782874110.289521609] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874110.463755857] [tank_team_dynamic_astar_planner_node]: route checkpoint advanced: next=1/3, remaining=2
+[map_astar_planner_node-4] [INFO] [1782874110.562632717] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=direct_astar, points=3, rounded=0, unrounded=1, obstacles=22, lidar_bboxes=21, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782874111.286378619] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874111.520451573] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/3, points=4, rounded=1, unrounded=0, obstacles=22, lidar_bboxes=21, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782874112.287814620] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874112.430404581] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/3, points=4, rounded=1, unrounded=0, obstacles=22, lidar_bboxes=21, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782874113.303017906] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874113.371861813] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/3, points=4, rounded=1, unrounded=0, obstacles=23, lidar_bboxes=22, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782874114.297773791] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874114.360558559] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/3, points=4, rounded=1, unrounded=0, obstacles=25, lidar_bboxes=24, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782874115.292226429] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[map_astar_planner_node-4] [INFO] [1782874115.324853856] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/3, points=4, rounded=1, unrounded=0, obstacles=24, lidar_bboxes=23, discovered_bboxes=1
+[map_astar_planner_node-4] [INFO] [1782874116.235354074] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/3, points=4, rounded=1, unrounded=0, obstacles=26, lidar_bboxes=25, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782874116.304418554] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874117.288939852] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874118.292867212] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874119.330731143] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874120.287882234] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874121.286496200] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874122.302083966] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874123.290808435] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[ballistic_turret_node-7] [INFO] [1782874123.563385562] [tank_ballistic_turret_node]: Locked target stage=1/2 id=enemy_mid: (50.00, 285.00, 8.50)
+[local_path_node-5] [INFO] [1782874124.296220382] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874125.289066417] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874126.297664488] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874127.312381355] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874128.289479352] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[tank_controller_node-6] [WARN] [1782874128.980990612] [tank_team_path_controller_node]: stuck detected: moved=0.00m, yaw_moved=0.00deg, starting escape
+[local_path_node-5] [INFO] [1782874129.290090938] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874130.295052165] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874131.289314413] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874132.289166079] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874133.293215350] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874134.285960837] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874135.288509080] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874136.292288558] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[tank_controller_node-6] [WARN] [1782874137.281075405] [tank_team_path_controller_node]: stuck detected: moved=0.01m, yaw_moved=0.00deg, starting escape
+[local_path_node-5] [INFO] [1782874137.289812881] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874138.289332545] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874139.295797502] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874140.289572373] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874141.287953552] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874142.287174512] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874143.289195573] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874144.289027673] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[tank_controller_node-6] [WARN] [1782874145.181051361] [tank_team_path_controller_node]: stuck detected: moved=0.01m, yaw_moved=0.00deg, starting escape
+[local_path_node-5] [INFO] [1782874145.291609170] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874146.289842147] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874147.291550311] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874148.288884303] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874149.301112868] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874150.306884645] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874151.303323673] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874152.302608527] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874153.306215621] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[tank_controller_node-6] [WARN] [1782874153.480815797] [tank_team_path_controller_node]: stuck detected: moved=0.00m, yaw_moved=0.27deg, starting escape
+[local_path_node-5] [INFO] [1782874154.298976317] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874155.308664019] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874156.291195913] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874157.286412913] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874158.288900622] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874159.297759189] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874160.293061391] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874161.299346612] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[tank_controller_node-6] [WARN] [1782874161.780998893] [tank_team_path_controller_node]: stuck detected: moved=0.00m, yaw_moved=0.27deg, starting escape
+[local_path_node-5] [INFO] [1782874162.289851332] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874163.291121670] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874164.291592799] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874165.291728347] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874166.307617793] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874167.286563344] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874168.288959166] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874169.289079857] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[tank_controller_node-6] [WARN] [1782874169.681520815] [tank_team_path_controller_node]: stuck detected: moved=0.00m, yaw_moved=0.27deg, starting escape
+[local_path_node-5] [INFO] [1782874170.289486902] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874171.285868860] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874172.308175372] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874173.293669082] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874174.286198900] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874175.295065593] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874176.286992153] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874177.286669106] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[tank_controller_node-6] [WARN] [1782874177.980597217] [tank_team_path_controller_node]: stuck detected: moved=0.00m, yaw_moved=0.27deg, starting escape
+[local_path_node-5] [INFO] [1782874178.286398318] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874179.289445397] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874180.294732243] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874181.286884479] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874182.287661602] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874183.303224724] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874184.296197971] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874185.296753299] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874186.295716358] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[tank_controller_node-6] [WARN] [1782874186.480902717] [tank_team_path_controller_node]: stuck detected: moved=0.00m, yaw_moved=0.27deg, starting escape
+[local_path_node-5] [INFO] [1782874187.295411611] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874188.295841478] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874189.298060465] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874190.287224967] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874191.288607582] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874192.287123015] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874193.289878510] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874194.310501715] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[tank_controller_node-6] [WARN] [1782874194.581267149] [tank_team_path_controller_node]: stuck detected: moved=0.00m, yaw_moved=0.27deg, starting escape
+[local_path_node-5] [INFO] [1782874195.298921620] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874196.293389121] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874197.288057624] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874198.299512331] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874199.288264597] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874200.289516049] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874201.290907899] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874202.291842263] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[tank_controller_node-6] [WARN] [1782874202.581045533] [tank_team_path_controller_node]: stuck detected: moved=0.00m, yaw_moved=0.27deg, starting escape
+[local_path_node-5] [INFO] [1782874203.289371520] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874204.293624504] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874205.306041535] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874206.287407965] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874207.287279285] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874208.290537935] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874209.289859999] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874210.291004148] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[tank_controller_node-6] [WARN] [1782874211.081378216] [tank_team_path_controller_node]: stuck detected: moved=0.00m, yaw_moved=0.27deg, starting escape
+[local_path_node-5] [INFO] [1782874211.293595713] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874212.296569091] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874213.303873821] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874214.302022318] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874215.302403457] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874216.338869518] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874217.292457594] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874218.292813099] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[tank_controller_node-6] [WARN] [1782874219.080819891] [tank_team_path_controller_node]: stuck detected: moved=0.00m, yaw_moved=0.27deg, starting escape
+[local_path_node-5] [INFO] [1782874219.336544034] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874220.299837120] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874221.293254078] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874222.292489306] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874223.297820721] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874224.288804096] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874225.288934971] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874226.296553309] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[tank_controller_node-6] [WARN] [1782874227.181019369] [tank_team_path_controller_node]: stuck detected: moved=0.00m, yaw_moved=0.27deg, starting escape
+[local_path_node-5] [INFO] [1782874227.291397924] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874228.311706258] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874229.296316129] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874230.296782020] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874231.293116960] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874232.289023177] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874233.291184516] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874234.293645429] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874235.291652793] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[tank_controller_node-6] [WARN] [1782874235.480948531] [tank_team_path_controller_node]: stuck detected: moved=0.00m, yaw_moved=0.27deg, starting escape
+[local_path_node-5] [INFO] [1782874236.292888508] [tank_local_path_node]: Loaded recon static obstacles for matching: 316
+[local_path_node-5] [INFO] [1782874237.291889405] [tank_local_path_node]: Loaded recon static obstacles for matching: 316

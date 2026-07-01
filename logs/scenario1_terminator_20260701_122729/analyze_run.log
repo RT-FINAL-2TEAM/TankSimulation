@@ -1,0 +1,15 @@
+/home/tankcc/.local/lib/python3.10/site-packages/matplotlib/projections/__init__.py:63: UserWarning: Unable to import Axes3D. This may be due to multiple versions of Matplotlib being installed (e.g. as a system package and as a pip package). As a result, the 3D projection is not available.
+  warnings.warn("Unable to import Axes3D. This may be due to multiple versions of "
+route_A(route_A.json): weave 좌우전환 10회/진폭 0.7m, 멈춰-확정 3회/2.8s(hold_logged=True), 충돌 0, 확정 5
+  └ 속도(m/s): mean 4.1 p90 7.4 max 13.1
+  └ 융합: 성공 60(16%) · no_parsed_detection 163 · strict_no_projected_cluster 97 · strict_no_cluster_assignment 36 · no_player_pose 3 · no_lidar_points 2 · no_detection_payload 1
+  └ 관측거동(②③): 미분류후보 평균 1.06(전방0.13/옆0.92), ②dwell 3회, ③포탑 stare 8회, slow 22샘플, 크기 {'large': 2, 'small': 3, 'vehicle': 2}
+  └ GT탐지율(경로 ≤30m): 5/8 (rate=0.62) 놓침=tent(38,12)~29m, rock(61,155)~12m, rock(37,116)~13m
+route_B(route_B.json): weave 좌우전환 17회/진폭 0.72m, 멈춰-확정 8회/6.6s(hold_logged=True), 충돌 1, 확정 9
+  └ 속도(m/s): mean 2.7 p90 5.7 max 11.1, 충돌진입 1.3
+  └ 융합: 성공 100(14%) · strict_no_projected_cluster 282 · no_parsed_detection 183 · strict_no_cluster_assignment 139 · no_lidar_points 2
+  └ 관측거동(②③): 미분류후보 평균 1.77(전방0.23/옆1.54), ②dwell 8회, ③포탑 stare 18회, slow 74샘플, 크기 {'large': 3, 'small': 3, 'vehicle': 3}
+  └ GT탐지율(경로 ≤30m): 8/15 (rate=0.53) 놓침=car(161,188)~10m, rock(106,62)~10m, tent(38,12)~29m, rock(145,84)~24m, rock(188,173)~13m, rock(145,218)~11m, house(106,237)~22m
+
+[완료] 진단 리포트: /home/tankcc/tankcc/recon_reports/analysis/run_diagnosis.md
+  오버레이: diag_overlay_A.png, diag_overlay_B.png

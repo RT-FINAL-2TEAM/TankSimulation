@@ -1,0 +1,836 @@
+[INFO] [launch]: All log files can be found below /home/tankcc/.ros/log/2026-07-01-12-03-25-585949-tankcc-OMEN-by-HP-Gaming-Laptop-16-k0xxx-80137
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [lidar_processor_node-1]: process started with pid [80162]
+[INFO] [lidar_camera_overlay_node-2]: process started with pid [80164]
+[INFO] [lidar_dbscan_cluster_node-3]: process started with pid [80166]
+[INFO] [map_astar_planner_node-4]: process started with pid [80168]
+[INFO] [local_path_node-5]: process started with pid [80170]
+[INFO] [tank_controller_node-6]: process started with pid [80172]
+[lidar_camera_overlay_node-2] [INFO] [1782875006.276871890] [lidar_camera_overlay_node]: LiDAR-camera overlay node started
+[lidar_camera_overlay_node-2] [INFO] [1782875006.277808764] [lidar_camera_overlay_node]: subscribe image: /tank/camera/image_compressed
+[lidar_camera_overlay_node-2] [INFO] [1782875006.278677390] [lidar_camera_overlay_node]: subscribe info : /tank/api/info/compact
+[lidar_camera_overlay_node-2] [INFO] [1782875006.280905629] [lidar_camera_overlay_node]: subscribe lidar: /tank/sensor/lidar/detected_points_map
+[lidar_camera_overlay_node-2] [INFO] [1782875006.282009286] [lidar_camera_overlay_node]: publish image  : /tank/camera/lidar_projection/image
+[lidar_camera_overlay_node-2] [INFO] [1782875006.282591345] [lidar_camera_overlay_node]: projection config: /home/tankcc/tankcc/install/path_planning/share/path_planning/config/fusion_mapping.yaml
+[lidar_camera_overlay_node-2] [INFO] [1782875006.283182054] [lidar_camera_overlay_node]: effective projection params: {'tx': 0.28, 'ty': 0.02, 'tz': 11.8, 'yaw_offset': 1.1, 'pitch_offset': 1.5, 'roll_offset': -0.3, 'hfov': 86.0, 'vfov': 60.2, 'body_pitch_gain': 1.0, 'body_roll_gain': 1.0}
+[tank_controller_node-6] [INFO] [1782875006.346251784] [tank_team_path_controller_node]: Team path controller initialized: max_speed=13.60, max_yaw_rate=40.00, local_target=False
+[local_path_node-5] [INFO] [1782875006.486807921] [tank_local_path_node]: local_path_node started (PC2 Optimized Version)
+[local_path_node-5] [INFO] [1782875006.489917158] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875007.020285628] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[lidar_dbscan_cluster_node-3] [INFO] [1782875007.049382101] [lidar_dbscan_cluster_node]: lidar_dbscan_cluster_node started: input=/tank/sensor/lidar/detected_points_map(PC2), eps=1.5, min_samples=2, min_cluster_size=2, cluster_point_sample_limit=64
+[map_astar_planner_node-4] [INFO] [1782875007.050004043] [tank_team_dynamic_astar_planner_node]: static map obstacles loaded: 301 from /home/tankcc/tankcc/install/rviz_visualization/share/rviz_visualization/map/finalmap.map
+[lidar_processor_node-1] [INFO] [1782875007.051029097] [tank_lidar_processor_node]: LiDAR processor started: sub=/tank/api/info/raw, pub=/tank/sensor/lidar/detected_points_map obstacle-only, pub=/tank/sensor/lidar/terrain_points_map terrain-only, pub=/tank/sensor/lidar/all_detected_points_map all hits, legacy_json=False, ground_filter=True, grid=0.5, climb_limit=0.4
+[map_astar_planner_node-4] [INFO] [1782875007.062559397] [tank_team_dynamic_astar_planner_node]: Team Dynamic A* planner initialized: use_gt_obstacles=False, dynamic_replan=True, goal=(110.0, 276.5), resolution=1.0, inflate=4.5, route_waypoints=True:finalmap/A, cluster_bboxes=True, cluster_memory=True, static_inflate=2.0, discovered_astar=True, route_lock=6.0s, route_index_never_decrease=True, lidar_memory_block_trigger=False
+[map_astar_planner_node-4] [INFO] [1782875007.271675057] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=initial, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=17, rounded=2, unrounded=0, obstacles=0, lidar_bboxes=0, discovered_bboxes=0
+[local_path_node-5] [INFO] [1782875008.011427842] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875009.011899992] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875010.012596601] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875011.022121444] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875012.014678691] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875013.011992173] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875014.015592947] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875015.035809790] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875016.011894385] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875017.011996013] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875018.014471748] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875019.013886932] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875020.010071182] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875021.012374609] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875022.019107254] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875023.013097334] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875024.011342737] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875024.038491114] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=23, rounded=3, unrounded=0, obstacles=9, lidar_bboxes=8, discovered_bboxes=1
+[map_astar_planner_node-4] [INFO] [1782875024.990379923] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=24, rounded=3, unrounded=0, obstacles=9, lidar_bboxes=8, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782875025.013550947] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875025.943062420] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=24, rounded=3, unrounded=0, obstacles=10, lidar_bboxes=9, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782875026.010269951] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875026.830415366] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=24, rounded=3, unrounded=0, obstacles=9, lidar_bboxes=8, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782875027.015351049] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875027.733544658] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=24, rounded=3, unrounded=0, obstacles=9, lidar_bboxes=8, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782875028.029652582] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875028.629982163] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=24, rounded=3, unrounded=0, obstacles=10, lidar_bboxes=8, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875029.011138283] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875029.543784638] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=24, rounded=3, unrounded=0, obstacles=11, lidar_bboxes=9, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875030.011000982] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875030.458144201] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=21, rounded=3, unrounded=0, obstacles=11, lidar_bboxes=9, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875031.020732299] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875031.352123806] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=16, rounded=1, unrounded=1, obstacles=14, lidar_bboxes=12, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875032.012849263] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875032.235955127] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=16, rounded=1, unrounded=1, obstacles=15, lidar_bboxes=13, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875033.011538081] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875033.140031956] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=17, rounded=2, unrounded=0, obstacles=13, lidar_bboxes=11, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875034.015440430] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875034.042805354] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=17, rounded=2, unrounded=0, obstacles=15, lidar_bboxes=13, discovered_bboxes=2
+[map_astar_planner_node-4] [INFO] [1782875034.938142333] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=17, rounded=2, unrounded=0, obstacles=16, lidar_bboxes=14, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875035.013378678] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875035.831306267] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=17, rounded=2, unrounded=0, obstacles=16, lidar_bboxes=14, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875036.013138318] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875036.737957630] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=17, rounded=2, unrounded=0, obstacles=16, lidar_bboxes=14, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875037.014028857] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875037.632952764] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=17, rounded=2, unrounded=0, obstacles=17, lidar_bboxes=15, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875038.011013379] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875038.539477529] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=17, rounded=2, unrounded=0, obstacles=17, lidar_bboxes=15, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875039.012049370] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875039.436021910] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=17, rounded=2, unrounded=0, obstacles=19, lidar_bboxes=17, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875040.025214213] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875040.268478766] [tank_team_dynamic_astar_planner_node]: route checkpoint advanced: next=1/2, remaining=1
+[map_astar_planner_node-4] [INFO] [1782875040.391846086] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=31, rounded=3, unrounded=1, obstacles=23, lidar_bboxes=21, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875041.014256408] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875041.338334087] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=21, rounded=2, unrounded=3, obstacles=25, lidar_bboxes=23, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875042.009846702] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875042.234117395] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=25, rounded=3, unrounded=0, obstacles=24, lidar_bboxes=22, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875043.030826706] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875043.186456653] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=18, rounded=1, unrounded=3, obstacles=25, lidar_bboxes=23, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875044.013930982] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875044.136833806] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=17, rounded=1, unrounded=2, obstacles=24, lidar_bboxes=22, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875045.010712415] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875045.043659970] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=16, rounded=1, unrounded=1, obstacles=23, lidar_bboxes=21, discovered_bboxes=2
+[map_astar_planner_node-4] [INFO] [1782875045.944562995] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=15, rounded=1, unrounded=0, obstacles=23, lidar_bboxes=21, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875046.014264764] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875046.844194786] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=16, rounded=1, unrounded=1, obstacles=23, lidar_bboxes=21, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875047.015602208] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875047.743390470] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=16, rounded=1, unrounded=1, obstacles=22, lidar_bboxes=20, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875048.012725077] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875048.639816112] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=16, rounded=1, unrounded=1, obstacles=22, lidar_bboxes=20, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875049.013117988] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875049.548819023] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=18, rounded=2, unrounded=0, obstacles=22, lidar_bboxes=20, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875050.013454211] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875050.437240877] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=15, rounded=1, unrounded=0, obstacles=22, lidar_bboxes=20, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875051.013775009] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875051.340743336] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=15, rounded=1, unrounded=0, obstacles=21, lidar_bboxes=19, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875052.034111357] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875052.239136181] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=15, rounded=1, unrounded=0, obstacles=20, lidar_bboxes=18, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875053.009165869] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875053.150549843] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=15, rounded=1, unrounded=0, obstacles=19, lidar_bboxes=17, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875054.022527423] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875054.051514395] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=15, rounded=1, unrounded=0, obstacles=17, lidar_bboxes=15, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875055.017333758] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875056.011368274] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875057.008856966] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875058.015450925] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875059.012737022] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875060.013980767] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875061.013541464] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875062.032794645] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875063.015134884] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875064.014208353] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875065.012978132] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875065.334991039] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=15, rounded=1, unrounded=0, obstacles=31, lidar_bboxes=27, discovered_bboxes=4
+[local_path_node-5] [INFO] [1782875066.010684583] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875067.015198231] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875068.013977538] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875068.341019569] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=14, rounded=1, unrounded=0, obstacles=31, lidar_bboxes=27, discovered_bboxes=4
+[local_path_node-5] [INFO] [1782875069.014046078] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875069.725598686] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=1/2, points=3, rounded=0, unrounded=1, obstacles=34, lidar_bboxes=30, discovered_bboxes=4
+[local_path_node-5] [INFO] [1782875070.010152606] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875070.667700852] [tank_team_dynamic_astar_planner_node]: route checkpoint advanced: next=2/2, remaining=0
+[map_astar_planner_node-4] [INFO] [1782875070.734956895] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/A/west:next_checkpoint=2/2, points=2, rounded=0, unrounded=0, obstacles=37, lidar_bboxes=33, discovered_bboxes=4
+[local_path_node-5] [INFO] [1782875071.012878036] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875072.011142066] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875073.012241600] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875074.014090600] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875075.016357845] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875076.013019354] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875077.051600195] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875078.022386833] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875079.016391299] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875080.020969062] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875081.012240376] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875082.009479329] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875083.013895225] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875084.014148123] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875085.013247767] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875086.021108025] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875087.019790852] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875088.012240869] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875089.031974632] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875090.013467732] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875091.022193715] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875092.019230193] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875093.012914205] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875094.011750428] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875095.019093835] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[WARNING] [launch]: user interrupted with ctrl-c (SIGINT)
+[lidar_processor_node-1] Traceback (most recent call last):
+[lidar_processor_node-1]   File "/home/tankcc/tankcc/build/lidar/lidar/lidar_processor_node.py", line 223, in main
+[lidar_processor_node-1]     rclpy.spin(node)
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[lidar_processor_node-1]     executor.spin_once()
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+[lidar_processor_node-1]     self._spin_once_impl(timeout_sec)
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 797, in _spin_once_impl
+[lidar_processor_node-1]     handler, entity, node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 780, in wait_for_ready_callbacks
+[lidar_processor_node-1]     return next(self._cb_iter)
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 677, in _wait_for_ready_callbacks
+[lidar_processor_node-1]     wait_set.wait(timeout_nsec)
+[lidar_processor_node-1] KeyboardInterrupt
+[lidar_processor_node-1] 
+[lidar_processor_node-1] During handling of the above exception, another exception occurred:
+[lidar_processor_node-1] 
+[lidar_processor_node-1] Traceback (most recent call last):
+[lidar_processor_node-1]   File "/home/tankcc/tankcc/install/lidar/lib/lidar/lidar_processor_node", line 33, in <module>
+[lidar_processor_node-1]     sys.exit(load_entry_point('lidar', 'console_scripts', 'lidar_processor_node')())
+[lidar_processor_node-1]   File "/home/tankcc/tankcc/build/lidar/lidar/lidar_processor_node.py", line 226, in main
+[lidar_processor_node-1]     rclpy.shutdown()
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 130, in shutdown
+[lidar_processor_node-1]     _shutdown(context=context)
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/utilities.py", line 58, in shutdown
+[lidar_processor_node-1]     return context.shutdown()
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/context.py", line 102, in shutdown
+[lidar_processor_node-1]     self.__context.shutdown()
+[lidar_processor_node-1] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:241
+[map_astar_planner_node-4] Traceback (most recent call last):
+[map_astar_planner_node-4]   File "/home/tankcc/tankcc/build/path_planning/path_planning/map_astar_planner_node.py", line 1828, in main
+[map_astar_planner_node-4]     rclpy.spin(node)
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[map_astar_planner_node-4]     executor.spin_once()
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+[map_astar_planner_node-4]     self._spin_once_impl(timeout_sec)
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 797, in _spin_once_impl
+[map_astar_planner_node-4]     handler, entity, node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 780, in wait_for_ready_callbacks
+[map_astar_planner_node-4]     return next(self._cb_iter)
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 677, in _wait_for_ready_callbacks
+[map_astar_planner_node-4]     wait_set.wait(timeout_nsec)
+[map_astar_planner_node-4] KeyboardInterrupt
+[map_astar_planner_node-4] 
+[map_astar_planner_node-4] During handling of the above exception, another exception occurred:
+[map_astar_planner_node-4] 
+[map_astar_planner_node-4] Traceback (most recent call last):
+[map_astar_planner_node-4]   File "/home/tankcc/tankcc/install/path_planning/lib/path_planning/map_astar_planner_node", line 33, in <module>
+[map_astar_planner_node-4]     sys.exit(load_entry_point('path-planning', 'console_scripts', 'map_astar_planner_node')())
+[map_astar_planner_node-4]   File "/home/tankcc/tankcc/build/path_planning/path_planning/map_astar_planner_node.py", line 1831, in main
+[map_astar_planner_node-4]     rclpy.shutdown()
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 130, in shutdown
+[map_astar_planner_node-4]     _shutdown(context=context)
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/utilities.py", line 58, in shutdown
+[map_astar_planner_node-4]     return context.shutdown()
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/context.py", line 102, in shutdown
+[map_astar_planner_node-4]     self.__context.shutdown()
+[map_astar_planner_node-4] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:241
+[lidar_dbscan_cluster_node-3] Traceback (most recent call last):
+[lidar_dbscan_cluster_node-3]   File "/home/tankcc/tankcc/build/tank_visual_perception/tank_visual_perception/lidar_dbscan_cluster_node.py", line 334, in main
+[lidar_dbscan_cluster_node-3]     rclpy.spin(node)
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[lidar_dbscan_cluster_node-3]     executor.spin_once()
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+[lidar_dbscan_cluster_node-3]     self._spin_once_impl(timeout_sec)
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 803, in _spin_once_impl
+[lidar_dbscan_cluster_node-3]     handler()
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/task.py", line 256, in __call__
+[lidar_dbscan_cluster_node-3]     self._execute_coroutine_step(self._handler)
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/task.py", line 272, in _execute_coroutine_step
+[lidar_dbscan_cluster_node-3]     result = coro.send(None)
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 488, in handler
+[lidar_dbscan_cluster_node-3]     await call_coroutine(entity, arg)
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 407, in _execute_subscription
+[lidar_dbscan_cluster_node-3]     await await_or_execute(sub.callback, msg)
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 110, in await_or_execute
+[lidar_dbscan_cluster_node-3]     return callback(*args)
+[lidar_dbscan_cluster_node-3]   File "/home/tankcc/tankcc/build/tank_visual_perception/tank_visual_perception/lidar_dbscan_cluster_node.py", line 185, in on_lidar
+[lidar_dbscan_cluster_node-3]     self.publish_markers(clusters)
+[lidar_dbscan_cluster_node-3]   File "/home/tankcc/tankcc/build/tank_visual_perception/tank_visual_perception/lidar_dbscan_cluster_node.py", line 306, in publish_markers
+[lidar_dbscan_cluster_node-3]     text.header.frame_id = self.frame_id
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/std_msgs/msg/_header.py", line 143, in frame_id
+[lidar_dbscan_cluster_node-3]     @frame_id.setter
+[lidar_dbscan_cluster_node-3] KeyboardInterrupt
+[lidar_dbscan_cluster_node-3] 
+[lidar_dbscan_cluster_node-3] During handling of the above exception, another exception occurred:
+[lidar_dbscan_cluster_node-3] 
+[lidar_dbscan_cluster_node-3] Traceback (most recent call last):
+[lidar_dbscan_cluster_node-3]   File "/home/tankcc/tankcc/install/tank_visual_perception/lib/tank_visual_perception/lidar_dbscan_cluster_node", line 33, in <module>
+[lidar_dbscan_cluster_node-3]     sys.exit(load_entry_point('tank-visual-perception', 'console_scripts', 'lidar_dbscan_cluster_node')())
+[lidar_dbscan_cluster_node-3]   File "/home/tankcc/tankcc/build/tank_visual_perception/tank_visual_perception/lidar_dbscan_cluster_node.py", line 337, in main
+[lidar_dbscan_cluster_node-3]     rclpy.shutdown()
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 130, in shutdown
+[lidar_dbscan_cluster_node-3]     _shutdown(context=context)
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/utilities.py", line 58, in shutdown
+[lidar_dbscan_cluster_node-3]     return context.shutdown()
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/context.py", line 102, in shutdown
+[lidar_dbscan_cluster_node-3]     self.__context.shutdown()
+[lidar_dbscan_cluster_node-3] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:241
+[local_path_node-5] Traceback (most recent call last):
+[local_path_node-5]   File "/home/tankcc/tankcc/build/path_planning/path_planning/local_path_node.py", line 2486, in main
+[local_path_node-5]     rclpy.spin(node)
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[local_path_node-5]     executor.spin_once()
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+[local_path_node-5]     self._spin_once_impl(timeout_sec)
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 797, in _spin_once_impl
+[local_path_node-5]     handler, entity, node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 780, in wait_for_ready_callbacks
+[local_path_node-5]     return next(self._cb_iter)
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 677, in _wait_for_ready_callbacks
+[local_path_node-5]     wait_set.wait(timeout_nsec)
+[local_path_node-5] KeyboardInterrupt
+[local_path_node-5] 
+[local_path_node-5] During handling of the above exception, another exception occurred:
+[local_path_node-5] 
+[local_path_node-5] Traceback (most recent call last):
+[local_path_node-5]   File "/home/tankcc/tankcc/install/path_planning/lib/path_planning/local_path_node", line 33, in <module>
+[local_path_node-5]     sys.exit(load_entry_point('path-planning', 'console_scripts', 'local_path_node')())
+[local_path_node-5]   File "/home/tankcc/tankcc/build/path_planning/path_planning/local_path_node.py", line 2489, in main
+[local_path_node-5]     rclpy.shutdown()
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 130, in shutdown
+[local_path_node-5]     _shutdown(context=context)
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/utilities.py", line 58, in shutdown
+[local_path_node-5]     return context.shutdown()
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/context.py", line 102, in shutdown
+[local_path_node-5]     self.__context.shutdown()
+[local_path_node-5] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:241
+[tank_controller_node-6] Traceback (most recent call last):
+[tank_controller_node-6]   File "/home/tankcc/tankcc/build/control/control/tank_controller_node.py", line 1799, in main
+[tank_controller_node-6]     rclpy.spin(node)
+[tank_controller_node-6]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[tank_controller_node-6]     executor.spin_once()
+[tank_controller_node-6]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+[tank_controller_node-6]     self._spin_once_impl(timeout_sec)
+[tank_controller_node-6]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 797, in _spin_once_impl
+[tank_controller_node-6]     handler, entity, node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
+[tank_controller_node-6]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 780, in wait_for_ready_callbacks
+[tank_controller_node-6]     return next(self._cb_iter)
+[tank_controller_node-6]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 677, in _wait_for_ready_callbacks
+[tank_controller_node-6]     wait_set.wait(timeout_nsec)
+[tank_controller_node-6] KeyboardInterrupt
+[tank_controller_node-6] 
+[tank_controller_node-6] During handling of the above exception, another exception occurred:
+[tank_controller_node-6] 
+[tank_controller_node-6] Traceback (most recent call last):
+[tank_controller_node-6]   File "/home/tankcc/tankcc/install/control/lib/control/tank_controller_node", line 33, in <module>
+[tank_controller_node-6]     sys.exit(load_entry_point('control', 'console_scripts', 'tank_controller_node')())
+[tank_controller_node-6]   File "/home/tankcc/tankcc/build/control/control/tank_controller_node.py", line 1802, in main
+[tank_controller_node-6]     rclpy.shutdown()
+[tank_controller_node-6]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 130, in shutdown
+[tank_controller_node-6]     _shutdown(context=context)
+[tank_controller_node-6]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/utilities.py", line 58, in shutdown
+[tank_controller_node-6]     return context.shutdown()
+[tank_controller_node-6]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/context.py", line 102, in shutdown
+[tank_controller_node-6]     self.__context.shutdown()
+[tank_controller_node-6] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:241
+[lidar_camera_overlay_node-2] Traceback (most recent call last):
+[lidar_camera_overlay_node-2]   File "/home/tankcc/tankcc/build/tank_visual_perception/tank_visual_perception/lidar_camera_overlay_node.py", line 322, in main
+[lidar_camera_overlay_node-2]     rclpy.spin(node)
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[lidar_camera_overlay_node-2]     executor.spin_once()
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+[lidar_camera_overlay_node-2]     self._spin_once_impl(timeout_sec)
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 797, in _spin_once_impl
+[lidar_camera_overlay_node-2]     handler, entity, node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 780, in wait_for_ready_callbacks
+[lidar_camera_overlay_node-2]     return next(self._cb_iter)
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 677, in _wait_for_ready_callbacks
+[lidar_camera_overlay_node-2]     wait_set.wait(timeout_nsec)
+[lidar_camera_overlay_node-2] KeyboardInterrupt
+[lidar_camera_overlay_node-2] 
+[lidar_camera_overlay_node-2] During handling of the above exception, another exception occurred:
+[lidar_camera_overlay_node-2] 
+[lidar_camera_overlay_node-2] Traceback (most recent call last):
+[lidar_camera_overlay_node-2]   File "/home/tankcc/tankcc/install/tank_visual_perception/lib/tank_visual_perception/lidar_camera_overlay_node", line 33, in <module>
+[lidar_camera_overlay_node-2]     sys.exit(load_entry_point('tank-visual-perception', 'console_scripts', 'lidar_camera_overlay_node')())
+[lidar_camera_overlay_node-2]   File "/home/tankcc/tankcc/build/tank_visual_perception/tank_visual_perception/lidar_camera_overlay_node.py", line 325, in main
+[lidar_camera_overlay_node-2]     rclpy.shutdown()
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 130, in shutdown
+[lidar_camera_overlay_node-2]     _shutdown(context=context)
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/utilities.py", line 58, in shutdown
+[lidar_camera_overlay_node-2]     return context.shutdown()
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/context.py", line 102, in shutdown
+[lidar_camera_overlay_node-2]     self.__context.shutdown()
+[lidar_camera_overlay_node-2] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:241
+[ERROR] [tank_controller_node-6]: process has died [pid 80172, exit code 1, cmd '/home/tankcc/tankcc/install/control/lib/control/tank_controller_node --ros-args -r __node:=tank_team_path_controller_node --params-file /tmp/launch_params_eeke80e_'].
+[ERROR] [local_path_node-5]: process has died [pid 80170, exit code 1, cmd '/home/tankcc/tankcc/install/path_planning/lib/path_planning/local_path_node --ros-args -r __node:=tank_local_path_node --params-file /tmp/launch_params_6504fqgs'].
+[ERROR] [lidar_camera_overlay_node-2]: process has died [pid 80164, exit code 1, cmd '/home/tankcc/tankcc/install/tank_visual_perception/lib/tank_visual_perception/lidar_camera_overlay_node --ros-args -r __node:=lidar_camera_overlay_node --params-file /tmp/launch_params_1a4dq48a'].
+[ERROR] [lidar_processor_node-1]: process has died [pid 80162, exit code 1, cmd '/home/tankcc/tankcc/install/lidar/lib/lidar/lidar_processor_node --ros-args -r __node:=tank_lidar_processor_node --params-file /tmp/launch_params_jwkp0zgs'].
+[ERROR] [map_astar_planner_node-4]: process has died [pid 80168, exit code 1, cmd '/home/tankcc/tankcc/install/path_planning/lib/path_planning/map_astar_planner_node --ros-args -r __node:=tank_team_dynamic_astar_planner_node --params-file /tmp/launch_params_c5bvrzka'].
+[ERROR] [lidar_dbscan_cluster_node-3]: process has died [pid 80166, exit code 1, cmd '/home/tankcc/tankcc/install/tank_visual_perception/lib/tank_visual_perception/lidar_dbscan_cluster_node --ros-args -r __node:=lidar_dbscan_cluster_node --params-file /tmp/launch_params_brhceyeq'].
+[INFO] [launch]: All log files can be found below /home/tankcc/.ros/log/2026-07-01-12-05-01-844318-tankcc-OMEN-by-HP-Gaming-Laptop-16-k0xxx-83640
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [lidar_processor_node-1]: process started with pid [83667]
+[INFO] [lidar_camera_overlay_node-2]: process started with pid [83669]
+[INFO] [lidar_dbscan_cluster_node-3]: process started with pid [83671]
+[INFO] [map_astar_planner_node-4]: process started with pid [83673]
+[INFO] [local_path_node-5]: process started with pid [83675]
+[INFO] [tank_controller_node-6]: process started with pid [83677]
+[lidar_camera_overlay_node-2] [INFO] [1782875102.583228720] [lidar_camera_overlay_node]: LiDAR-camera overlay node started
+[lidar_camera_overlay_node-2] [INFO] [1782875102.584172638] [lidar_camera_overlay_node]: subscribe image: /tank/camera/image_compressed
+[lidar_camera_overlay_node-2] [INFO] [1782875102.584880934] [lidar_camera_overlay_node]: subscribe info : /tank/api/info/compact
+[lidar_camera_overlay_node-2] [INFO] [1782875102.586980589] [lidar_camera_overlay_node]: subscribe lidar: /tank/sensor/lidar/detected_points_map
+[lidar_camera_overlay_node-2] [INFO] [1782875102.587989594] [lidar_camera_overlay_node]: publish image  : /tank/camera/lidar_projection/image
+[lidar_camera_overlay_node-2] [INFO] [1782875102.588965383] [lidar_camera_overlay_node]: projection config: /home/tankcc/tankcc/install/path_planning/share/path_planning/config/fusion_mapping.yaml
+[lidar_camera_overlay_node-2] [INFO] [1782875102.590021044] [lidar_camera_overlay_node]: effective projection params: {'tx': 0.28, 'ty': 0.02, 'tz': 11.8, 'yaw_offset': 1.1, 'pitch_offset': 1.5, 'roll_offset': -0.3, 'hfov': 86.0, 'vfov': 60.2, 'body_pitch_gain': 1.0, 'body_roll_gain': 1.0}
+[tank_controller_node-6] [INFO] [1782875102.614619390] [tank_team_path_controller_node]: Team path controller initialized: max_speed=13.60, max_yaw_rate=40.00, local_target=False
+[local_path_node-5] [INFO] [1782875102.637293484] [tank_local_path_node]: local_path_node started (PC2 Optimized Version)
+[local_path_node-5] [INFO] [1782875103.164534913] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875103.253527627] [tank_team_dynamic_astar_planner_node]: static map obstacles loaded: 301 from /home/tankcc/tankcc/install/rviz_visualization/share/rviz_visualization/map/finalmap.map
+[lidar_processor_node-1] [INFO] [1782875103.257944500] [tank_lidar_processor_node]: LiDAR processor started: sub=/tank/api/info/raw, pub=/tank/sensor/lidar/detected_points_map obstacle-only, pub=/tank/sensor/lidar/terrain_points_map terrain-only, pub=/tank/sensor/lidar/all_detected_points_map all hits, legacy_json=False, ground_filter=True, grid=0.5, climb_limit=0.4
+[lidar_dbscan_cluster_node-3] [INFO] [1782875103.262259395] [lidar_dbscan_cluster_node]: lidar_dbscan_cluster_node started: input=/tank/sensor/lidar/detected_points_map(PC2), eps=1.5, min_samples=2, min_cluster_size=2, cluster_point_sample_limit=64
+[map_astar_planner_node-4] [INFO] [1782875103.269005817] [tank_team_dynamic_astar_planner_node]: Team Dynamic A* planner initialized: use_gt_obstacles=False, dynamic_replan=True, goal=(110.0, 276.5), resolution=1.0, inflate=4.5, route_waypoints=True:finalmap/B, cluster_bboxes=True, cluster_memory=True, static_inflate=2.0, discovered_astar=True, route_lock=6.0s, route_index_never_decrease=True, lidar_memory_block_trigger=False
+[map_astar_planner_node-4] [INFO] [1782875103.543722447] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=initial, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=29, rounded=4, unrounded=0, obstacles=0, lidar_bboxes=0, discovered_bboxes=0
+[local_path_node-5] [INFO] [1782875104.012449283] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875105.018487514] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875106.012594857] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875107.010893382] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875108.033388242] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875109.013885825] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875110.013295932] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875111.031298888] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875112.012391863] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875112.988149550] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=lidar_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=28, rounded=4, unrounded=0, obstacles=7, lidar_bboxes=6, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782875113.015824116] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875114.030814019] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=29, rounded=4, unrounded=0, obstacles=7, lidar_bboxes=6, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782875114.037302132] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875114.984445260] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=29, rounded=4, unrounded=0, obstacles=8, lidar_bboxes=7, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782875115.014534257] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875115.976691974] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=29, rounded=4, unrounded=0, obstacles=8, lidar_bboxes=7, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782875116.011083219] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875116.991334884] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=29, rounded=4, unrounded=0, obstacles=8, lidar_bboxes=7, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782875117.013798867] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875118.010296734] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=29, rounded=4, unrounded=0, obstacles=8, lidar_bboxes=7, discovered_bboxes=1
+[local_path_node-5] [INFO] [1782875118.019989946] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875118.980983800] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=29, rounded=4, unrounded=0, obstacles=9, lidar_bboxes=7, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875119.009810717] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875120.004288268] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=30, rounded=4, unrounded=0, obstacles=10, lidar_bboxes=8, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875120.023426497] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875121.023764685] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875121.025883344] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=30, rounded=4, unrounded=0, obstacles=10, lidar_bboxes=8, discovered_bboxes=2
+[map_astar_planner_node-4] [INFO] [1782875121.980149934] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=29, rounded=4, unrounded=0, obstacles=11, lidar_bboxes=9, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875122.019759364] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875122.965526353] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=30, rounded=4, unrounded=0, obstacles=14, lidar_bboxes=12, discovered_bboxes=2
+[local_path_node-5] [INFO] [1782875123.019858913] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875123.879718980] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=31, rounded=4, unrounded=0, obstacles=17, lidar_bboxes=14, discovered_bboxes=3
+[local_path_node-5] [INFO] [1782875124.019907371] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875124.861493349] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=32, rounded=4, unrounded=1, obstacles=19, lidar_bboxes=16, discovered_bboxes=3
+[local_path_node-5] [INFO] [1782875125.019726644] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875125.754487939] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=34, rounded=5, unrounded=0, obstacles=19, lidar_bboxes=16, discovered_bboxes=3
+[local_path_node-5] [INFO] [1782875126.020749496] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875126.738307792] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=31, rounded=4, unrounded=0, obstacles=22, lidar_bboxes=18, discovered_bboxes=4
+[local_path_node-5] [INFO] [1782875127.030603242] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875127.646471670] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=30, rounded=4, unrounded=0, obstacles=22, lidar_bboxes=18, discovered_bboxes=4
+[local_path_node-5] [INFO] [1782875128.022677899] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875128.554337998] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=30, rounded=4, unrounded=0, obstacles=24, lidar_bboxes=20, discovered_bboxes=4
+[local_path_node-5] [INFO] [1782875129.026390343] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875129.534214700] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=30, rounded=4, unrounded=0, obstacles=24, lidar_bboxes=20, discovered_bboxes=4
+[local_path_node-5] [INFO] [1782875130.015828236] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875130.459917023] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=24, rounded=3, unrounded=1, obstacles=29, lidar_bboxes=25, discovered_bboxes=4
+[local_path_node-5] [INFO] [1782875131.014988448] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875131.385463427] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=22, rounded=3, unrounded=1, obstacles=31, lidar_bboxes=27, discovered_bboxes=4
+[local_path_node-5] [INFO] [1782875132.013751786] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875132.349984504] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=27, rounded=4, unrounded=0, obstacles=32, lidar_bboxes=28, discovered_bboxes=4
+[local_path_node-5] [INFO] [1782875133.032647017] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875133.327630862] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=27, rounded=4, unrounded=0, obstacles=33, lidar_bboxes=28, discovered_bboxes=5
+[local_path_node-5] [INFO] [1782875134.015850290] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875134.246356716] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=22, rounded=3, unrounded=1, obstacles=33, lidar_bboxes=28, discovered_bboxes=5
+[local_path_node-5] [INFO] [1782875135.019481448] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875135.150681729] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=22, rounded=3, unrounded=1, obstacles=33, lidar_bboxes=28, discovered_bboxes=5
+[local_path_node-5] [INFO] [1782875136.060541396] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875136.125913470] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=27, rounded=4, unrounded=0, obstacles=32, lidar_bboxes=27, discovered_bboxes=5
+[local_path_node-5] [INFO] [1782875137.017663582] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875137.061709790] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=22, rounded=3, unrounded=1, obstacles=33, lidar_bboxes=27, discovered_bboxes=6
+[map_astar_planner_node-4] [INFO] [1782875137.949617297] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=22, rounded=3, unrounded=1, obstacles=34, lidar_bboxes=28, discovered_bboxes=6
+[local_path_node-5] [INFO] [1782875138.015500833] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875138.901554648] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=22, rounded=3, unrounded=1, obstacles=35, lidar_bboxes=29, discovered_bboxes=6
+[local_path_node-5] [INFO] [1782875139.020355666] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875139.851053018] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=22, rounded=3, unrounded=1, obstacles=36, lidar_bboxes=30, discovered_bboxes=6
+[local_path_node-5] [INFO] [1782875140.014135549] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875140.742034157] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=22, rounded=3, unrounded=1, obstacles=35, lidar_bboxes=29, discovered_bboxes=6
+[local_path_node-5] [INFO] [1782875141.016493639] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875141.659254021] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=26, rounded=4, unrounded=0, obstacles=37, lidar_bboxes=31, discovered_bboxes=6
+[local_path_node-5] [INFO] [1782875142.019954755] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875142.564717726] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=21, rounded=3, unrounded=0, obstacles=38, lidar_bboxes=32, discovered_bboxes=6
+[local_path_node-5] [INFO] [1782875143.027481528] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875143.440007399] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=21, rounded=3, unrounded=0, obstacles=38, lidar_bboxes=32, discovered_bboxes=6
+[local_path_node-5] [INFO] [1782875144.015435734] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875144.340091740] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=21, rounded=3, unrounded=0, obstacles=37, lidar_bboxes=31, discovered_bboxes=6
+[local_path_node-5] [INFO] [1782875145.023160428] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875145.255792706] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=21, rounded=3, unrounded=0, obstacles=37, lidar_bboxes=31, discovered_bboxes=6
+[local_path_node-5] [INFO] [1782875146.025245326] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875146.148271382] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=0/3, points=21, rounded=3, unrounded=0, obstacles=37, lidar_bboxes=30, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875147.014355269] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875148.030625537] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875149.012834993] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875150.015363433] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875151.019415608] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875152.011399838] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875153.015923309] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875154.017659968] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875155.018626642] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875156.011147116] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875157.012130004] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875157.675050921] [tank_team_dynamic_astar_planner_node]: route checkpoint advanced: next=1/3, remaining=2
+[map_astar_planner_node-4] [INFO] [1782875157.793980126] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=1/3, points=11, rounded=2, unrounded=2, obstacles=40, lidar_bboxes=33, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875158.036107831] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875158.758864689] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=1/3, points=11, rounded=2, unrounded=2, obstacles=39, lidar_bboxes=32, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875159.013461680] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875159.660360513] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=1/3, points=11, rounded=2, unrounded=2, obstacles=39, lidar_bboxes=32, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875160.010092344] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875160.587086822] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=1/3, points=11, rounded=2, unrounded=2, obstacles=36, lidar_bboxes=29, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875161.011920631] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875161.547906487] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=1/3, points=11, rounded=2, unrounded=2, obstacles=34, lidar_bboxes=27, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875162.010497520] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875162.474884195] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=1/3, points=11, rounded=2, unrounded=2, obstacles=34, lidar_bboxes=27, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875163.012990768] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875163.374549676] [tank_team_dynamic_astar_planner_node]: route checkpoint advanced: next=2/3, remaining=1
+[map_astar_planner_node-4] [INFO] [1782875163.551127916] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=12, rounded=2, unrounded=0, obstacles=32, lidar_bboxes=25, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875164.016279238] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875164.447987979] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=13, rounded=2, unrounded=0, obstacles=31, lidar_bboxes=24, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875165.017999963] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875165.346987754] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=13, rounded=2, unrounded=0, obstacles=29, lidar_bboxes=22, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875166.014274369] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875166.241908675] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=14, rounded=2, unrounded=0, obstacles=28, lidar_bboxes=21, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875167.014325859] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875167.152898110] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=12, rounded=2, unrounded=0, obstacles=28, lidar_bboxes=21, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875168.012509957] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875168.045476736] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=14, rounded=2, unrounded=0, obstacles=28, lidar_bboxes=21, discovered_bboxes=7
+[map_astar_planner_node-4] [INFO] [1782875168.946288217] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=13, rounded=2, unrounded=0, obstacles=27, lidar_bboxes=20, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875169.013878345] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875169.845532610] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=14, rounded=2, unrounded=0, obstacles=25, lidar_bboxes=18, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875170.020229280] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875170.745063002] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=13, rounded=2, unrounded=0, obstacles=24, lidar_bboxes=17, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875171.011824877] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875171.646176706] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=14, rounded=2, unrounded=0, obstacles=23, lidar_bboxes=16, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875172.010910208] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875172.549162935] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=14, rounded=2, unrounded=0, obstacles=22, lidar_bboxes=15, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875173.034128466] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875173.503979414] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=14, rounded=2, unrounded=0, obstacles=22, lidar_bboxes=15, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875174.015180072] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875174.436228795] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=14, rounded=2, unrounded=0, obstacles=21, lidar_bboxes=14, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875175.020009595] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875175.344156567] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=14, rounded=2, unrounded=0, obstacles=20, lidar_bboxes=13, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875176.012459090] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875176.248880108] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=14, rounded=2, unrounded=0, obstacles=19, lidar_bboxes=12, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875177.011720907] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875177.147553528] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=14, rounded=2, unrounded=0, obstacles=20, lidar_bboxes=13, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875178.013986925] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875178.057392010] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=14, rounded=2, unrounded=0, obstacles=20, lidar_bboxes=13, discovered_bboxes=7
+[map_astar_planner_node-4] [INFO] [1782875178.947337058] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=9, rounded=1, unrounded=1, obstacles=22, lidar_bboxes=15, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875179.021850919] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875179.841838937] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=9, rounded=1, unrounded=1, obstacles=22, lidar_bboxes=15, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875180.015682544] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875180.751917617] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=9, rounded=1, unrounded=1, obstacles=23, lidar_bboxes=16, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875181.015753317] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875181.645062789] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=9, rounded=1, unrounded=1, obstacles=22, lidar_bboxes=15, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875182.019500426] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875182.537405232] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=10, rounded=1, unrounded=2, obstacles=22, lidar_bboxes=15, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875183.018699903] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875183.437477527] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=18, rounded=2, unrounded=0, obstacles=24, lidar_bboxes=17, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875184.013170784] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875184.335330800] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=19, rounded=2, unrounded=0, obstacles=24, lidar_bboxes=17, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875185.017157852] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875185.265323124] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=19, rounded=2, unrounded=0, obstacles=20, lidar_bboxes=13, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875186.017402983] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875186.156975606] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=18, rounded=2, unrounded=0, obstacles=22, lidar_bboxes=15, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875187.024353737] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875187.035461392] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=18, rounded=2, unrounded=0, obstacles=22, lidar_bboxes=15, discovered_bboxes=7
+[map_astar_planner_node-4] [INFO] [1782875187.942387686] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=12, rounded=1, unrounded=1, obstacles=23, lidar_bboxes=16, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875188.034106707] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875188.850629902] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=12, rounded=1, unrounded=1, obstacles=23, lidar_bboxes=16, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875189.011271664] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875189.733624943] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=direct_astar, points=8, rounded=1, unrounded=1, obstacles=23, lidar_bboxes=16, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875190.016932195] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875190.659366120] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=10, rounded=1, unrounded=0, obstacles=23, lidar_bboxes=16, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875191.016481267] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875191.550630000] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=15, rounded=2, unrounded=0, obstacles=22, lidar_bboxes=15, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875192.020824129] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875192.439240378] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=15, rounded=2, unrounded=0, obstacles=24, lidar_bboxes=17, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875193.013669206] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875193.332117621] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=15, rounded=2, unrounded=0, obstacles=25, lidar_bboxes=18, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875194.019335254] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875194.271806050] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=26, rounded=2, unrounded=1, obstacles=27, lidar_bboxes=20, discovered_bboxes=7
+[local_path_node-5] [INFO] [1782875195.014054473] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875195.140581426] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=26, rounded=2, unrounded=1, obstacles=29, lidar_bboxes=21, discovered_bboxes=8
+[local_path_node-5] [INFO] [1782875196.021739708] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875196.042375213] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=26, rounded=2, unrounded=1, obstacles=29, lidar_bboxes=21, discovered_bboxes=8
+[map_astar_planner_node-4] [INFO] [1782875196.935681845] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=2/3, points=25, rounded=2, unrounded=1, obstacles=29, lidar_bboxes=21, discovered_bboxes=8
+[local_path_node-5] [INFO] [1782875197.019519173] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875197.775493810] [tank_team_dynamic_astar_planner_node]: route checkpoint advanced: next=3/3, remaining=0
+[map_astar_planner_node-4] [INFO] [1782875197.846526013] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=18, rounded=2, unrounded=0, obstacles=28, lidar_bboxes=20, discovered_bboxes=8
+[local_path_node-5] [INFO] [1782875198.032652454] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875198.729599306] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=20, rounded=2, unrounded=0, obstacles=29, lidar_bboxes=20, discovered_bboxes=9
+[local_path_node-5] [INFO] [1782875199.012726786] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875199.632335294] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=11, rounded=1, unrounded=1, obstacles=29, lidar_bboxes=20, discovered_bboxes=9
+[local_path_node-5] [INFO] [1782875200.019775388] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875200.558322164] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=10, rounded=1, unrounded=1, obstacles=30, lidar_bboxes=20, discovered_bboxes=10
+[local_path_node-5] [INFO] [1782875201.041732699] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875201.438417627] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=12, rounded=1, unrounded=2, obstacles=30, lidar_bboxes=19, discovered_bboxes=11
+[local_path_node-5] [INFO] [1782875202.020311994] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875202.333533131] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=direct_astar, points=3, rounded=0, unrounded=1, obstacles=31, lidar_bboxes=19, discovered_bboxes=12
+[local_path_node-5] [INFO] [1782875203.018841169] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875203.230277743] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=12, rounded=1, unrounded=0, obstacles=30, lidar_bboxes=18, discovered_bboxes=12
+[local_path_node-5] [INFO] [1782875204.022434673] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875204.167833201] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=12, rounded=1, unrounded=0, obstacles=29, lidar_bboxes=17, discovered_bboxes=12
+[local_path_node-5] [INFO] [1782875205.020509279] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875205.041023976] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=12, rounded=1, unrounded=0, obstacles=28, lidar_bboxes=16, discovered_bboxes=12
+[map_astar_planner_node-4] [INFO] [1782875205.936928727] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=12, rounded=1, unrounded=0, obstacles=28, lidar_bboxes=16, discovered_bboxes=12
+[local_path_node-5] [INFO] [1782875206.014780540] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875206.877324536] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=12, rounded=1, unrounded=0, obstacles=29, lidar_bboxes=17, discovered_bboxes=12
+[local_path_node-5] [INFO] [1782875207.015916322] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875207.828089199] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=12, rounded=1, unrounded=0, obstacles=25, lidar_bboxes=13, discovered_bboxes=12
+[local_path_node-5] [INFO] [1782875208.017924751] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875208.730962995] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=12, rounded=1, unrounded=0, obstacles=25, lidar_bboxes=13, discovered_bboxes=12
+[local_path_node-5] [INFO] [1782875209.012605157] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875209.655297589] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=12, rounded=1, unrounded=0, obstacles=26, lidar_bboxes=14, discovered_bboxes=12
+[local_path_node-5] [INFO] [1782875210.020559284] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875210.533015281] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=12, rounded=1, unrounded=1, obstacles=26, lidar_bboxes=14, discovered_bboxes=12
+[local_path_node-5] [INFO] [1782875211.018860652] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875211.433047094] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=3, rounded=0, unrounded=1, obstacles=28, lidar_bboxes=16, discovered_bboxes=12
+[local_path_node-5] [INFO] [1782875212.014250137] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875212.330858392] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=2, rounded=0, unrounded=0, obstacles=28, lidar_bboxes=16, discovered_bboxes=12
+[local_path_node-5] [INFO] [1782875213.027986646] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875213.311921169] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=2, rounded=0, unrounded=0, obstacles=29, lidar_bboxes=17, discovered_bboxes=12
+[local_path_node-5] [INFO] [1782875214.011769729] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875214.236631242] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=2, rounded=0, unrounded=0, obstacles=30, lidar_bboxes=18, discovered_bboxes=12
+[local_path_node-5] [INFO] [1782875215.016571125] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[map_astar_planner_node-4] [INFO] [1782875215.146600727] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=emergency_lidar_cluster_path_blocked, mode=route_waypoints:finalmap/B/east:next_checkpoint=3/3, points=2, rounded=0, unrounded=0, obstacles=36, lidar_bboxes=24, discovered_bboxes=12
+[local_path_node-5] [INFO] [1782875216.038742864] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875217.015304214] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[tank_controller_node-6] [INFO] [1782875217.500712383] [tank_team_path_controller_node]: Mission Complete [recon]: Destination Reached. Terminating Control Node.
+[INFO] [tank_controller_node-6]: process has finished cleanly [pid 83677]
+[local_path_node-5] [INFO] [1782875218.012666887] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875219.028917553] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875220.021295631] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875221.016641751] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875222.024216069] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875223.023541037] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875224.023425703] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875225.033734905] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875226.015639711] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875227.026914696] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782875228.028515128] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[WARNING] [launch]: user interrupted with ctrl-c (SIGINT)
+[map_astar_planner_node-4] Traceback (most recent call last):
+[map_astar_planner_node-4]   File "/home/tankcc/tankcc/build/path_planning/path_planning/map_astar_planner_node.py", line 1828, in main
+[map_astar_planner_node-4]     rclpy.spin(node)
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[map_astar_planner_node-4]     executor.spin_once()
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+[map_astar_planner_node-4]     self._spin_once_impl(timeout_sec)
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 797, in _spin_once_impl
+[map_astar_planner_node-4]     handler, entity, node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 780, in wait_for_ready_callbacks
+[map_astar_planner_node-4]     return next(self._cb_iter)
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 677, in _wait_for_ready_callbacks
+[map_astar_planner_node-4]     wait_set.wait(timeout_nsec)
+[map_astar_planner_node-4] KeyboardInterrupt
+[map_astar_planner_node-4] 
+[map_astar_planner_node-4] During handling of the above exception, another exception occurred:
+[map_astar_planner_node-4] 
+[map_astar_planner_node-4] Traceback (most recent call last):
+[map_astar_planner_node-4]   File "/home/tankcc/tankcc/install/path_planning/lib/path_planning/map_astar_planner_node", line 33, in <module>
+[map_astar_planner_node-4]     sys.exit(load_entry_point('path-planning', 'console_scripts', 'map_astar_planner_node')())
+[map_astar_planner_node-4]   File "/home/tankcc/tankcc/build/path_planning/path_planning/map_astar_planner_node.py", line 1831, in main
+[map_astar_planner_node-4]     rclpy.shutdown()
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 130, in shutdown
+[map_astar_planner_node-4]     _shutdown(context=context)
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/utilities.py", line 58, in shutdown
+[local_path_node-5] Traceback (most recent call last):
+[local_path_node-5]   File "/home/tankcc/tankcc/build/path_planning/path_planning/local_path_node.py", line 2486, in main
+[map_astar_planner_node-4]     return context.shutdown()
+[map_astar_planner_node-4]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/context.py", line 102, in shutdown
+[map_astar_planner_node-4]     self.__context.shutdown()
+[map_astar_planner_node-4] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:241
+[local_path_node-5]     rclpy.spin(node)
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[local_path_node-5]     executor.spin_once()
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+[local_path_node-5]     self._spin_once_impl(timeout_sec)
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 797, in _spin_once_impl
+[local_path_node-5]     handler, entity, node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 780, in wait_for_ready_callbacks
+[local_path_node-5]     return next(self._cb_iter)
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 677, in _wait_for_ready_callbacks
+[local_path_node-5]     wait_set.wait(timeout_nsec)
+[local_path_node-5] KeyboardInterrupt
+[local_path_node-5] 
+[local_path_node-5] During handling of the above exception, another exception occurred:
+[local_path_node-5] 
+[local_path_node-5] Traceback (most recent call last):
+[local_path_node-5]   File "/home/tankcc/tankcc/install/path_planning/lib/path_planning/local_path_node", line 33, in <module>
+[local_path_node-5]     sys.exit(load_entry_point('path-planning', 'console_scripts', 'local_path_node')())
+[local_path_node-5]   File "/home/tankcc/tankcc/build/path_planning/path_planning/local_path_node.py", line 2489, in main
+[local_path_node-5]     rclpy.shutdown()
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 130, in shutdown
+[local_path_node-5]     _shutdown(context=context)
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/utilities.py", line 58, in shutdown
+[local_path_node-5]     return context.shutdown()
+[local_path_node-5]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/context.py", line 102, in shutdown
+[local_path_node-5]     self.__context.shutdown()
+[local_path_node-5] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:241
+[lidar_processor_node-1] Traceback (most recent call last):
+[lidar_processor_node-1]   File "/home/tankcc/tankcc/build/lidar/lidar/lidar_processor_node.py", line 223, in main
+[lidar_processor_node-1]     rclpy.spin(node)
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[lidar_processor_node-1]     executor.spin_once()
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+[lidar_processor_node-1]     self._spin_once_impl(timeout_sec)
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 797, in _spin_once_impl
+[lidar_processor_node-1]     handler, entity, node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 780, in wait_for_ready_callbacks
+[lidar_processor_node-1]     return next(self._cb_iter)
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 677, in _wait_for_ready_callbacks
+[lidar_processor_node-1]     wait_set.wait(timeout_nsec)
+[lidar_processor_node-1] KeyboardInterrupt
+[lidar_processor_node-1] 
+[lidar_processor_node-1] During handling of the above exception, another exception occurred:
+[lidar_processor_node-1] 
+[lidar_processor_node-1] Traceback (most recent call last):
+[lidar_processor_node-1]   File "/home/tankcc/tankcc/install/lidar/lib/lidar/lidar_processor_node", line 33, in <module>
+[lidar_processor_node-1]     sys.exit(load_entry_point('lidar', 'console_scripts', 'lidar_processor_node')())
+[lidar_processor_node-1]   File "/home/tankcc/tankcc/build/lidar/lidar/lidar_processor_node.py", line 226, in main
+[lidar_processor_node-1]     rclpy.shutdown()
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 130, in shutdown
+[lidar_processor_node-1]     _shutdown(context=context)
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/utilities.py", line 58, in shutdown
+[lidar_processor_node-1]     return context.shutdown()
+[lidar_processor_node-1]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/context.py", line 102, in shutdown
+[lidar_processor_node-1]     self.__context.shutdown()
+[lidar_processor_node-1] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:241
+[lidar_dbscan_cluster_node-3] Traceback (most recent call last):
+[lidar_dbscan_cluster_node-3]   File "/home/tankcc/tankcc/build/tank_visual_perception/tank_visual_perception/lidar_dbscan_cluster_node.py", line 334, in main
+[lidar_dbscan_cluster_node-3]     rclpy.spin(node)
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[lidar_dbscan_cluster_node-3]     executor.spin_once()
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+[lidar_dbscan_cluster_node-3]     self._spin_once_impl(timeout_sec)
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 797, in _spin_once_impl
+[lidar_dbscan_cluster_node-3]     handler, entity, node = self.wait_for_ready_callbacks(timeout_sec=timeout_sec)
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 780, in wait_for_ready_callbacks
+[lidar_dbscan_cluster_node-3]     return next(self._cb_iter)
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 677, in _wait_for_ready_callbacks
+[lidar_dbscan_cluster_node-3]     wait_set.wait(timeout_nsec)
+[lidar_dbscan_cluster_node-3] KeyboardInterrupt
+[lidar_dbscan_cluster_node-3] 
+[lidar_dbscan_cluster_node-3] During handling of the above exception, another exception occurred:
+[lidar_dbscan_cluster_node-3] 
+[lidar_dbscan_cluster_node-3] Traceback (most recent call last):
+[lidar_dbscan_cluster_node-3]   File "/home/tankcc/tankcc/install/tank_visual_perception/lib/tank_visual_perception/lidar_dbscan_cluster_node", line 33, in <module>
+[lidar_dbscan_cluster_node-3]     sys.exit(load_entry_point('tank-visual-perception', 'console_scripts', 'lidar_dbscan_cluster_node')())
+[lidar_dbscan_cluster_node-3]   File "/home/tankcc/tankcc/build/tank_visual_perception/tank_visual_perception/lidar_dbscan_cluster_node.py", line 337, in main
+[lidar_dbscan_cluster_node-3]     rclpy.shutdown()
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 130, in shutdown
+[lidar_dbscan_cluster_node-3]     _shutdown(context=context)
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/utilities.py", line 58, in shutdown
+[lidar_dbscan_cluster_node-3]     return context.shutdown()
+[lidar_dbscan_cluster_node-3]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/context.py", line 102, in shutdown
+[lidar_dbscan_cluster_node-3]     self.__context.shutdown()
+[lidar_dbscan_cluster_node-3] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:241
+[lidar_camera_overlay_node-2] Traceback (most recent call last):
+[lidar_camera_overlay_node-2]   File "/home/tankcc/tankcc/build/tank_visual_perception/tank_visual_perception/lidar_camera_overlay_node.py", line 322, in main
+[lidar_camera_overlay_node-2]     rclpy.spin(node)
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[lidar_camera_overlay_node-2]     executor.spin_once()
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+[lidar_camera_overlay_node-2]     self._spin_once_impl(timeout_sec)
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 803, in _spin_once_impl
+[lidar_camera_overlay_node-2]     handler()
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/task.py", line 256, in __call__
+[lidar_camera_overlay_node-2]     self._execute_coroutine_step(self._handler)
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/task.py", line 272, in _execute_coroutine_step
+[lidar_camera_overlay_node-2]     result = coro.send(None)
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 488, in handler
+[lidar_camera_overlay_node-2]     await call_coroutine(entity, arg)
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 407, in _execute_subscription
+[lidar_camera_overlay_node-2]     await await_or_execute(sub.callback, msg)
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 110, in await_or_execute
+[lidar_camera_overlay_node-2]     return callback(*args)
+[lidar_camera_overlay_node-2]   File "/home/tankcc/tankcc/build/tank_visual_perception/tank_visual_perception/lidar_camera_overlay_node.py", line 233, in on_image
+[lidar_camera_overlay_node-2]     self.publish_overlay(overlay, msg.header.stamp, msg.header.frame_id or "tank_camera")
+[lidar_camera_overlay_node-2]   File "/home/tankcc/tankcc/build/tank_visual_perception/tank_visual_perception/lidar_camera_overlay_node.py", line 295, in publish_overlay
+[lidar_camera_overlay_node-2]     self.pub_overlay_image.publish(cv2_to_image_msg(image_bgr, stamp, frame_id))
+[lidar_camera_overlay_node-2]   File "/home/tankcc/tankcc/build/tank_visual_perception/tank_visual_perception/lidar_camera_overlay_node.py", line 69, in cv2_to_image_msg
+[lidar_camera_overlay_node-2]     msg.data = image_bgr.tobytes()
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_image.py", line 267, in data
+[lidar_camera_overlay_node-2]     all(isinstance(v, int) for v in value) and
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/sensor_msgs/msg/_image.py", line 267, in <genexpr>
+[lidar_camera_overlay_node-2]     all(isinstance(v, int) for v in value) and
+[lidar_camera_overlay_node-2] KeyboardInterrupt
+[lidar_camera_overlay_node-2] 
+[lidar_camera_overlay_node-2] During handling of the above exception, another exception occurred:
+[lidar_camera_overlay_node-2] 
+[lidar_camera_overlay_node-2] Traceback (most recent call last):
+[lidar_camera_overlay_node-2]   File "/home/tankcc/tankcc/install/tank_visual_perception/lib/tank_visual_perception/lidar_camera_overlay_node", line 33, in <module>
+[lidar_camera_overlay_node-2]     sys.exit(load_entry_point('tank-visual-perception', 'console_scripts', 'lidar_camera_overlay_node')())
+[lidar_camera_overlay_node-2]   File "/home/tankcc/tankcc/build/tank_visual_perception/tank_visual_perception/lidar_camera_overlay_node.py", line 325, in main
+[lidar_camera_overlay_node-2]     rclpy.shutdown()
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 130, in shutdown
+[lidar_camera_overlay_node-2]     _shutdown(context=context)
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/utilities.py", line 58, in shutdown
+[lidar_camera_overlay_node-2]     return context.shutdown()
+[lidar_camera_overlay_node-2]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/context.py", line 102, in shutdown
+[lidar_camera_overlay_node-2]     self.__context.shutdown()
+[lidar_camera_overlay_node-2] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:241
+[ERROR] [local_path_node-5]: process has died [pid 83675, exit code 1, cmd '/home/tankcc/tankcc/install/path_planning/lib/path_planning/local_path_node --ros-args -r __node:=tank_local_path_node --params-file /tmp/launch_params_cxf_trn6'].
+[ERROR] [lidar_camera_overlay_node-2]: process has died [pid 83669, exit code 1, cmd '/home/tankcc/tankcc/install/tank_visual_perception/lib/tank_visual_perception/lidar_camera_overlay_node --ros-args -r __node:=lidar_camera_overlay_node --params-file /tmp/launch_params_682_kzol'].
+[ERROR] [map_astar_planner_node-4]: process has died [pid 83673, exit code 1, cmd '/home/tankcc/tankcc/install/path_planning/lib/path_planning/map_astar_planner_node --ros-args -r __node:=tank_team_dynamic_astar_planner_node --params-file /tmp/launch_params_p8esn9r5'].
+[ERROR] [lidar_processor_node-1]: process has died [pid 83667, exit code 1, cmd '/home/tankcc/tankcc/install/lidar/lib/lidar/lidar_processor_node --ros-args -r __node:=tank_lidar_processor_node --params-file /tmp/launch_params_s5up6sst'].
+[ERROR] [lidar_dbscan_cluster_node-3]: process has died [pid 83671, exit code 1, cmd '/home/tankcc/tankcc/install/tank_visual_perception/lib/tank_visual_perception/lidar_dbscan_cluster_node --ros-args -r __node:=lidar_dbscan_cluster_node --params-file /tmp/launch_params_66614voi'].
+[완료] LLM 입력 JSON 생성: recon_reports/route_comparison.json
+recon_reports 경로: /home/tankcc/tankcc/recon_reports
+[확인] 브릿지 auto 모드 OK
+[확인] 브릿지 episode_control ON — 자동 리셋 사용 가능
+기존 자율 스택(orphan) 노드 정리 중...
+  [Route A] 지형 녹화 reset(clear+재개)
+
+=== [Route A] 자율주행 시작 (side=west) ===
+  [Route A] 주행 중... 목적지까지 251.5m (현재 60.0, 30.0)
+  [Route A] 주행 중... 목적지까지 229.6m (현재 58.1, 52.9)
+  [Route A] 주행 중... 목적지까지 205.3m (현재 55.8, 78.5)
+  [Route A] 주행 중... 목적지까지 181.5m (현재 47.6, 106.1)
+  [Route A] 주행 중... 목적지까지 149.0m (현재 50.4, 139.9)
+  [Route A] 주행 중... 목적지까지 115.9m (현재 49.1, 177.8)
+  [Route A] 주행 중... 목적지까지 71.9m (현재 49.7, 237.2)
+  [Route A] 주행 중... 목적지까지 53.6m (현재 57.0, 268.1)
+  [Route A] 도착감지=True (route_json)
+  [Route A] 발견객체·지형 저장 트리거...
+  [Route A] 지형 finalize 직접 호출 (/tank/terrain/finalize_map)...
+  [Route A] 발견맵 → /home/tankcc/tankcc/recon_reports/recon_map/discovered_objects_route_A.map
+  [Route A] 지형 → /home/tankcc/tankcc/recon_reports/terrain_maps/terrain_map_route_A.npz
+=== [Route A] 도착 완료 → /home/tankcc/tankcc/recon_reports/route_A.json ===
+
+★ 시뮬레이터 자동 리셋 전송 → 전차를 출발지(START)로 되돌립니다.
+   (자동 리셋이 안 먹으면: 브릿지를 TANK_EPISODE_CONTROL=true로 띄웠는지 확인,
+    또는 시뮬을 수동 RESTART 하세요 — 출발지 복귀는 자동 감지됩니다. Ctrl+C로 중단)
+출발지 복귀 감지 — 다음 루트 진행
+  [Route B] 지형 녹화 reset(clear+재개)
+
+=== [Route B] 자율주행 시작 (side=east) ===
+  [Route B] 주행 중... 목적지까지 251.5m (현재 60.0, 30.0)
+  [Route B] 주행 중... 목적지까지 238.8m (현재 74.4, 40.4)
+  [Route B] 주행 중... 목적지까지 225.2m (현재 100.8, 51.5)
+  [Route B] 주행 중... 목적지까지 224.4m (현재 150.2, 55.8)
+  [Route B] 주행 중... 목적지까지 216.4m (현재 173.4, 69.6)
+  [Route B] 주행 중... 목적지까지 181.1m (현재 199.0, 118.8)
+  [Route B] 주행 중... 목적지까지 145.3m (현재 192.4, 156.8)
+  [Route B] 주행 중... 목적지까지 125.5m (현재 174.0, 168.5)
+  [Route B] 주행 중... 목적지까지 104.7m (현재 170.1, 190.7)
+  [Route B] 주행 중... 목적지까지 56.5m (현재 146.0, 233.0)
+  [Route B] 주행 중... 목적지까지 38.6m (현재 130.1, 243.5)
+  [Route B] 주행 중... 목적지까지 28.2m (현재 131.7, 258.4)
+  [Route B] 도착감지=True (route_json)
+  [Route B] 발견객체·지형 저장 트리거...
+  [Route B] 지형 finalize 직접 호출 (/tank/terrain/finalize_map)...
+  [Route B] 발견맵 → /home/tankcc/tankcc/recon_reports/recon_map/discovered_objects_route_B.map
+  [Route B] 지형 → /home/tankcc/tankcc/recon_reports/terrain_maps/terrain_map_route_B.npz
+=== [Route B] 도착 완료 → /home/tankcc/tankcc/recon_reports/route_B.json ===
+
+========================================================
+✅ 정찰 시퀀스 완료 (A·B) — 시뮬레이터는 수동 종료하셔도 됩니다.
+========================================================
+  리포트: /home/tankcc/tankcc/recon_reports/route_A.json
+         /home/tankcc/tankcc/recon_reports/route_B.json
+         /home/tankcc/tankcc/recon_reports/comparison.json
+
+--- 정찰 비교 (A vs B) ---
+  Route A: reached=True, distance=552.52m, sim_time=85.5s, collisions=0, obstacles=981
+  Route B: reached=True, distance=733.59m, sim_time=116.62s, collisions=0, obstacles=1735
+
+--- LLM 전술 분석 자동 실행 ---
+  🧠 ollama 추론 중... (qwen3:0.6b ~15-30초 · 끊지 말고 기다리세요)
+[INFO] [1782875232.126054819] [route_risk_node]: route_risk_node started
+[INFO] [1782875232.126469048] [route_risk_node]: mode=file_once
+[INFO] [1782875232.126736529] [route_risk_node]: input_path=recon_reports/route_comparison.json
+[INFO] [1782875232.126985615] [route_risk_node]: output_path=recon_reports/route_risk_result.json
+[INFO] [1782875233.132245750] [route_risk_node]: risk result saved: recon_reports/route_risk_result.json
+[완료] 루트 분석 TXT 보고서 작성: /home/tankcc/tankcc/recon_reports/route_analysis_report.txt
+  ✅ LLM 결과: /home/tankcc/tankcc/recon_reports/route_risk_result.json (+ MFD AI LOG 표시)
+  📝 TXT 보고서: /home/tankcc/tankcc/recon_reports/route_analysis_report.txt
+terminate called without an active exception

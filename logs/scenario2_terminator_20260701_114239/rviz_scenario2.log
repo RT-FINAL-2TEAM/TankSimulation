@@ -1,0 +1,25 @@
+[INFO] [launch]: All log files can be found below /home/tankcc/.ros/log/2026-07-01-11-42-40-205494-tankcc-OMEN-by-HP-Gaming-Laptop-16-k0xxx-63164
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [static_map_loader_node-1]: process started with pid [63175]
+[INFO] [rviz_visualizer_node-2]: process started with pid [63177]
+[INFO] [terrain_record_finalize_node-3]: process started with pid [63179]
+[INFO] [rviz2-4]: process started with pid [63181]
+[rviz2-4] Warning: Ignoring XDG_SESSION_TYPE=wayland on Gnome. Use QT_QPA_PLATFORM=wayland to run on Wayland anyway.
+[rviz2-4] [INFO] [1782873760.606556367] [rviz2]: Stereo is NOT SUPPORTED
+[rviz2-4] [INFO] [1782873760.606647134] [rviz2]: OpenGl version: 4.6 (GLSL 4.6)
+[rviz2-4] [INFO] [1782873760.629878496] [rviz2]: Stereo is NOT SUPPORTED
+[terrain_record_finalize_node-3] [WARN] [1782873760.677536154] [terrain_saved_map_visualizer_node]: 저장된 terrain map 파일이 없습니다: /home/tankcc/tankcc/recon_reports/recon_map/scenario2_terrain.npz
+[terrain_record_finalize_node-3] [INFO] [1782873760.677998281] [terrain_saved_map_visualizer_node]: terrain_record_finalize_node started. Recording preclassified terrain=/tank/sensor/lidar/terrain_points_map, obstacle=/tank/sensor/lidar/detected_points_map. Mode=recording disabled, save_file=/home/tankcc/tankcc/recon_reports/recon_map/scenario2_terrain.npz. Call /tank/terrain/finalize_map when driving is finished.
+[rviz_visualizer_node-2] [INFO] [1782873760.686121321] [tank_rviz_visualizer_node]: tank_rviz_visualizer_node started
+[static_map_loader_node-1] Traceback (most recent call last):
+[static_map_loader_node-1]   File "/home/tankcc/tankcc/install/rviz_visualization/lib/rviz_visualization/static_map_loader_node", line 33, in <module>
+[static_map_loader_node-1]     sys.exit(load_entry_point('rviz-visualization', 'console_scripts', 'static_map_loader_node')())
+[static_map_loader_node-1]   File "/home/tankcc/tankcc/build/rviz_visualization/rviz_visualization/static_map_loader_node.py", line 748, in main
+[static_map_loader_node-1]     node = StaticMapLoaderNode()
+[static_map_loader_node-1]   File "/home/tankcc/tankcc/build/rviz_visualization/rviz_visualization/static_map_loader_node.py", line 140, in __init__
+[static_map_loader_node-1]     self.recon_data = self._read_json(self.recon_map_file)
+[static_map_loader_node-1]   File "/home/tankcc/tankcc/build/rviz_visualization/rviz_visualization/static_map_loader_node.py", line 194, in _read_json
+[static_map_loader_node-1]     raise FileNotFoundError(f"Map file not found: {path}")
+[static_map_loader_node-1] FileNotFoundError: Map file not found: /home/tankcc/tankcc/recon_reports/recon_map/scenario2_map.map
+[rviz2-4] [INFO] [1782873760.751312795] [rviz2]: Stereo is NOT SUPPORTED
+[ERROR] [static_map_loader_node-1]: process has died [pid 63175, exit code 1, cmd '/home/tankcc/tankcc/install/rviz_visualization/lib/rviz_visualization/static_map_loader_node --ros-args -r __node:=tank_static_map_loader_node --params-file /tmp/launch_params_e0krlur2'].

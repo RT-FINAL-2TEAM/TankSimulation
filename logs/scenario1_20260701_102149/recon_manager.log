@@ -1,0 +1,29 @@
+[INFO] [launch]: All log files can be found below /home/tankcc/.ros/log/2026-07-01-10-21-55-216575-tankcc-OMEN-by-HP-Gaming-Laptop-16-k0xxx-7432
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [lidar_processor_node-1]: process started with pid [7433]
+[INFO] [lidar_camera_overlay_node-2]: process started with pid [7435]
+[INFO] [lidar_dbscan_cluster_node-3]: process started with pid [7437]
+[INFO] [map_astar_planner_node-4]: process started with pid [7439]
+[INFO] [local_path_node-5]: process started with pid [7441]
+[INFO] [tank_controller_node-6]: process started with pid [7443]
+[tank_controller_node-6] [INFO] [1782868915.761225880] [tank_team_path_controller_node]: Team path controller initialized: max_speed=13.60, max_yaw_rate=40.00, local_target=False
+[lidar_camera_overlay_node-2] [INFO] [1782868915.793870829] [lidar_camera_overlay_node]: LiDAR-camera overlay node started
+[lidar_camera_overlay_node-2] [INFO] [1782868915.794337443] [lidar_camera_overlay_node]: subscribe image: /tank/camera/image_compressed
+[lidar_camera_overlay_node-2] [INFO] [1782868915.794708836] [lidar_camera_overlay_node]: subscribe info : /tank/api/info/compact
+[lidar_camera_overlay_node-2] [INFO] [1782868915.795068402] [lidar_camera_overlay_node]: subscribe lidar: /tank/sensor/lidar/detected_points_map
+[lidar_camera_overlay_node-2] [INFO] [1782868915.795477532] [lidar_camera_overlay_node]: publish image  : /tank/camera/lidar_projection/image
+[lidar_camera_overlay_node-2] [INFO] [1782868915.795939338] [lidar_camera_overlay_node]: projection config: /home/tankcc/tankcc/install/path_planning/share/path_planning/config/fusion_mapping.yaml
+[lidar_camera_overlay_node-2] [INFO] [1782868915.796478354] [lidar_camera_overlay_node]: effective projection params: {'tx': 0.28, 'ty': 0.02, 'tz': 11.8, 'yaw_offset': 1.1, 'pitch_offset': 1.5, 'roll_offset': -0.3, 'hfov': 86.0, 'vfov': 60.2, 'body_pitch_gain': 1.0, 'body_roll_gain': 1.0}
+[local_path_node-5] [INFO] [1782868915.851389409] [tank_local_path_node]: local_path_node started (PC2 Optimized Version)
+[local_path_node-5] [INFO] [1782868915.853669197] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[lidar_processor_node-1] [INFO] [1782868916.132936777] [tank_lidar_processor_node]: LiDAR processor started: sub=/tank/api/info/raw, pub=/tank/sensor/lidar/detected_points_map obstacle-only, pub=/tank/sensor/lidar/terrain_points_map terrain-only, pub=/tank/sensor/lidar/all_detected_points_map all hits, legacy_json=False, ground_filter=True, grid=0.5, climb_limit=0.4
+[map_astar_planner_node-4] [INFO] [1782868916.148314200] [tank_team_dynamic_astar_planner_node]: static map obstacles loaded: 301 from /home/tankcc/tankcc/install/rviz_visualization/share/rviz_visualization/map/finalmap.map
+[map_astar_planner_node-4] [INFO] [1782868916.157501158] [tank_team_dynamic_astar_planner_node]: Team Dynamic A* planner initialized: use_gt_obstacles=False, dynamic_replan=True, goal=(110.0, 276.5), resolution=1.0, inflate=4.5, route_waypoints=True:finalmap/A, cluster_bboxes=True, cluster_memory=True, static_inflate=2.0, discovered_astar=True, route_lock=6.0s, route_index_never_decrease=True, lidar_memory_block_trigger=False
+[local_path_node-5] [INFO] [1782868916.588381671] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[lidar_dbscan_cluster_node-3] [INFO] [1782868916.607630223] [lidar_dbscan_cluster_node]: lidar_dbscan_cluster_node started: input=/tank/sensor/lidar/detected_points_map(PC2), eps=1.5, min_samples=2, min_cluster_size=2, cluster_point_sample_limit=64
+[local_path_node-5] [INFO] [1782868917.594048277] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782868918.588466406] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782868919.592208104] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782868920.592721819] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782868921.591858142] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-5] [INFO] [1782868922.590836503] [tank_local_path_node]: Loaded recon static obstacles for matching: 301

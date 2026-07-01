@@ -1,0 +1,49 @@
+[global_config]
+[keybindings]
+[profiles]
+  [[default]]
+    scrollback_infinite = True
+[layouts]
+  [[scenario2_auto]]
+    [[[window0]]]
+      type = Window
+      parent = ""
+      order = 0
+      maximised = True
+      title = Tank Scenario 2 Auto
+    [[[hpaned0]]]
+      type = HPaned
+      parent = window0
+      order = 0
+      position = 960
+    [[[vpaned_left]]]
+      type = VPaned
+      parent = hpaned0
+      order = 0
+      position = 520
+    [[[terminal_bridge]]]
+      type = Terminal
+      parent = vpaned_left
+      order = 0
+      command = bash -lc '/home/tankcc/tankcc/scripts/.terminator_runtime/s2_bridge_pane.sh'
+    [[[terminal_manager]]]
+      type = Terminal
+      parent = vpaned_left
+      order = 1
+      command = bash -lc '/home/tankcc/tankcc/scripts/.terminator_runtime/s2_manager_pane.sh'
+    [[[vpaned_right]]]
+      type = VPaned
+      parent = hpaned0
+      order = 1
+      position = 520
+    [[[terminal_rviz]]]
+      type = Terminal
+      parent = vpaned_right
+      order = 0
+      command = bash -lc '/home/tankcc/tankcc/scripts/.terminator_runtime/s2_rviz_pane.sh'
+    [[[terminal_debug]]]
+      type = Terminal
+      parent = vpaned_right
+      order = 1
+      command = bash -lc '/home/tankcc/tankcc/scripts/.terminator_runtime/s2_debug_pane.sh'
+[plugins]

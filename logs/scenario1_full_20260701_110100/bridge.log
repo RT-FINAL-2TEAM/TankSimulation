@@ -1,0 +1,16 @@
+[INFO] [1782871263.762467972] [tank_ros_bridge_node]: Tank Challenge ROS2 final bridge initialized
+[INFO] [1782871263.762832317] [tank_ros_bridge_node]: TANK_MODE=auto, COMMAND_TTL_SEC=5.0, AUTO_FALLBACK=stop
+[INFO] [1782871263.763118001] [tank_ros_bridge_node]: ROS2 command input: /tank/control/command
+============================================================
+Tank Challenge Flask Endpoint + ROS2 Bridge
+Mode: auto
+Listening: http://0.0.0.0:5000
+ROS2 command input: /tank/control/command
+Coordinate: raw=(x,y,z), map=(x,z,y)
+============================================================
+ * Serving Flask app 'ros_bridge.app_routes'
+ * Debug mode: off
+Address already in use
+Port 5000 is in use by another program. Either identify and stop that program, or start the server with a different port.
+terminate called without an active exception
+[ros2run]: Aborted

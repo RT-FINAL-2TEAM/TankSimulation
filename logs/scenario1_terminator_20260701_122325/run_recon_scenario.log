@@ -1,0 +1,115 @@
+[INFO] [launch]: All log files can be found below /home/tankcc/.ros/log/2026-07-01-12-23-44-408881-tankcc-OMEN-by-HP-Gaming-Laptop-16-k0xxx-107953
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [rosbridge_websocket-1]: process started with pid [107957]
+[INFO] [lidar_processor_node-2]: process started with pid [107959]
+[INFO] [lidar_camera_overlay_node-3]: process started with pid [107961]
+[INFO] [lidar_dbscan_cluster_node-4]: process started with pid [107963]
+[INFO] [map_astar_planner_node-5]: process started with pid [107965]
+[INFO] [local_path_node-6]: process started with pid [107967]
+[INFO] [tank_controller_node-7]: process started with pid [107969]
+[local_path_node-6] [INFO] [1782876225.098789426] [tank_local_path_node]: local_path_node started (PC2 Optimized Version)
+[lidar_camera_overlay_node-3] [INFO] [1782876225.365134275] [lidar_camera_overlay_node]: LiDAR-camera overlay node started
+[lidar_camera_overlay_node-3] [INFO] [1782876225.365813222] [lidar_camera_overlay_node]: subscribe image: /tank/camera/image_compressed
+[lidar_camera_overlay_node-3] [INFO] [1782876225.366440100] [lidar_camera_overlay_node]: subscribe info : /tank/api/info/compact
+[lidar_camera_overlay_node-3] [INFO] [1782876225.367232860] [lidar_camera_overlay_node]: subscribe lidar: /tank/sensor/lidar/detected_points_map
+[lidar_camera_overlay_node-3] [INFO] [1782876225.367973320] [lidar_camera_overlay_node]: publish image  : /tank/camera/lidar_projection/image
+[lidar_camera_overlay_node-3] [INFO] [1782876225.368934637] [lidar_camera_overlay_node]: projection config: /home/tankcc/tankcc/install/path_planning/share/path_planning/config/fusion_mapping.yaml
+[lidar_camera_overlay_node-3] [INFO] [1782876225.369679796] [lidar_camera_overlay_node]: effective projection params: {'tx': 0.28, 'ty': 0.02, 'tz': 11.8, 'yaw_offset': 1.1, 'pitch_offset': 1.5, 'roll_offset': -0.3, 'hfov': 86.0, 'vfov': 60.2, 'body_pitch_gain': 1.0, 'body_roll_gain': 1.0}
+[tank_controller_node-7] [INFO] [1782876225.377001803] [tank_team_path_controller_node]: Team path controller initialized: max_speed=13.60, max_yaw_rate=40.00, local_target=False, dynamic_speed_policy=True
+[local_path_node-6] [INFO] [1782876225.420634402] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[rosbridge_websocket-1] [WARN] [1782876225.427056541] [rosbridge_websocket]: The 'default_call_service_timeout' parameter is currently set to 0.0, which means service calls will block indefinitely if no response is received. Please note that in the Jazzy and later releases, the default value for this parameter will be updated to 5.0 seconds.
+[rosbridge_websocket-1] [WARN] [1782876225.427512234] [rosbridge_websocket]: The 'call_services_in_new_thread' parameter is currently set to False, which means service calls will block the main thread. Please note that in the Jazzy and later releases, the default value for this parameter will be updated to True.
+[rosbridge_websocket-1] [WARN] [1782876225.427834684] [rosbridge_websocket]: The 'send_action_goals_in_new_thread' parameter is currently set to False, which means sending action goals will block the main thread. Please note that in the Jazzy and later releases, the default value for this parameter will be updated to True.
+[rosbridge_websocket-1] [INFO] [1782876225.430987869] [rosbridge_websocket]: Rosbridge WebSocket server started on port 9090
+[lidar_processor_node-2] [INFO] [1782876225.443666119] [tank_lidar_processor_node]: LiDAR processor started: sub=/tank/api/info/raw, pub=/tank/sensor/lidar/detected_points_map obstacle-only, pub=/tank/sensor/lidar/terrain_points_map terrain-only, pub=/tank/sensor/lidar/all_detected_points_map all hits, legacy_json=False, ground_filter=True, grid=0.5, climb_limit=0.4
+[map_astar_planner_node-5] [INFO] [1782876225.459018366] [tank_team_dynamic_astar_planner_node]: static map obstacles loaded: 301 from /home/tankcc/tankcc/install/rviz_visualization/share/rviz_visualization/map/finalmap.map
+[map_astar_planner_node-5] [INFO] [1782876225.471540201] [tank_team_dynamic_astar_planner_node]: Team Dynamic A* planner initialized: use_gt_obstacles=False, dynamic_replan=True, goal=(110.0, 276.5), resolution=1.0, inflate=4.5, route_waypoints=True:finalmap/A, cluster_bboxes=True, cluster_memory=True, static_inflate=2.0, discovered_astar=True, route_lock=6.0s, route_index_never_decrease=True, lidar_memory_block_trigger=False, speed_inflation=True, speed_emergency=True, semantic_risk=True, theta_astar=True
+[lidar_dbscan_cluster_node-4] [INFO] [1782876225.506053280] [lidar_dbscan_cluster_node]: lidar_dbscan_cluster_node started: input=/tank/sensor/lidar/detected_points_map(PC2), eps=1.5, min_samples=2, min_cluster_size=2, cluster_point_sample_limit=64
+[local_path_node-6] [INFO] [1782876226.064860276] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[tank_controller_node-7] Traceback (most recent call last):
+[tank_controller_node-7]   File "/home/tankcc/tankcc/install/control/lib/control/tank_controller_node", line 33, in <module>
+[tank_controller_node-7]     sys.exit(load_entry_point('control', 'console_scripts', 'tank_controller_node')())
+[tank_controller_node-7]   File "/home/tankcc/tankcc/build/control/control/tank_controller_node.py", line 1984, in main
+[tank_controller_node-7]     rclpy.spin(node)
+[tank_controller_node-7]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/__init__.py", line 229, in spin
+[tank_controller_node-7]     executor.spin_once()
+[tank_controller_node-7]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 808, in spin_once
+[tank_controller_node-7]     self._spin_once_impl(timeout_sec)
+[tank_controller_node-7]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 805, in _spin_once_impl
+[tank_controller_node-7]     raise handler.exception()
+[tank_controller_node-7]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/task.py", line 272, in _execute_coroutine_step
+[tank_controller_node-7]     result = coro.send(None)
+[tank_controller_node-7]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 488, in handler
+[tank_controller_node-7]     await call_coroutine(entity, arg)
+[tank_controller_node-7]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 396, in _execute_timer
+[tank_controller_node-7]     await await_or_execute(tmr.callback)
+[tank_controller_node-7]   File "/opt/ros/humble/local/lib/python3.10/dist-packages/rclpy/executors.py", line 110, in await_or_execute
+[tank_controller_node-7]     return callback(*args)
+[tank_controller_node-7]   File "/home/tankcc/tankcc/build/control/control/tank_controller_node.py", line 1777, in timer_cb
+[tank_controller_node-7]     cmd_ws, w_ws, speed_mode = self.calculate_speed(target, yaw_error)
+[tank_controller_node-7]   File "/home/tankcc/tankcc/build/control/control/tank_controller_node.py", line 1469, in calculate_speed
+[tank_controller_node-7]     if self.enable_stopping_distance_model and distance_to_goal is not None:
+[tank_controller_node-7] NameError: name 'distance_to_goal' is not defined
+[ERROR] [tank_controller_node-7]: process has died [pid 107969, exit code 1, cmd '/home/tankcc/tankcc/install/control/lib/control/tank_controller_node --ros-args -r __node:=tank_team_path_controller_node --params-file /tmp/launch_params_82eif_r8'].
+[map_astar_planner_node-5] [INFO] [1782876226.628940031] [tank_team_dynamic_astar_planner_node]: A* path updated: reason=initial, mode=route_waypoints:finalmap/A/west:next_checkpoint=0/2, points=312, rounded=9, unrounded=292, obstacles=0, lidar_bboxes=0, discovered_bboxes=0, dyn_inflate=4.50, stop_d=3.01, semantic_risk=True, theta_w=0.25, min_radius=13.12
+[local_path_node-6] [INFO] [1782876227.090947895] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876228.068055547] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876229.065212582] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876230.066935159] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876231.064654739] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876232.067047520] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876233.069526400] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876234.067168644] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876235.066723613] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876236.069786263] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876237.068928092] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876238.065570259] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876239.069905300] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876240.068956736] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876241.068719715] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876242.066735425] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876243.062395553] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876244.070284391] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876245.068464122] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876246.068431836] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876247.064187925] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876248.070089805] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876249.074321684] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876250.064946192] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876251.068519203] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876252.078391731] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876253.066797389] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876254.065286111] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876255.064697457] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876256.068041817] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876257.066631854] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876258.068086584] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876259.064085803] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876260.063588933] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876261.087957388] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876262.067359910] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876263.065498652] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876264.070903468] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876265.064476062] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876266.074626856] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876267.084788272] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876268.067764747] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876269.065328609] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876270.082070713] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876271.068127711] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876272.067164973] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876273.108353547] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876274.068525619] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876275.066554440] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876276.067179441] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876277.068058449] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876278.063241645] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876279.067415772] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876280.078472752] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876281.070521517] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876282.102743010] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876283.064478484] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876284.068149445] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876285.070707768] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876286.070793553] [tank_local_path_node]: Loaded recon static obstacles for matching: 301
+[local_path_node-6] [INFO] [1782876287.063238404] [tank_local_path_node]: Loaded recon static obstacles for matching: 301

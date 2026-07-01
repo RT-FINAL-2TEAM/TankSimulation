@@ -85,7 +85,6 @@ from path_planning.config import (
     TOPIC_PATH_POINTS,
     TOPIC_PLANNER_STATUS,
     TOPIC_PLAYER_POSE,
-    TOPIC_PLAYER_STATE,
     USE_GT_OBSTACLES,
     USE_LIDAR_CLUSTER_BBOXES,
     USE_PATH_SMOOTHING,
@@ -106,7 +105,6 @@ from ament_index_python.packages import get_package_share_directory
 from path_planning.route_loader import get_route_waypoints
 from path_planning.team_path_planning import (
     plan_path_through_waypoints as team_plan_path_through_waypoints,
-    plan_global_path as team_plan_global_path,
     load_static_obstacles_from_map,
     DEFAULT_STATIC_INFLATE,
 )
@@ -117,26 +115,7 @@ def clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
-def parse_float_map(raw: str, default: Dict[str, float]) -> Dict[str, float]:
-    """Parse 'tank:100,house:50' style parameter strings."""
-    out = dict(default)
-    try:
-        for item in str(raw or "").split(","):
-            item = item.strip()
-            if not item or ":" not in item:
-                continue
-            key, val = item.split(":", 1)
-            key = key.strip().lower()
-            if not key:
-                continue
-            out[key] = float(val.strip())
-    except Exception:
-        return dict(default)
-    return out
-
-
 from tank_common.pointcloud import pointcloud2_to_xyz_array
-from tank_common.vehicle_model import TankVehicleModel
 
 
 def get_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
@@ -364,25 +343,7 @@ def parse_obstacles_payload(payload: Any) -> List[Dict[str, float]]:
                 bboxes.append(bbox)
     return bboxes
 
-DEFAULT_SEMANTIC_RISK_SCORES = {
-    "tank": 100.0,
-    "house": 50.0,
-    "car": 25.0,
-    "tent": 15.0,
-    "rock": 10.0,
-    "unknown": 5.0,
-}
-DEFAULT_SEMANTIC_RISK_RADII = {
-    "tank": 25.0,
-    "house": 18.0,
-    "car": 10.0,
-    "tent": 8.0,
-    "rock": 6.0,
-    "unknown": 5.0,
-}
-
-
-# DISCOVERED_CLASS_RADIUS는 path_planning.config의 단일 기준을 사용한다(fusion_mapping/config 신설).
+# DISCOVERED_CLASS_RADIUS는 path_planning.config의 단일 기준을 사용한다.
 def _as_float(v: Any, default: float = 0.0) -> float:
     try:
         return float(v)
@@ -643,34 +604,6 @@ class TeamDynamicAStarPlannerNode(Node):
         self.declare_parameter("static_map_file", STATIC_MAP_FILE)
         self.declare_parameter("terrain_cost_file", TERRAIN_COST_FILE)
         self.declare_parameter("terrain_weight", TERRAIN_WEIGHT)
-        self.declare_parameter("tank_param_file", "")
-        self.declare_parameter("enable_speed_based_inflation", True)
-        self.declare_parameter("enable_speed_based_emergency_replan", True)
-        self.declare_parameter("enable_path_feasibility_check", True)
-        self.declare_parameter("path_feasibility_topic", "/tank/planner/feasibility_status")
-        # Semantic-risk-aware A*: confirmed discovered object 주변에 class별 soft cost를 추가한다.
-        self.declare_parameter("enable_semantic_risk_cost", True)
-        self.declare_parameter("semantic_risk_weight", 0.06)
-        self.declare_parameter("semantic_risk_radius_scale", 1.0)
-        self.declare_parameter("semantic_risk_scores", "tank:100,house:50,car:25,tent:15,rock:10,unknown:5")
-        self.declare_parameter("semantic_risk_radii", "tank:25,house:18,car:10,tent:8,rock:6,unknown:5")
-        # theta-aware-lite: A* 상태에 8방향 heading index를 추가해 급격한 꺾임을 비용화한다.
-        self.declare_parameter("enable_theta_aware_astar", True)
-        self.declare_parameter("theta_heading_change_weight", 0.25)
-        # Curvature smoother: A* polyline corner를 전차 회전반경 기준 곡선으로 후처리한다.
-        self.declare_parameter("enable_curvature_path_smoothing", True)
-        self.declare_parameter("curvature_smoothing_min_turn_radius_m", 7.0)
-        self.declare_parameter("curvature_smoothing_max_corner_angle_deg", 25.0)
-        self.declare_parameter("curvature_smoothing_point_spacing_m", 1.0)
-        self.declare_parameter("curvature_smoothing_collision_check_margin_m", 1.0)
-        # Replan acceptance: dense obstacle에서 새 경로가 조금 보였다고 바로 교체하지 않는다.
-        self.declare_parameter("enable_replan_acceptance_filter", True)
-        self.declare_parameter("path_commitment_sec", 4.0)
-        self.declare_parameter("replan_accept_max_length_ratio", 1.30)
-        self.declare_parameter("replan_accept_max_sharp_corner_increase", 1)
-        self.declare_parameter("replan_accept_max_heading_change_increase_deg", 120.0)
-        self.declare_parameter("enable_avoid_side_lock", True)
-        self.declare_parameter("avoid_side_lock_sec", 4.0)
         self.declare_parameter("use_lidar_cluster_bboxes", USE_LIDAR_CLUSTER_BBOXES)
         self.declare_parameter("lidar_cluster_bbox_margin", LIDAR_CLUSTER_BBOX_MARGIN)
         # 데이터셋 기반 차량 운동 제약. 경로가 통과 가능한 원호일 때만 적용한다.
@@ -719,12 +652,6 @@ class TeamDynamicAStarPlannerNode(Node):
         self.declare_parameter("emergency_replan_front_distance", 16.0)
         self.declare_parameter("emergency_replan_min_distance", 0.0)
         self.declare_parameter("emergency_replan_margin", 8.0)
-        # One-frame LiDAR cluster glitches can make A* jump to the opposite corridor.
-        # Require the emergency block to be stable for several planner ticks before accepting a replan.
-        self.declare_parameter("emergency_replan_required_hits", 3)
-        # Dynamic emergency margin should not grow without bound from the speed-based model;
-        # keep trigger detection less conservative than the costmap inflation.
-        self.declare_parameter("emergency_replan_margin_max", 11.0)
 
         # APF를 끈 상태에서도 기존 RViz potential marker 표시를 유지하기 위한 시각화 mirror.
         # 제어에는 사용하지 않고, rviz_visualizer_node가 구독하던 토픽에 A* lookahead 기반
@@ -785,35 +712,6 @@ class TeamDynamicAStarPlannerNode(Node):
         self.static_map_file = str(self.get_parameter("static_map_file").value)
         self.terrain_cost_file = str(self.get_parameter("terrain_cost_file").value)
         self.terrain_weight = float(self.get_parameter("terrain_weight").value)
-        self.tank_param_file = str(self.get_parameter("tank_param_file").value)
-        self.vehicle_model = TankVehicleModel(self.tank_param_file)
-        self.enable_speed_based_inflation = bool(self.get_parameter("enable_speed_based_inflation").value)
-        self.enable_speed_based_emergency_replan = bool(self.get_parameter("enable_speed_based_emergency_replan").value)
-        self.enable_path_feasibility_check = bool(self.get_parameter("enable_path_feasibility_check").value)
-        self.path_feasibility_topic = str(self.get_parameter("path_feasibility_topic").value)
-        self.enable_semantic_risk_cost = bool(self.get_parameter("enable_semantic_risk_cost").value)
-        self.semantic_risk_weight = float(self.get_parameter("semantic_risk_weight").value)
-        self.semantic_risk_radius_scale = float(self.get_parameter("semantic_risk_radius_scale").value)
-        self.semantic_risk_scores = parse_float_map(
-            str(self.get_parameter("semantic_risk_scores").value), DEFAULT_SEMANTIC_RISK_SCORES
-        )
-        self.semantic_risk_radii = parse_float_map(
-            str(self.get_parameter("semantic_risk_radii").value), DEFAULT_SEMANTIC_RISK_RADII
-        )
-        self.enable_theta_aware_astar = bool(self.get_parameter("enable_theta_aware_astar").value)
-        self.theta_heading_change_weight = float(self.get_parameter("theta_heading_change_weight").value)
-        self.enable_curvature_path_smoothing = bool(self.get_parameter("enable_curvature_path_smoothing").value)
-        self.curvature_smoothing_min_turn_radius_m = float(self.get_parameter("curvature_smoothing_min_turn_radius_m").value)
-        self.curvature_smoothing_max_corner_angle_deg = float(self.get_parameter("curvature_smoothing_max_corner_angle_deg").value)
-        self.curvature_smoothing_point_spacing_m = float(self.get_parameter("curvature_smoothing_point_spacing_m").value)
-        self.curvature_smoothing_collision_check_margin_m = float(self.get_parameter("curvature_smoothing_collision_check_margin_m").value)
-        self.enable_replan_acceptance_filter = bool(self.get_parameter("enable_replan_acceptance_filter").value)
-        self.path_commitment_sec = float(self.get_parameter("path_commitment_sec").value)
-        self.replan_accept_max_length_ratio = float(self.get_parameter("replan_accept_max_length_ratio").value)
-        self.replan_accept_max_sharp_corner_increase = int(self.get_parameter("replan_accept_max_sharp_corner_increase").value)
-        self.replan_accept_max_heading_change_increase_deg = float(self.get_parameter("replan_accept_max_heading_change_increase_deg").value)
-        self.enable_avoid_side_lock = bool(self.get_parameter("enable_avoid_side_lock").value)
-        self.avoid_side_lock_sec = float(self.get_parameter("avoid_side_lock_sec").value)
         self.use_lidar_cluster_bboxes = bool(self.get_parameter("use_lidar_cluster_bboxes").value)
         self.lidar_cluster_bbox_margin = float(self.get_parameter("lidar_cluster_bbox_margin").value)
         self.minimum_turn_radius_m = max(0.0, float(self.get_parameter("minimum_turn_radius_m").value))
@@ -851,8 +749,6 @@ class TeamDynamicAStarPlannerNode(Node):
         self.emergency_replan_front_distance = float(self.get_parameter("emergency_replan_front_distance").value)
         self.emergency_replan_min_distance = float(self.get_parameter("emergency_replan_min_distance").value)
         self.emergency_replan_margin = float(self.get_parameter("emergency_replan_margin").value)
-        self.emergency_replan_required_hits = max(1, int(self.get_parameter("emergency_replan_required_hits").value))
-        self.emergency_replan_margin_max = float(self.get_parameter("emergency_replan_margin_max").value)
         self.enable_lookahead_visualization_mirror = bool(
             self.get_parameter("publish_lookahead_visualization_mirror").value
         )
@@ -875,8 +771,6 @@ class TeamDynamicAStarPlannerNode(Node):
         # {(ix, iy): roughness} — A* 1m 격자 인덱스 기준. scenario2_terrain.json에서 로드.
         self.terrain_grid: Optional[Dict[Tuple[int, int], float]] = self._load_terrain_grid(self.terrain_cost_file)
 
-        self.current_speed: float = 0.0
-        self.current_sim_time: float = 0.0
         self.current_pos: Optional[Tuple[float, float]] = None
         self.goal_pos: Optional[Tuple[float, float]] = None
         if bool(self.get_parameter("default_goal_enabled").value):
@@ -909,12 +803,6 @@ class TeamDynamicAStarPlannerNode(Node):
         # 이전보다 뒤쪽 route index를 보지 않게 해 lookahead가 반대방향으로 튀는 것을 막는다.
         self.route_index_floor = 0
         self.route_commit_until_wall = -1e9
-        self.path_commit_until_wall = -1e9
-        self.avoid_side_lock_sign = 0
-        self.avoid_side_lock_until_wall = -1e9
-        self.last_candidate_reject_reason = "none"
-        self.last_route_quality: Dict[str, float] = {}
-        self.last_candidate_quality: Dict[str, float] = {}
         # Index into configured route waypoints, not into the generated A* polyline.
         # This prevents dynamic/emergency replan from targeting a checkpoint already passed.
         self.route_checkpoint_index = 0
@@ -929,9 +817,7 @@ class TeamDynamicAStarPlannerNode(Node):
         self.dynamic_replan_guard_reason = "none"
         self.last_path_publish_wall = -1e9
         self.path_block_hit_count = 0
-        self.emergency_path_block_hit_count = 0
         self.last_replan_reason = "not_planned"
-        self.last_feasibility_status: Dict[str, Any] = {"enabled": False}
         self.plan_request_pending = True
         self.plan_request_reason = "initial"
 
@@ -944,7 +830,6 @@ class TeamDynamicAStarPlannerNode(Node):
         self.pub_visual_attractive_vector = self.create_publisher(Vector3Stamped, self.visualization_attractive_vector_topic, 10)
         self.pub_points = self.create_publisher(String, TOPIC_PATH_POINTS, 10)
         self.pub_status = self.create_publisher(String, TOPIC_PLANNER_STATUS, 10)
-        self.pub_feasibility = self.create_publisher(String, self.path_feasibility_topic, 10)
         self.pub_lidar_bboxes = self.create_publisher(String, TOPIC_LIDAR_BBOXES, 10)
         # 정찰/자율 시나리오에서 controller·local_path가 "도착"을 판정하려면 goal이 필요하다.
         # planner가 보유한 goal_pos(기본 목적지 또는 sim이 /set_destination으로 준 값)를
@@ -952,7 +837,6 @@ class TeamDynamicAStarPlannerNode(Node):
         self.pub_goal = self.create_publisher(PoseStamped, TOPIC_GOAL_POSE, 10)
 
         self.create_subscription(PoseStamped, TOPIC_PLAYER_POSE, self.player_pose_cb, 10)
-        self.create_subscription(String, TOPIC_PLAYER_STATE, self.player_state_cb, 10)
         self.create_subscription(PoseStamped, TOPIC_GOAL_POSE, self.goal_pose_cb, 10)
         # Internal mission transitions use a separate topic so Scenario-2 can
         # keep the checkpoint goal locked while still returning after firing.
@@ -979,201 +863,11 @@ class TeamDynamicAStarPlannerNode(Node):
             f"static_inflate={self.static_obstacle_inflate}, "
             f"discovered_astar={self.use_discovered_objects_for_astar}, "
             f"route_lock={self.route_commit_lock_sec}s, route_index_never_decrease={self.route_index_never_decrease}, "
-            f"lidar_memory_block_trigger={self.use_lidar_memory_for_path_block}, "
-            f"speed_inflation={self.enable_speed_based_inflation}, speed_emergency={self.enable_speed_based_emergency_replan}, "
-            f"semantic_risk={self.enable_semantic_risk_cost}, theta_astar={self.enable_theta_aware_astar}"
+            f"lidar_memory_block_trigger={self.use_lidar_memory_for_path_block}"
         )
 
     def wall_time(self) -> float:
         return time.monotonic()
-
-    def player_state_cb(self, msg: String) -> None:
-        """현재 속도를 planner에도 공유해 speed-based inflation/replan에 사용한다."""
-        try:
-            data = json.loads(msg.data)
-        except Exception:
-            return
-        try:
-            self.current_speed = float(data.get("speed") or 0.0)
-        except Exception:
-            self.current_speed = 0.0
-        try:
-            self.current_sim_time = float(data.get("sim_time") or self.current_sim_time)
-        except Exception:
-            pass
-
-    def dynamic_inflate(self) -> float:
-        if not self.enable_speed_based_inflation:
-            return float(self.inflate)
-        return float(self.vehicle_model.dynamic_inflation(self.current_speed, base=self.inflate))
-
-    def dynamic_discovered_inflate(self) -> float:
-        if not self.enable_speed_based_inflation:
-            return float(self.discovered_obstacle_inflate)
-        return float(self.vehicle_model.dynamic_inflation(
-            self.current_speed, base=self.discovered_obstacle_inflate))
-
-    def dynamic_cluster_memory_inflate(self) -> float:
-        if not self.enable_speed_based_inflation:
-            return float(self.lidar_cluster_memory_inflate)
-        return float(self.vehicle_model.dynamic_inflation(
-            self.current_speed, base=self.lidar_cluster_memory_inflate))
-
-    def dynamic_emergency_front_distance(self) -> float:
-        if not self.enable_speed_based_emergency_replan:
-            return float(self.emergency_replan_front_distance)
-        return float(self.vehicle_model.emergency_front_distance(
-            self.current_speed, base=self.emergency_replan_front_distance))
-
-    def dynamic_emergency_margin(self) -> float:
-        if not self.enable_speed_based_emergency_replan:
-            return float(self.emergency_replan_margin)
-        extra = min(4.0, max(0.0, self.vehicle_model.speed_margin(self.current_speed) * 0.25))
-        raw = float(self.emergency_replan_margin + extra)
-        if self.emergency_replan_margin_max > 0.0:
-            return min(raw, self.emergency_replan_margin_max)
-        return raw
-
-    def semantic_risk_sources_for_plan(self, discovered_bboxes: Sequence[Dict[str, float]]) -> List[Dict[str, float]]:
-        if not self.enable_semantic_risk_cost:
-            return []
-        return [dict(b) for b in discovered_bboxes if str(b.get("class_name", "")).strip().lower() not in self.ignored_discovered_classes_for_astar]
-
-    def theta_heading_weight_for_plan(self) -> float:
-        if not self.enable_theta_aware_astar:
-            return 0.0
-        return max(0.0, float(self.theta_heading_change_weight))
-
-    def curvature_smoothing_kwargs(self) -> Dict[str, Any]:
-        return {
-            "enable_curvature_smoothing": bool(self.enable_curvature_path_smoothing),
-            "curvature_min_turn_radius_m": float(self.curvature_smoothing_min_turn_radius_m),
-            "curvature_max_corner_angle_deg": float(self.curvature_smoothing_max_corner_angle_deg),
-            "curvature_point_spacing_m": float(self.curvature_smoothing_point_spacing_m),
-            "curvature_collision_check_margin_m": float(self.curvature_smoothing_collision_check_margin_m),
-        }
-
-    def route_quality_metrics(self, route: Sequence[Tuple[float, float]]) -> Dict[str, float]:
-        """후보 경로 채택 여부를 판단하기 위한 간단한 품질 지표."""
-        if not route or len(route) < 2:
-            return {"length_m": 0.0, "heading_change_deg": 0.0, "sharp_corner_count": 0.0, "points": float(len(route or []))}
-        length = 0.0
-        heading_change = 0.0
-        sharp = 0
-        for i in range(len(route) - 1):
-            length += get_distance(route[i], route[i + 1])
-        for i in range(1, len(route) - 1):
-            ax, ay = route[i][0] - route[i - 1][0], route[i][1] - route[i - 1][1]
-            bx, by = route[i + 1][0] - route[i][0], route[i + 1][1] - route[i][1]
-            la = math.hypot(ax, ay)
-            lb = math.hypot(bx, by)
-            if la <= 1e-6 or lb <= 1e-6:
-                continue
-            dot = max(-1.0, min(1.0, (ax * bx + ay * by) / (la * lb)))
-            ang = math.degrees(math.acos(dot))
-            heading_change += ang
-            if ang >= 55.0:
-                sharp += 1
-        return {
-            "length_m": float(length),
-            "heading_change_deg": float(heading_change),
-            "sharp_corner_count": float(sharp),
-            "points": float(len(route)),
-        }
-
-    def remaining_current_route(self) -> List[Tuple[float, float]]:
-        if not self.route:
-            return []
-        start_idx = min(max(0, int(self.route_index)), max(0, len(self.route) - 1))
-        return list(self.route[start_idx:])
-
-    def route_initial_side_sign(self, route: Sequence[Tuple[float, float]]) -> int:
-        """현재 위치→goal 기준으로 후보 경로 첫 구간이 좌/우 어느 쪽으로 빠지는지 부호화한다."""
-        if self.current_pos is None or self.goal_pos is None or not route:
-            return 0
-        ref = (self.goal_pos[0] - self.current_pos[0], self.goal_pos[1] - self.current_pos[1])
-        ref_norm = math.hypot(ref[0], ref[1])
-        if ref_norm <= 1e-6:
-            return 0
-        # 8~15m 앞쪽 점을 사용한다. 너무 가까운 점은 noise에 민감하다.
-        probe = route[min(len(route) - 1, max(1, min(12, len(route) - 1)))]
-        vec = (probe[0] - self.current_pos[0], probe[1] - self.current_pos[1])
-        vec_norm = math.hypot(vec[0], vec[1])
-        if vec_norm <= 1e-6:
-            return 0
-        cross = ref[0] * vec[1] - ref[1] * vec[0]
-        if abs(cross) < 1.0:
-            return 0
-        return 1 if cross > 0.0 else -1
-
-    def should_accept_candidate_route(self, route: Sequence[Tuple[float, float]], reason: str) -> tuple[bool, str, Dict[str, float]]:
-        """Dense obstacle에서 replan 결과가 좌우로 뒤집히는 것을 줄이기 위한 후보 경로 필터."""
-        new_q = self.route_quality_metrics(route)
-        if not self.enable_replan_acceptance_filter or not self._is_dynamic_replan_reason(reason) or not self.route:
-            return True, "accepted_filter_disabled_or_initial", new_q
-        now = self.wall_time()
-        is_emergency = str(reason).startswith("emergency_")
-        old_remaining = self.remaining_current_route()
-        old_q = self.route_quality_metrics(old_remaining)
-        self.last_candidate_quality = dict(new_q)
-        # 전방 corridor를 실제로 emergency block한 경우는 commitment 예외로 허용한다.
-        if not is_emergency and now < self.path_commit_until_wall:
-            return False, f"path_commitment_hold {self.path_commit_until_wall - now:.2f}s", new_q
-        # Avoid-side lock: 방금 선택한 우회 방향과 반대쪽 후보는 일정 시간 거절한다.
-        if self.enable_avoid_side_lock and not is_emergency and now < self.avoid_side_lock_until_wall:
-            sign = self.route_initial_side_sign(route)
-            if sign != 0 and self.avoid_side_lock_sign != 0 and sign != self.avoid_side_lock_sign:
-                return False, f"avoid_side_lock sign={sign} locked={self.avoid_side_lock_sign}", new_q
-        if old_q.get("length_m", 0.0) > 1.0:
-            length_ratio = new_q.get("length_m", 0.0) / max(1.0, old_q["length_m"])
-            sharp_increase = new_q.get("sharp_corner_count", 0.0) - old_q.get("sharp_corner_count", 0.0)
-            heading_increase = new_q.get("heading_change_deg", 0.0) - old_q.get("heading_change_deg", 0.0)
-            # 새 경로가 너무 길고, 더 부드럽지도 않으면 채택하지 않는다.
-            if length_ratio > self.replan_accept_max_length_ratio and sharp_increase >= 0:
-                return False, f"candidate_too_long ratio={length_ratio:.2f}", new_q
-            if sharp_increase > self.replan_accept_max_sharp_corner_increase:
-                return False, f"candidate_more_sharp_corners +{sharp_increase:.0f}", new_q
-            if heading_increase > self.replan_accept_max_heading_change_increase_deg:
-                return False, f"candidate_heading_change +{heading_increase:.1f}deg", new_q
-        return True, "accepted", new_q
-
-    def update_path_commitment_after_accept(self, route: Sequence[Tuple[float, float]], reason: str) -> None:
-        if self._is_dynamic_replan_reason(reason):
-            now = self.wall_time()
-            self.path_commit_until_wall = now + max(0.0, self.path_commitment_sec)
-            sign = self.route_initial_side_sign(route)
-            if sign != 0:
-                self.avoid_side_lock_sign = sign
-                self.avoid_side_lock_until_wall = now + max(0.0, self.avoid_side_lock_sec)
-
-    def _apply_runtime_inflate(self, bboxes: Sequence[Dict[str, float]], inflate: float) -> List[Dict[str, float]]:
-        out: List[Dict[str, float]] = []
-        for b in bboxes or []:
-            copied = dict(b)
-            copied["_inflate_override"] = float(inflate)
-            out.append(copied)
-        return out
-
-    def publish_feasibility_status(self, route: Sequence[Tuple[float, float]], reason: str = "") -> Dict[str, Any]:
-        status: Dict[str, Any] = {"enabled": self.enable_path_feasibility_check}
-        if self.enable_path_feasibility_check:
-            status.update(self.vehicle_model.path_curvature_summary(route, self.current_speed))
-        status.update({
-            "reason": reason,
-            "current_speed_mps": float(self.current_speed),
-            "stopping_distance_m": float(self.vehicle_model.stopping_distance(self.current_speed)),
-            "dynamic_inflate_m": float(self.dynamic_inflate()),
-            "dynamic_emergency_front_distance_m": float(self.dynamic_emergency_front_distance()),
-            "dynamic_emergency_margin_m": float(self.dynamic_emergency_margin()),
-        })
-        try:
-            msg = String()
-            msg.data = json.dumps(status, ensure_ascii=False)
-            self.pub_feasibility.publish(msg)
-        except Exception:
-            pass
-        self.last_feasibility_status = status
-        return status
 
     def player_pose_cb(self, msg: PoseStamped) -> None:
         new_pos = (float(msg.pose.position.x), float(msg.pose.position.y))
@@ -1400,12 +1094,12 @@ class TeamDynamicAStarPlannerNode(Node):
                 updated = bbox_copy_as_memory(bbox, now, hits=hits)
                 updated["first_seen_wall"] = float(old.get("first_seen_wall", now))
                 updated["memory_id"] = old.get("memory_id", f"mem_{int(now * 1000)}_{best_i}")
-                updated["_inflate_override"] = self.dynamic_cluster_memory_inflate()
+                updated["_inflate_override"] = self.lidar_cluster_memory_inflate
                 self.lidar_cluster_memory[best_i] = updated
             else:
                 mem = bbox_copy_as_memory(bbox, now, hits=1)
                 mem["memory_id"] = f"mem_{int(now * 1000)}_{len(self.lidar_cluster_memory)}"
-                mem["_inflate_override"] = self.dynamic_cluster_memory_inflate()
+                mem["_inflate_override"] = self.lidar_cluster_memory_inflate
                 self.lidar_cluster_memory.append(mem)
         self.prune_lidar_cluster_memory(now)
 
@@ -1425,19 +1119,16 @@ class TeamDynamicAStarPlannerNode(Node):
             copied = dict(mem)
             copied["source"] = "lidar_cluster_memory"
             copied["age_sec"] = max(0.0, now - float(copied.get("last_seen_wall", now)))
-            copied["_inflate_override"] = self.dynamic_cluster_memory_inflate()
+            copied["_inflate_override"] = self.lidar_cluster_memory_inflate
             out.append(copied)
         return out
 
     def build_lidar_bboxes(self) -> List[Dict[str, float]]:
         current: List[Dict[str, float]] = []
         if self.use_lidar_cluster_bboxes and self.latest_cluster_bboxes:
-            current = self._apply_runtime_inflate(self.latest_cluster_bboxes, self.dynamic_inflate())
+            current = list(self.latest_cluster_bboxes)
         else:
-            current = self._apply_runtime_inflate(
-                self.lidar_obstacles.build_bboxes(self.lidar_cluster_eps, self.lidar_cluster_min_samples),
-                self.dynamic_inflate(),
-            )
+            current = self.lidar_obstacles.build_bboxes(self.lidar_cluster_eps, self.lidar_cluster_min_samples)
         memory = self.build_lidar_cluster_memory_bboxes(current)
         return list(current) + memory
 
@@ -1654,19 +1345,12 @@ class TeamDynamicAStarPlannerNode(Node):
                         through,
                         obstacles,
                         static_obstacles=self.static_obstacles,
-                        inflate=self.dynamic_inflate(),
+                        inflate=self.inflate,
                         static_inflate=self.static_obstacle_inflate,
                         clearance_weight=self.route_clearance_weight,
                         side=self.route_side,
                         terrain_grid=self.terrain_grid,
                         terrain_weight=self.terrain_weight,
-                        semantic_risk_sources=self.semantic_risk_sources_for_plan(discovered_bboxes),
-                        semantic_risk_scores=self.semantic_risk_scores,
-                        semantic_risk_radii=self.semantic_risk_radii,
-                        semantic_risk_weight=self.semantic_risk_weight if self.enable_semantic_risk_cost else 0.0,
-                        semantic_risk_radius_scale=self.semantic_risk_radius_scale,
-                        heading_change_weight=self.theta_heading_weight_for_plan(),
-                        **self.curvature_smoothing_kwargs(),
                     )
                     route_mode = (
                         f"route_waypoints:{self.route_map_name}/{self.route_id}/{self.route_side}"
@@ -1676,26 +1360,18 @@ class TeamDynamicAStarPlannerNode(Node):
                     self.get_logger().warn(f"route waypoint planning failed, fallback direct A*: {exc}")
                     route = []
             if not route:
-                # direct fallback도 team_path_planning의 cost_map/semantic/theta-aware A*를 사용한다.
-                route = team_plan_global_path(
+                route = plan_global_path(
                     start_pos,
                     goal_pos,
                     obstacles,
-                    inflate=self.dynamic_inflate(),
+                    width=self.map_width,
+                    height=self.map_height,
+                    resolution=self.resolution,
+                    inflate=self.inflate,
+                    use_smoothing=self.use_path_smoothing,
+                    max_expansions=self.max_expansions,
                     static_obstacles=self.static_obstacles,
                     static_inflate=self.static_obstacle_inflate,
-                    clearance_weight=self.route_clearance_weight,
-                    waypoints_ref=None,
-                    side=self.route_side,
-                    terrain_grid=self.terrain_grid,
-                    terrain_weight=self.terrain_weight,
-                    semantic_risk_sources=self.semantic_risk_sources_for_plan(discovered_bboxes),
-                    semantic_risk_scores=self.semantic_risk_scores,
-                    semantic_risk_radii=self.semantic_risk_radii,
-                    semantic_risk_weight=self.semantic_risk_weight if self.enable_semantic_risk_cost else 0.0,
-                    semantic_risk_radius_scale=self.semantic_risk_radius_scale,
-                    heading_change_weight=self.theta_heading_weight_for_plan(),
-                    **self.curvature_smoothing_kwargs(),
                 )
                 route_mode = "direct_astar"
 
@@ -1705,30 +1381,9 @@ class TeamDynamicAStarPlannerNode(Node):
                 route, route_profile, vehicle_status = self._apply_vehicle_geometry(route, obstacles)
 
             if route:
-                accepted, reject_reason, candidate_quality = self.should_accept_candidate_route(route, reason)
-                if not accepted:
-                    with self._planning_lock:
-                        self.last_candidate_reject_reason = reject_reason
-                        self.last_candidate_quality = candidate_quality
-                        self.last_replan_reason = f"rejected_{reason}"
-                        self.dynamic_replan_guard_reason = reject_reason
-                        if self._is_dynamic_replan_reason(reason):
-                            now_wall = self.wall_time()
-                            self.last_dynamic_replan_wall = now_wall
-                            self.last_dynamic_replan_pos = start_pos
-                            self.path_block_hit_count = 0
-                            self.emergency_path_block_hit_count = 0
-                    self.get_logger().info(
-                        f"A* candidate rejected: reason={reason}, guard={reject_reason}, "
-                        f"candidate={candidate_quality}"
-                    )
-                    return
                 with self._planning_lock:
                     prev_route_index = int(self.route_index)
                     self.route = route
-                    self.last_candidate_reject_reason = "accepted"
-                    self.last_route_quality = candidate_quality
-                    self.update_path_commitment_after_accept(route, reason)
                     self.route_point_profile = route_profile
                     self.vehicle_geometry_status = vehicle_status
                     now_wall = self.wall_time()
@@ -1760,15 +1415,11 @@ class TeamDynamicAStarPlannerNode(Node):
                 
                 self.publish_lidar_bboxes(lidar_bboxes)
                 self.publish_path(force=True)
-                feasibility = self.publish_feasibility_status(route, reason)
                 self.get_logger().info(
                     f"A* path updated: reason={reason}, mode={route_mode}, points={len(route)}, "
                     f"rounded={vehicle_status.get('rounded_corner_count', 0)}, "
                     f"unrounded={vehicle_status.get('unrounded_corner_count', 0)}, "
-                    f"obstacles={len(obstacles)}, lidar_bboxes={len(lidar_bboxes)}, discovered_bboxes={len(discovered_bboxes)}, "
-                    f"dyn_inflate={self.dynamic_inflate():.2f}, stop_d={self.vehicle_model.stopping_distance(self.current_speed):.2f}, "
-                    f"semantic_risk={self.enable_semantic_risk_cost}, theta_w={self.theta_heading_weight_for_plan():.2f}, "
-                    f"min_radius={feasibility.get('min_path_turn_radius_m')}"
+                    f"obstacles={len(obstacles)}, lidar_bboxes={len(lidar_bboxes)}, discovered_bboxes={len(discovered_bboxes)}"
                 )
             else:
                 with self._planning_lock:
@@ -1975,17 +1626,8 @@ class TeamDynamicAStarPlannerNode(Node):
             "emergency_cluster_replan_enabled": self.emergency_cluster_replan_enabled,
             "emergency_replan_cooldown_sec": self.emergency_replan_cooldown_sec,
             "emergency_replan_front_distance": self.emergency_replan_front_distance,
-            "dynamic_emergency_replan_front_distance": self.dynamic_emergency_front_distance(),
             "emergency_replan_min_distance": self.emergency_replan_min_distance,
             "emergency_replan_margin": self.emergency_replan_margin,
-            "dynamic_emergency_replan_margin": self.dynamic_emergency_margin(),
-            "emergency_replan_required_hits": self.emergency_replan_required_hits,
-            "emergency_path_block_hit_count": self.emergency_path_block_hit_count,
-            "emergency_replan_margin_max": self.emergency_replan_margin_max,
-            "current_speed_mps": self.current_speed,
-            "stopping_distance_m": self.vehicle_model.stopping_distance(self.current_speed),
-            "dynamic_inflate": self.dynamic_inflate(),
-            "path_feasibility": getattr(self, "last_feasibility_status", None),
             "path_block_uses_lidar_memory": self.use_lidar_memory_for_path_block,
             "path_block_uses_lidar_cluster_bboxes": self.use_lidar_cluster_bboxes,
             "path_block_uses_discovered_objects": self.use_discovered_objects_for_path_block,
@@ -2016,26 +1658,6 @@ class TeamDynamicAStarPlannerNode(Node):
             "route_id": self.route_id,
             "route_side": self.route_side,
             "route_clearance_weight": self.route_clearance_weight,
-            "semantic_risk_enabled": self.enable_semantic_risk_cost,
-            "semantic_risk_weight": self.semantic_risk_weight,
-            "semantic_risk_scores": self.semantic_risk_scores,
-            "semantic_risk_radii": self.semantic_risk_radii,
-            "theta_aware_astar_enabled": self.enable_theta_aware_astar,
-            "theta_heading_change_weight": self.theta_heading_weight_for_plan(),
-            "curvature_path_smoothing_enabled": self.enable_curvature_path_smoothing,
-            "curvature_smoothing_min_turn_radius_m": self.curvature_smoothing_min_turn_radius_m,
-            "curvature_smoothing_max_corner_angle_deg": self.curvature_smoothing_max_corner_angle_deg,
-            "curvature_smoothing_point_spacing_m": self.curvature_smoothing_point_spacing_m,
-            "curvature_smoothing_collision_check_margin_m": self.curvature_smoothing_collision_check_margin_m,
-            "enable_replan_acceptance_filter": self.enable_replan_acceptance_filter,
-            "path_commitment_sec": self.path_commitment_sec,
-            "path_commitment_remaining_sec": max(0.0, self.path_commit_until_wall - self.wall_time()),
-            "avoid_side_lock_sec": self.avoid_side_lock_sec,
-            "avoid_side_lock_sign": self.avoid_side_lock_sign,
-            "avoid_side_lock_remaining_sec": max(0.0, self.avoid_side_lock_until_wall - self.wall_time()),
-            "last_candidate_reject_reason": self.last_candidate_reject_reason,
-            "last_route_quality": self.last_route_quality,
-            "last_candidate_quality": self.last_candidate_quality,
             "path_block_hit_count": self.path_block_hit_count,
             "path_block_required_hits": self.path_block_required_hits,
         }
@@ -2096,8 +1718,8 @@ class TeamDynamicAStarPlannerNode(Node):
                     self.route_index,
                     self.latest_cluster_bboxes,
                     self.emergency_replan_min_distance,
-                    self.dynamic_emergency_front_distance(),
-                    self.dynamic_emergency_margin(),
+                    self.emergency_replan_front_distance,
+                    self.emergency_replan_margin,
                 )
             self.emergency_cluster_blocked = bool(emergency_cluster_blocked)
             cluster_memory_bboxes = self.build_lidar_cluster_memory_bboxes(self.latest_cluster_bboxes)
@@ -2141,11 +1763,6 @@ class TeamDynamicAStarPlannerNode(Node):
                 # 이전 tick의 cooldown/progress 메시지가 status에 계속 남지 않도록 정리한다.
                 self.dynamic_replan_guard_reason = "none"
 
-            if emergency_cluster_blocked:
-                self.emergency_path_block_hit_count += 1
-            else:
-                self.emergency_path_block_hit_count = 0
-
             count_ok = self.dynamic_replan_max_count <= 0 or self.dynamic_replan_count < self.dynamic_replan_max_count
             progress_ok = True
             moved_since_last_replan = None
@@ -2163,8 +1780,7 @@ class TeamDynamicAStarPlannerNode(Node):
                     )
 
             emergency_cooldown_ok = (wall_now - self.last_dynamic_replan_wall) >= max(0.0, self.emergency_replan_cooldown_sec)
-            emergency_hits_ok = self.emergency_path_block_hit_count >= self.emergency_replan_required_hits
-            if emergency_cluster_blocked and count_ok and progress_ok and emergency_cooldown_ok and emergency_hits_ok:
+            if emergency_cluster_blocked and count_ok and progress_ok and emergency_cooldown_ok:
                 need_plan = True
                 reason = "emergency_lidar_cluster_path_blocked"
                 self.dynamic_replan_guard_reason = "none"
@@ -2172,10 +1788,6 @@ class TeamDynamicAStarPlannerNode(Node):
                 need_plan = True
                 reason = "lidar_path_blocked"
                 self.dynamic_replan_guard_reason = "none"
-            elif emergency_cluster_blocked and not emergency_hits_ok:
-                self.dynamic_replan_guard_reason = (
-                    f"emergency hits {self.emergency_path_block_hit_count}/{self.emergency_replan_required_hits}"
-                )
             elif emergency_cluster_blocked and not emergency_cooldown_ok:
                 self.dynamic_replan_guard_reason = (
                     f"emergency cooldown remaining={max(0.0, self.emergency_replan_cooldown_sec - (wall_now - self.last_dynamic_replan_wall)):.2f}s"

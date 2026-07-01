@@ -1,0 +1,30 @@
+[INFO] [1782871602.752655487] [tank_ros_bridge_node]: Tank Challenge ROS2 final bridge initialized
+[INFO] [1782871602.752936797] [tank_ros_bridge_node]: TANK_MODE=auto, COMMAND_TTL_SEC=5.0, AUTO_FALLBACK=stop
+[INFO] [1782871602.753162931] [tank_ros_bridge_node]: ROS2 command input: /tank/control/command
+============================================================
+Tank Challenge Flask Endpoint + ROS2 Bridge
+Mode: auto
+Listening: http://0.0.0.0:5000
+ROS2 command input: /tank/control/command
+Coordinate: raw=(x,y,z), map=(x,z,y)
+============================================================
+ * Serving Flask app 'ros_bridge.app_routes'
+ * Debug mode: off
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.0.32:5000
+Press CTRL+C to quit
+127.0.0.1 - - [01/Jul/2026 11:06:43] "GET /health HTTP/1.1" 200 -
+[INFO] [1782871606.988245627] [tank_ros_bridge_node]: episode control queued for next /info response: reset
+[INFO] [1782871608.576058781] [tank_ros_bridge_node]: episode control queued for next /info response: reset
+[INFO] [1782871610.693675325] [tank_ros_bridge_node]: episode control queued for next /info response: reset
+192.168.0.82 - - [01/Jul/2026 11:06:51] "POST /update_obstacle HTTP/1.1" 403 -
+192.168.0.82 - - [01/Jul/2026 11:06:51] "POST /update_obstacle HTTP/1.1" 403 -
+192.168.0.82 - - [01/Jul/2026 11:06:51] "GET /init HTTP/1.1" 403 -
+127.0.0.1 - - [01/Jul/2026 11:06:54] "GET /health HTTP/1.1" 200 -
+[INFO] [1782871619.078276697] [tank_ros_bridge_node]: control command updated: {'moveWS': {'command': 'STOP', 'weight': 1.0}, 'moveAD': {'command': '', 'weight': 0.0}, 'turretQE': {'command': '', 'weight': 0.0}, 'turretRF': {'command': '', 'weight': 0.0}, 'fire': False}
+[INFO] [1782871621.079747299] [tank_ros_bridge_node]: control command updated: {'moveWS': {'command': 'STOP', 'weight': 1.0}, 'moveAD': {'command': '', 'weight': 0.0}, 'turretQE': {'command': '', 'weight': 0.0}, 'turretRF': {'command': '', 'weight': 0.0}, 'fire': False}
+[INFO] [1782871623.177016546] [tank_ros_bridge_node]: control command updated: {'moveWS': {'command': 'STOP', 'weight': 1.0}, 'moveAD': {'command': '', 'weight': 0.0}, 'turretQE': {'command': '', 'weight': 0.0}, 'turretRF': {'command': '', 'weight': 0.0}, 'fire': False}
+[INFO] [1782871625.181557723] [tank_ros_bridge_node]: control command updated: {'moveWS': {'command': 'STOP', 'weight': 1.0}, 'moveAD': {'command': '', 'weight': 0.0}, 'turretQE': {'command': '', 'weight': 0.0}, 'turretRF': {'command': '', 'weight': 0.0}, 'fire': False}
+[INFO] [1782871627.186121774] [tank_ros_bridge_node]: control command updated: {'moveWS': {'command': 'STOP', 'weight': 1.0}, 'moveAD': {'command': '', 'weight': 0.0}, 'turretQE': {'command': '', 'weight': 0.0}, 'turretRF': {'command': '', 'weight': 0.0}, 'fire': False}
