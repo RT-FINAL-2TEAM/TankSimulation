@@ -118,6 +118,11 @@ class TeamPathControllerNode(Node):
         # 주행 명령과 합성해 simulator로 보낸다.
         self.declare_parameter("turret_override_topic", "/tank/turret/override")
         self.declare_parameter("turret_override_ttl_sec", 0.35)
+        # 사격 직후 다음 checkpoint/복귀 goal로 인계될 때, 기존 안전 브레이크나
+        # stuck-escape가 S(후진)를 내보내는 것을 잠시 막는다. 후진 대신 기존 경로의
+        # 전진 W를 저속으로 이어서 발사 직후에도 멈추지 않고 다음 사격지점으로 진행한다.
+        self.declare_parameter("post_fire_reverse_inhibit_sec", 8.0)
+        self.declare_parameter("post_fire_forward_resume_weight", 0.35)
         self.declare_parameter("heading_deadband_deg", HEADING_DEADBAND_DEG)
         self.declare_parameter("steering_full_error_deg", STEERING_FULL_ERROR_DEG)
         self.declare_parameter("min_ad_weight", MIN_AD_WEIGHT)
@@ -236,8 +241,19 @@ class TeamPathControllerNode(Node):
         self.mission_type = str(self.get_parameter("mission_type").value).lower()
         self.turret_override_topic = str(self.get_parameter("turret_override_topic").value)
         self.turret_override_ttl_sec = max(0.05, float(self.get_parameter("turret_override_ttl_sec").value))
+        self.post_fire_reverse_inhibit_sec = max(
+            0.0, float(self.get_parameter("post_fire_reverse_inhibit_sec").value)
+        )
+        self.post_fire_forward_resume_weight = clamp(
+            float(self.get_parameter("post_fire_forward_resume_weight").value), 0.05, 1.0
+        )
         self._turret_override: Optional[Dict[str, Any]] = None
         self._turret_override_stamp: float = -1e9
+        # ballistic_turret_node가 실제 발사/사후 복구 단계였는지 기록한다. 다음
+        # mission goal 변경에서만 reverse-inhibit를 시작하므로 일반 A* 재계획에는
+        # 영향이 없다.
+        self._post_fire_pending_goal_handoff: bool = False
+        self._post_fire_reverse_inhibit_until: float = 0.0
 
         # ── 정찰 전용 "지각 주도 관측" 소비 (mission_type==recon에서만) ──────────
         # local_path_node의 /tank/recon/observe_request(미분류 후보)를 받아
@@ -254,6 +270,21 @@ class TeamPathControllerNode(Node):
         self.declare_parameter("recon_turret_tol_deg", 6.0)         # |오차|<=tol 이면 on-target(응시)
         self.declare_parameter("recon_turret_max_weight", 0.9)
         self.declare_parameter("recon_turret_qe_sign", 1)           # Q/E 부호 — 라이브 검증 후 뒤집기 가능
+        # RECON_TURRET_DAMPED_TRACKING_V1: Q/E overshoot suppression.
+        # These do not alter observe_turret_max_bearing_deg or candidate eligibility.
+        self.declare_parameter("recon_turret_target_filter_alpha", 0.35)
+        self.declare_parameter("recon_turret_target_stale_sec", 1.0)
+        self.declare_parameter("recon_turret_brake_deg", 18.0)
+        self.declare_parameter("recon_turret_near_weight_ratio", 0.10)
+        self.declare_parameter("recon_turret_reverse_hold_sec", 0.18)
+        self.declare_parameter("recon_turret_reverse_hold_max_error_deg", 20.0)
+        # RECON_TURRET_HOME_ALIGN_V1: 미확정 후보가 없으면 포탑을 차체 진행방향으로 복귀.
+        # 후보가 한 프레임만 끊겼을 때 즉시 되돌아가 관측을 놓치지 않도록 짧은 delay를 둔다.
+        self.declare_parameter("recon_turret_home_when_clear", True)
+        self.declare_parameter("recon_turret_home_delay_sec", 0.25)
+        self.declare_parameter("recon_turret_home_tol_deg", 1.5)
+        self.declare_parameter("recon_turret_home_max_weight", 0.40)
+        self.declare_parameter("recon_turret_home_body_yaw_ttl_sec", 1.0)
         self.recon_observe_enabled = bool(self.get_parameter("recon_observe_enabled").value)
         self.recon_observe_stale_sec = float(self.get_parameter("recon_observe_stale_sec").value)
         self.recon_observe_ws_weight = float(self.get_parameter("recon_observe_ws_weight").value)
@@ -268,9 +299,46 @@ class TeamPathControllerNode(Node):
         self.recon_turret_tol_deg = float(self.get_parameter("recon_turret_tol_deg").value)
         self.recon_turret_max_weight = float(self.get_parameter("recon_turret_max_weight").value)
         self.recon_turret_qe_sign = 1 if int(self.get_parameter("recon_turret_qe_sign").value) >= 0 else -1
+        self.recon_turret_target_filter_alpha = clamp(
+            float(self.get_parameter("recon_turret_target_filter_alpha").value), 0.05, 1.0
+        )
+        self.recon_turret_target_stale_sec = max(
+            0.05, float(self.get_parameter("recon_turret_target_stale_sec").value)
+        )
+        self.recon_turret_brake_deg = max(
+            self.recon_turret_tol_deg + 0.1,
+            float(self.get_parameter("recon_turret_brake_deg").value),
+        )
+        self.recon_turret_near_weight_ratio = clamp(
+            float(self.get_parameter("recon_turret_near_weight_ratio").value), 0.01, 1.0
+        )
+        self.recon_turret_reverse_hold_sec = max(
+            0.0, float(self.get_parameter("recon_turret_reverse_hold_sec").value)
+        )
+        self.recon_turret_reverse_hold_max_error_deg = max(
+            self.recon_turret_tol_deg,
+            float(self.get_parameter("recon_turret_reverse_hold_max_error_deg").value),
+        )
+        self.recon_turret_home_when_clear = bool(self.get_parameter("recon_turret_home_when_clear").value)
+        self.recon_turret_home_delay_sec = max(0.0, float(self.get_parameter("recon_turret_home_delay_sec").value))
+        self.recon_turret_home_tol_deg = max(0.1, float(self.get_parameter("recon_turret_home_tol_deg").value))
+        self.recon_turret_home_max_weight = clamp(
+            float(self.get_parameter("recon_turret_home_max_weight").value), 0.05, 1.0
+        )
+        self.recon_turret_home_body_yaw_ttl_sec = max(
+            0.05, float(self.get_parameter("recon_turret_home_body_yaw_ttl_sec").value)
+        )
         self._observe_payload: Optional[Dict[str, Any]] = None
         self._observe_wall: float = 0.0
         self._turret_world_deg: Optional[float] = None
+        # Damped side-cluster tracking state.  Bearing is in world degrees.
+        self._recon_turret_target_world_deg: Optional[float] = None
+        self._recon_turret_target_wall: float = 0.0
+        self._recon_turret_last_cmd: str = ""
+        self._recon_turret_last_cmd_wall: float = -1e9
+        # Latest timestamps make body-follow safe: stale telemetry must never steer Q/E.
+        self._player_yaw_wall: float = 0.0
+        self._recon_last_pending_wall: float = 0.0
         self._recon_dwell_until: float = 0.0
         self._recon_dwell_cooldown_until: float = 0.0
         self._dwelled_spots: List[Tuple[float, float]] = []   # 이미 dwell(관측)한 지점들 — 재dwell 금지용
@@ -477,18 +545,65 @@ class TeamPathControllerNode(Node):
         except Exception:
             self.current_speed = 0.0
         body = data.get("body") if isinstance(data.get("body"), dict) else {}
-        try:
-            self.current_yaw = float(body.get("x") or 0.0)
-        except Exception:
-            pass
+        raw_body_yaw = body.get("x")
+        if raw_body_yaw is not None:
+            try:
+                self.current_yaw = float(raw_body_yaw)
+                self._player_yaw_wall = time.time()
+            except Exception:
+                pass
         try:
             self.current_sim_time = float(data.get("sim_time") or self.current_sim_time)
         except Exception:
             pass
 
     def goal_pose_cb(self, msg: PoseStamped) -> None:
-        self.goal_pos = (float(msg.pose.position.x), float(msg.pose.position.y))
+        """Accept a new planner/mission goal without inheriting a stale stuck timer.
+
+        A Scenario-2 firing checkpoint can intentionally hold the hull still for
+        much longer than ``stuck_check_period``.  When ballistic_turret_node
+        releases the first checkpoint and publishes the next one, retaining that
+        old baseline makes the first controller tick look stuck and emits an
+        immediate ``S`` escape command.  Treat each real goal change as a fresh
+        drive leg instead.
+        """
+        new_goal = (float(msg.pose.position.x), float(msg.pose.position.y))
+        goal_changed = self.goal_pos != new_goal
+        self.goal_pos = new_goal
         self.mission_complete = False
+
+        if goal_changed:
+            # Cancel any previous escape and give the new A* leg a full stuck
+            # observation window before reverse recovery is allowed.
+            self.is_escaping = False
+            self.escape_start_time = 0.0
+            self.last_stuck_check_pos = self.current_pos
+            self.last_stuck_check_yaw = self.current_yaw
+            self.last_stuck_check_time = (
+                self.current_sim_time if self.current_sim_time > 0.0 else time.time()
+            )
+
+            # A shot followed by barrel lowering/centering intentionally holds
+            # the hull still for several seconds.  On the first tick after the
+            # next checkpoint (or home) goal arrives, three independent
+            # controller paths used to be able to emit S: stuck escape,
+            # hard-turn overspeed braking, and danger-obstacle braking.  Do not
+            # let those generic recovery brakes reverse the tank immediately
+            # after firing; STOP is still allowed and normal W resumes as soon
+            # as the heading/path is ready.
+            if self._post_fire_pending_goal_handoff:
+                self._post_fire_reverse_inhibit_until = (
+                    time.monotonic() + self.post_fire_reverse_inhibit_sec
+                )
+                self._post_fire_pending_goal_handoff = False
+                self.get_logger().info(
+                    f"Post-fire goal handoff: reverse inhibited for "
+                    f"{self.post_fire_reverse_inhibit_sec:.1f}s"
+                )
+            self.get_logger().info(
+                f"Goal updated: ({new_goal[0]:.1f},{new_goal[1]:.1f}); "
+                "stuck-escape baseline reset"
+            )
 
     def lookahead_cb(self, msg: PoseStamped) -> None:
         self.lookahead_target = (float(msg.pose.position.x), float(msg.pose.position.y))
@@ -513,8 +628,107 @@ class TeamPathControllerNode(Node):
             return
         if not isinstance(payload, dict):
             return
+
+        # Remember that the next actual mission-goal change is a post-shot
+        # handoff.  Using the producer phase as well as ``fire`` covers cases
+        # where the fire pulse has already ended but the gun is still lowering
+        # or centering before the next checkpoint is released.
+        status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
+        phase = str(status.get("phase", "")).strip().lower()
+        if bool(payload.get("fire", False)) or phase in {
+            "firing", "hit", "miss", "impact_timeout", "lowering_barrel", "centering_turret",
+        }:
+            self._post_fire_pending_goal_handoff = True
+
         self._turret_override = payload
         self._turret_override_stamp = time.monotonic()
+
+    def _post_fire_reverse_inhibit_active(self) -> bool:
+        """Whether a recently completed shot temporarily forbids ``S``.
+
+        This is deliberately a short post-shot handoff guard, not a permanent
+        prohibition: normal stuck recovery becomes available again after the
+        next drive leg has had time to start.
+        """
+        return time.monotonic() < self._post_fire_reverse_inhibit_until
+
+    def _post_fire_reverse_inhibit_status(self) -> Dict[str, Any]:
+        remaining = max(0.0, self._post_fire_reverse_inhibit_until - time.monotonic())
+        return {
+            "active": remaining > 0.0,
+            "remaining_sec": round(remaining, 3),
+            "pending_goal_handoff": self._post_fire_pending_goal_handoff,
+        }
+
+    def apply_post_fire_reverse_inhibit(
+        self,
+        cmd_ws: str,
+        w_ws: float,
+        speed_mode: str,
+        nominal_cmd_ws: str,
+        nominal_w_ws: float,
+        nominal_speed_mode: str,
+    ) -> Tuple[str, float, str, Dict[str, Any]]:
+        """Replace a post-shot S brake with the normal forward path command.
+
+        The nominal command is captured before the overspeed brake layer.  Thus
+        a temporary S generated only as a brake becomes a low-speed W, while a
+        genuine stop-pivot/APF STOP remains a STOP instead of forcing the hull
+        into an obstacle or an unfinished sharp turn.
+        """
+        status = self._post_fire_reverse_inhibit_status()
+        status.update({
+            "cmd_before": cmd_ws,
+            "w_before": float(w_ws),
+            "nominal_cmd": nominal_cmd_ws,
+            "nominal_w": float(nominal_w_ws),
+        })
+        if cmd_ws != "S" or not status["active"]:
+            status.update({"applied": False, "cmd_after": cmd_ws, "w_after": float(w_ws)})
+            return cmd_ws, w_ws, speed_mode, status
+
+        # The command immediately before the braking layer already includes
+        # normal steering, APF and safety speed limits.  Continue that forward
+        # command gently instead of stopping or reversing after a shot.
+        if nominal_cmd_ws == "W":
+            resumed_w = min(
+                clamp(float(nominal_w_ws), 0.0, 1.0),
+                self.post_fire_forward_resume_weight,
+            )
+            resumed_w = max(0.05, resumed_w)
+            status.update({
+                "applied": True,
+                "reason": "post_fire_forward_resume",
+                "cmd_after": "W",
+                "w_after": float(resumed_w),
+                "resume_cap": float(self.post_fire_forward_resume_weight),
+            })
+            return "W", resumed_w, f"{nominal_speed_mode}|post_fire_forward_resume", status
+
+        # A real STOP from APF/sharp-turn logic is not a reverse brake.  Keep it
+        # so the tank does not force itself through a blocked or turning state.
+        status.update({
+            "applied": True,
+            "reason": "post_fire_preserve_nominal_stop",
+            "cmd_after": nominal_cmd_ws,
+            "w_after": float(nominal_w_ws),
+        })
+        return nominal_cmd_ws, nominal_w_ws, f"{nominal_speed_mode}|post_fire_preserve_nominal_stop", status
+
+    def _turret_hold_motion_active(self) -> bool:
+        """Return True while a fresh ballistic override intentionally holds motion.
+
+        ``ballistic_turret_node`` publishes this during checkpoint settling,
+        aim/fire, barrel lowering, and turret centering.  It is an intentional
+        stationary state, never a condition for the controller's stuck escape.
+        """
+        # scenario2_turret_hold_stuck_guard_v1
+        override = self._turret_override
+        if not isinstance(override, dict):
+            return False
+        if time.monotonic() - self._turret_override_stamp > self.turret_override_ttl_sec:
+            return False
+        return bool(override.get("active", False)) and bool(override.get("hold_motion", False))
 
     def safety_status_cb(self, msg: String) -> None:
         try:
@@ -1355,6 +1569,30 @@ class TeamPathControllerNode(Node):
     def escape_command_if_needed(self, target: Optional[Tuple[float, float]] = None) -> Optional[Tuple[Dict[str, Any], str]]:
         if not self.enable_stuck_escape or self.current_pos is None:
             return None
+        # scenario2_turret_hold_stuck_guard_v1
+        # The ballistic node deliberately stops at intermediate checkpoints.
+        # Reset the escape baseline every control tick during that fresh hold,
+        # so the first post-shot drive tick starts with a clean movement window
+        # rather than immediately issuing S / escape_start_reverse.
+        if self._turret_hold_motion_active():
+            t = self.current_sim_time if self.current_sim_time > 0.0 else time.time()
+            self.is_escaping = False
+            self.escape_start_time = 0.0
+            self.last_stuck_check_pos = self.current_pos
+            self.last_stuck_check_yaw = self.current_yaw
+            self.last_stuck_check_time = t
+            return None
+        # During the first drive leg after a shot, never enter/continue the
+        # reverse escape sequence.  Reset its baseline instead so the normal
+        # stuck detector gets a fresh full observation period.
+        if self._post_fire_reverse_inhibit_active():
+            t = self.current_sim_time if self.current_sim_time > 0.0 else time.time()
+            self.is_escaping = False
+            self.escape_start_time = 0.0
+            self.last_stuck_check_pos = self.current_pos
+            self.last_stuck_check_yaw = self.current_yaw
+            self.last_stuck_check_time = t
+            return None
         # Goal/checkpoint에서의 STOP은 의도된 대기다. 이를 stuck으로 오인해
         # 후진하면 포탑 조준 중 차체가 흔들리고, 사격 뒤 복귀 goal도 망가진다.
         if self.goal_pos is not None and get_distance(self.current_pos, self.goal_pos) < self._effective_goal_stop_distance():
@@ -1434,24 +1672,97 @@ class TeamPathControllerNode(Node):
         r2 = self.recon_dwell_spot_radius_m ** 2
         return any((cx - sx) ** 2 + (cy - sy) ** 2 <= r2 for sx, sy in self._dwelled_spots)
 
+    def _recon_turret_home_action(self, now: float) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Return Q/E input that aligns turret world yaw to the hull world yaw.
+
+        This is deliberately a turret-only action.  It never changes W/S or
+        A/D, so normal A* driving continues while the gun returns forward.
+        """
+        empty = {"command": "", "weight": 0.0}
+        if not self.recon_turret_home_when_clear:
+            return empty, {"active": False, "reason": "disabled"}
+        if self._turret_world_deg is None:
+            return empty, {"active": False, "reason": "no_turret_feedback"}
+        yaw_age = now - self._player_yaw_wall
+        if self._player_yaw_wall <= 0.0 or yaw_age > self.recon_turret_home_body_yaw_ttl_sec:
+            return empty, {
+                "active": False,
+                "reason": "body_yaw_stale",
+                "body_yaw_age_sec": round(max(0.0, yaw_age), 3),
+            }
+
+        desired_world_deg = float(self.current_yaw)
+        current_world_deg = float(self._turret_world_deg)
+        err = self._normalize_180(desired_world_deg - current_world_deg)
+        base = {
+            "active": True,
+            "desired_world_deg": round(desired_world_deg, 1),
+            "current_world_deg": round(current_world_deg, 1),
+            "err_deg": round(err, 1),
+            "tol_deg": self.recon_turret_home_tol_deg,
+        }
+        if abs(err) <= self.recon_turret_home_tol_deg:
+            base["on_target"] = True
+            return empty, base
+
+        direction = "E" if (err * self.recon_turret_qe_sign) > 0.0 else "Q"
+        # Near center, reduce Q/E strength so the gun does not oscillate around body heading.
+        weight = clamp(abs(err) / 25.0, 0.16, 1.0) * self.recon_turret_home_max_weight
+        base.update({"cmd": direction, "weight": round(weight, 2)})
+        return {"command": direction, "weight": float(weight)}, base
+
     def apply_recon_observation(
         self, cmd_ws: str, w_ws: float, speed_mode: str
     ) -> Tuple[str, float, str, Dict[str, Any], Dict[str, Any]]:
-        """정찰 전용: observe_request(미분류 후보) 기반 ②감속/dwell + ③포탑 step-stare.
-        경로/조향은 안 건드리고 속도(W)와 turret만 만진다. 반환:
-        (cmd_ws, w_ws, speed_mode, turret_qe, status)."""
+        """Recon observation with clear-sector turret-to-hull alignment.
+
+        Pending LiDAR clusters keep the existing observation behavior.  Only
+        after there are no pending candidates for ``home_delay_sec`` does the
+        turret return to body heading.  Movement remains under the normal
+        path controller throughout.
+        """
         turret_qe = {"command": "", "weight": 0.0}
         status: Dict[str, Any] = {"active": False}
         if not self.recon_observe_enabled:
             return cmd_ws, w_ws, speed_mode, turret_qe, status
+
         payload = self._observe_payload
         now = time.time()
-        if not isinstance(payload, dict) or (now - self._observe_wall) > self.recon_observe_stale_sec:
+        payload_fresh = isinstance(payload, dict) and (now - self._observe_wall) <= self.recon_observe_stale_sec
+
+        # No valid candidate stream means "clear" only after the short debounce.
+        # It prevents a single dropped observation message from pulling the camera away
+        # while a cluster is still being fused.
+        if not payload_fresh:
+            clear_age = now - self._recon_last_pending_wall
+            status = {
+                "active": True,
+                "mode": "turret_home" if clear_age >= self.recon_turret_home_delay_sec else "waiting_clear_debounce",
+                "observe_payload": "missing_or_stale",
+                "clear_age_sec": round(max(0.0, clear_age), 3),
+            }
+            if clear_age >= self.recon_turret_home_delay_sec:
+                turret_qe, home = self._recon_turret_home_action(now)
+                status["turret_home"] = home
             return cmd_ws, w_ws, speed_mode, turret_qe, status
+
         has_fov = bool(payload.get("has_pending_fov"))
         has_side = bool(payload.get("has_pending_side"))
         cands = payload.get("candidates") or []
-        status = {"active": True, "has_pending_fov": has_fov, "has_pending_side": has_side}
+        try:
+            candidate_count = max(0, int(payload.get("count", len(cands))))
+        except (TypeError, ValueError):
+            candidate_count = len(cands)
+        has_pending = bool(candidate_count or cands or has_fov or has_side)
+        if has_pending:
+            self._recon_last_pending_wall = now
+
+        status = {
+            "active": True,
+            "candidate_count": candidate_count,
+            "has_pending_fov": has_fov,
+            "has_pending_side": has_side,
+        }
 
         # ② 전방 미분류 후보 → 감속(깨끗한 프레임), 고우선·근접이면 잠깐 정지(dwell).
         if has_fov:
@@ -1459,7 +1770,7 @@ class TeamPathControllerNode(Node):
             best = max(fov_cands, key=lambda c: c.get("priority", 0.0)) if fov_cands else None
             dwelling = now < self._recon_dwell_until
             if (best is not None and not dwelling and now >= self._recon_dwell_cooldown_until
-                    and not self._near_dwelled_spot()           # 같은 지점 재dwell 금지 — 장애물 앞 무한 dwell 데드락 방지
+                    and not self._near_dwelled_spot()
                     and float(best.get("priority", 0.0)) >= self.recon_dwell_priority
                     and float(best.get("distance_m", 1e9)) <= self.recon_dwell_distance_m):
                 self._recon_dwell_until = now + self.recon_dwell_sec
@@ -1478,24 +1789,126 @@ class TeamPathControllerNode(Node):
                     speed_mode = f"{speed_mode}|recon_observe_slow"
                     status["mode"] = "slow"
 
-        # ③ 전방이 비었을 때만(전방 우선) 옆(전방-대각) 미분류 후보로 포탑을 폐루프로 돌려 응시.
+        # ③ Existing side-candidate fusion observation: a pending cluster has
+        # priority over homing, so the turret never returns while it is needed.
+        # RECON_TURRET_DAMPED_TRACKING_V1: keep the full observation bearing
+        # range, but stop noisy LiDAR centroid updates and actuator inertia from
+        # causing rapid Q/E/Q/E reversals around the candidate direction.
         if self.recon_turret_enable and has_side and not has_fov:
-            g = payload.get("best_side_bearing_global_deg")
-            if g is not None and self._turret_world_deg is not None:
-                err = self._normalize_180(float(g) - float(self._turret_world_deg))
-                tw = round(float(self._turret_world_deg), 1)
-                if abs(err) > self.recon_turret_tol_deg:
-                    direction = "E" if (err * self.recon_turret_qe_sign) > 0 else "Q"
-                    w = clamp(abs(err) / 30.0, 0.2, 1.0) * self.recon_turret_max_weight
-                    turret_qe = {"command": direction, "weight": float(w)}
-                    # 포탑이 슬루 중이면 차체 감속 — 포탑이 따라잡기 전에 후보가 뒤로 빠지지 않게(능동지각엔 시간 필요).
-                    if cmd_ws == "W" and w_ws > self.recon_observe_ws_weight:
-                        w_ws = self.recon_observe_ws_weight
-                        speed_mode = f"{speed_mode}|recon_turret_pursue_slow"
-                        status["mode"] = status.get("mode") or "turret_slow"
-                    status["turret"] = {"err_deg": round(err, 1), "cmd": direction, "w": round(w, 2), "world_deg": tw}
+            raw_target_world_deg = payload.get("best_side_bearing_global_deg")
+            if raw_target_world_deg is not None and self._turret_world_deg is not None:
+                raw_target_world_deg = float(raw_target_world_deg)
+
+                # The selected cluster can move a few degrees between DBSCAN frames
+                # (or briefly swap priority with a nearby cluster).  Circular low-pass
+                # filtering preserves the eventual target/range but removes command jitter.
+                target_age = now - self._recon_turret_target_wall
+                if (
+                    self._recon_turret_target_world_deg is None
+                    or target_age > self.recon_turret_target_stale_sec
+                ):
+                    filtered_target_world_deg = raw_target_world_deg
                 else:
-                    status["turret"] = {"on_target": True, "err_deg": round(err, 1), "world_deg": tw}
+                    target_delta = self._normalize_180(
+                        raw_target_world_deg - self._recon_turret_target_world_deg
+                    )
+                    filtered_target_world_deg = self._normalize_180(
+                        self._recon_turret_target_world_deg
+                        + self.recon_turret_target_filter_alpha * target_delta
+                    )
+                self._recon_turret_target_world_deg = filtered_target_world_deg
+                self._recon_turret_target_wall = now
+
+                err = self._normalize_180(
+                    filtered_target_world_deg - float(self._turret_world_deg)
+                )
+                abs_err = abs(err)
+                tw = round(float(self._turret_world_deg), 1)
+                turret_status = {
+                    "raw_target_world_deg": round(raw_target_world_deg, 1),
+                    "filtered_target_world_deg": round(filtered_target_world_deg, 1),
+                    "filter_alpha": self.recon_turret_target_filter_alpha,
+                    "err_deg": round(err, 1),
+                    "world_deg": tw,
+                    "tol_deg": self.recon_turret_tol_deg,
+                    "brake_deg": self.recon_turret_brake_deg,
+                }
+
+                if abs_err > self.recon_turret_tol_deg:
+                    direction = "E" if (err * self.recon_turret_qe_sign) > 0.0 else "Q"
+
+                    # Keep full speed for a large slew.  Inside brake_deg, however,
+                    # square-law tapering cuts the input before the turret reaches the
+                    # target, so physical inertia does not produce a large overshoot.
+                    ramp_span = max(0.1, self.recon_turret_brake_deg - self.recon_turret_tol_deg)
+                    ramp = clamp((abs_err - self.recon_turret_tol_deg) / ramp_span, 0.0, 1.0)
+                    weight_ratio = self.recon_turret_near_weight_ratio + (
+                        1.0 - self.recon_turret_near_weight_ratio
+                    ) * ramp * ramp
+                    weight = clamp(
+                        self.recon_turret_max_weight * weight_ratio,
+                        0.0,
+                        self.recon_turret_max_weight,
+                    )
+
+                    # A brief neutral coast on a near-target sign flip prevents Q/E
+                    # chatter.  It only applies near the target; a genuine large
+                    # target change can still immediately command the other direction.
+                    reverse_hold = (
+                        bool(self._recon_turret_last_cmd)
+                        and direction != self._recon_turret_last_cmd
+                        and (now - self._recon_turret_last_cmd_wall)
+                        < self.recon_turret_reverse_hold_sec
+                        and abs_err <= self.recon_turret_reverse_hold_max_error_deg
+                    )
+                    if reverse_hold:
+                        turret_status.update({
+                            "cmd": "",
+                            "weight": 0.0,
+                            "mode": "reverse_coast",
+                            "last_cmd": self._recon_turret_last_cmd,
+                            "reverse_hold_remaining_sec": round(max(
+                                0.0,
+                                self.recon_turret_reverse_hold_sec
+                                - (now - self._recon_turret_last_cmd_wall),
+                            ), 3),
+                        })
+                    else:
+                        turret_qe = {"command": direction, "weight": float(weight)}
+                        self._recon_turret_last_cmd = direction
+                        self._recon_turret_last_cmd_wall = now
+                        turret_status.update({
+                            "cmd": direction,
+                            "weight": round(weight, 2),
+                            "mode": "damped_track",
+                        })
+
+                        # Slow the hull only while actively slewing to a candidate.
+                        if cmd_ws == "W" and w_ws > self.recon_observe_ws_weight:
+                            w_ws = self.recon_observe_ws_weight
+                            speed_mode = f"{speed_mode}|recon_turret_pursue_slow"
+                            status["mode"] = status.get("mode") or "turret_slow"
+                    status["turret"] = turret_status
+                else:
+                    # Within the existing tolerance band: no Q/E.  The band itself
+                    # is unchanged; this patch only changes how we approach it.
+                    turret_status.update({"on_target": True, "mode": "within_existing_tolerance"})
+                    status["turret"] = turret_status
+        # When no cluster remains, return the turret to hull heading.  Do not
+        # home during an already-started dwell: that dwell is deliberately held
+        # to obtain a clean fusion frame even if one input frame disappears.
+        if not has_pending:
+            if self._recon_dwell_until and now >= self._recon_dwell_until:
+                self._recon_dwell_cooldown_until = now + self.recon_dwell_cooldown_sec
+                self._recon_dwell_until = 0.0
+            clear_age = now - self._recon_last_pending_wall
+            status["clear_age_sec"] = round(max(0.0, clear_age), 3)
+            if now >= self._recon_dwell_until and clear_age >= self.recon_turret_home_delay_sec:
+                turret_qe, home = self._recon_turret_home_action(now)
+                status["mode"] = "turret_home"
+                status["turret_home"] = home
+            else:
+                status["mode"] = "waiting_clear_debounce"
         return cmd_ws, w_ws, speed_mode, turret_qe, status
 
     def make_action(self, cmd_ws: str, w_ws: float, cmd_ad: str, w_ad: float) -> Dict[str, Any]:
@@ -1658,11 +2071,22 @@ class TeamPathControllerNode(Node):
             speed_mode = f"{speed_mode}|safety_{safety_mode}"
             safety_clamped = True
 
+        # Retain the normal path command before the brake layer.  When a
+        # post-shot guard suppresses an S brake, this is the command we resume.
+        nominal_cmd_ws, nominal_w_ws, nominal_speed_mode = cmd_ws, w_ws, speed_mode
         cmd_ws, w_ws, speed_mode, turn_overspeed_guard_status = self.apply_turn_overspeed_guard(
             cmd_ws, w_ws, yaw_error, speed_mode, safety_mode, apf_vector_control
         )
         # planner 곡선/감속 profile은 최종 W 상한으로만 적용한다. 안전/APF STOP은 항상 우선한다.
         cmd_ws, w_ws, speed_mode, planner_profile_status = self.apply_planner_speed_profile(cmd_ws, w_ws, speed_mode)
+        # ``escape_command_if_needed`` runs before this section, but the
+        # overspeed/danger brake can independently choose S later in the same
+        # tick.  During the post-shot handoff, resume the normal forward path
+        # command at a limited weight instead of converting that S to STOP.
+        cmd_ws, w_ws, speed_mode, post_fire_reverse_inhibit_status = self.apply_post_fire_reverse_inhibit(
+            cmd_ws, w_ws, speed_mode,
+            nominal_cmd_ws, nominal_w_ws, nominal_speed_mode,
+        )
         # 정찰 전용: 미분류 후보 관측을 위한 ②감속/dwell + ③포탑 step-stare (recon에서만, 마지막에 적용).
         recon_turret_qe: Dict[str, Any] = {"command": "", "weight": 0.0}
         recon_obs_status: Dict[str, Any] = {"active": False}
@@ -1726,6 +2150,7 @@ class TeamPathControllerNode(Node):
                 "steering_direction_lock": steering_lock_status,
                 "ad_oscillation_guard": ad_oscillation_status,
                 "turn_overspeed_guard": turn_overspeed_guard_status,
+                "post_fire_reverse_inhibit": post_fire_reverse_inhibit_status,
                 "target_guard": self.target_guard_status,
             },
             "turret_override": turret_override_status,

@@ -127,26 +127,30 @@ def generate_launch_description():
                     '"checkpoint_settle_sec":0.8,'
                     '"target":{"x":50.0,"y":285.0,"z":8.5},'
                     '"target_from_enemy_pose":false,'
-                    '"target_height_offset_m":0.0'
+                    '"target_height_offset_m":0.0,'
+                    '"reposition":{"enabled":true,"fallback_goals":[{"x":55.0,"y":230.0}],"arrival_radius_m":3.0,"min_travel_m":2.0,"timeout_sec":45.0,"max_attempts":1}'
                     '},{'
                     '"id":"enemy_final",'
                     '"checkpoint":{"x":50.0,"y":260.0,"radius_m":10.0},'
                     '"checkpoint_settle_sec":0.8,'
                     '"target":{"x":135.46,"y":276.87,"z":0.0},'
                     '"target_from_enemy_pose":true,'
-                    '"target_height_offset_m":0.0'
+                    '"target_height_offset_m":0.0,'
+                    '"reposition":{"enabled":true,"heading_deg":0.0,"goal_offset_m":16.0,"min_travel_m":3.0,"arrival_radius_m":10.5,"max_attempts":2}'
                     '}]'
                 ),
-                # Dataset-based ballistic and turret-feedback convention.
+                # SCENARIO2_FIXED_FALLBACK_55_230: enemy_mid fixed fallback is (55, 230); no north-offset fallback.
+        # Dataset-based ballistic and turret-feedback convention.
                 "ballistic_k": 0.001520,
                 "muzzle_height_m": 3.199,
                 # Convert the world ballistic arc into hull-relative turret
                 # yaw/pitch using playerBodyX/Y/Z (yaw/pitch/roll).  This is
                 # essential when the hull is side-tilted on Scenario-2 terrain.
-                "use_body_attitude_compensation": False,
+                "use_body_attitude_compensation": True,
                 "body_pitch_sign": 1.0,
                 "body_roll_sign": 1.0,
                 "turret_yaw_feedback_is_world": True,
+                "turret_pitch_feedback_is_world": True,
                 "muzzle_offset_right_m": 0.0,
                 "muzzle_offset_forward_m": 0.0,
                 "body_attitude_ttl_sec": 1.0,
@@ -156,12 +160,14 @@ def generate_launch_description():
                 "max_range_m": 130.0,
                 "fire_pulse_sec": 0.35,
                 "impact_timeout_sec": 8.0,
-                # Stable deadband closes the Q/E and R/F loop before every shot.
-                "yaw_tolerance_deg": 1.6,
+                # Q/E를 기존보다 더 촘촘히 맞춘 뒤 사격한다.  1.0도 이하는
+                # Q/E 입력을 멈추고, 해당 범위를 0.60초 유지해야 발사한다.
+                "yaw_tolerance_deg": 1.0,
                 "pitch_tolerance_deg": 0.75,
-                "yaw_control_deadband_deg": 1.6,
+                "yaw_control_deadband_deg": 1.0,
                 "pitch_control_deadband_deg": 0.75,
-                "aim_stable_sec": 0.45,
+                "yaw_weight_max": 0.42,
+                "aim_stable_sec": 0.60,
                 "turret_feedback_ttl_sec": 0.75,
                 "on_target_cycles": 1,
                 # F is held down after *each* target so the next drive leg has
@@ -169,6 +175,15 @@ def generate_launch_description():
                 "lower_barrel_after_engagement": True,
                 "lower_barrel_target_deg": -5.0,
                 "lower_barrel_weight": 1.0,
+                "center_turret_tolerance_deg": 1.0,
+                # At a slope-induced pitch limit, request a short direct A*
+                # reposition instead of repeatedly pressing F/R at the stop.
+                "reposition_on_unreachable_pitch": True,
+                "reposition_goal_offset_m": 16.0,
+                "reposition_min_travel_m": 3.0,
+                "reposition_arrival_radius_m": 10.5,
+                "reposition_timeout_sec": 35.0,
+                "reposition_max_attempts": 2,
                 # Only after engagement 2 is complete does the node issue home.
                 "return_enabled": True,
                 "return_x": 59.0,

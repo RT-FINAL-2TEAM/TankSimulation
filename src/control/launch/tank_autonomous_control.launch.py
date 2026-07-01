@@ -197,6 +197,10 @@ def generate_launch_description():
                 # DBSCAN cluster bboxes are used when dynamic replanning is enabled.
                 "use_lidar_cluster_bboxes": True,
                 "lidar_cluster_bbox_margin": 1.0,
+                # 이미 scenario2 합본맵/확정 퓨전에 있는 장애물과 겹친
+                # DBSCAN cluster는 임시 LiDAR 반경으로 중복 inflate하지 않는다.
+                "suppress_lidar_clusters_matching_persistent_map": True,
+                "lidar_cluster_persistent_match_margin_m": 2.0,
                 # 한 번 잡힌 LiDAR cluster는 TTL 동안 A* costmap에는 유지하되, 재계획 trigger로는 쓰지 않는다.
                 "enable_lidar_cluster_memory": True,
                 "lidar_cluster_memory_ttl_sec": 18.0,
@@ -207,7 +211,7 @@ def generate_launch_description():
                 # detected_points_map history/discovered는 A* costmap에는 반영하지만, 반복 replan trigger에서는 제외한다.
                 # 현재 보이는 LiDAR cluster만 경로 차단 트리거로 쓰는 쪽이 route 흔들림이 적다.
                 "use_lidar_memory_for_path_block": False,
-                "use_discovered_objects_for_path_block": False,
+                "use_discovered_objects_for_path_block": True,
                 # Dynamic replan이 체크포인트 진행 상태를 뒤로 되돌려 lookahead가 반대편으로 튀는 것을 막는다.
                 "route_index_never_decrease": True,
                 "dynamic_replan_keep_route_index": True,
@@ -464,6 +468,10 @@ def generate_launch_description():
                 "stuck_min_movement": 1.5,
                 "escape_reverse_sec": 1.5,
                 "escape_turn_sec": 1.5,
+                # 발사 뒤 다음 사격지점/복귀 goal로 넘어가는 첫 주행 구간에서는
+                # S 후진 대신 기존 경로의 W를 저속으로 이어간다.
+                "post_fire_reverse_inhibit_sec": 8.0,
+                "post_fire_forward_resume_weight": 0.35,
             }],
         ),
     ])

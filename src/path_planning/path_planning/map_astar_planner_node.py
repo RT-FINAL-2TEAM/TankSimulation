@@ -447,6 +447,31 @@ def bbox_center_distance(a: Dict[str, float], b: Dict[str, float]) -> float:
     return math.hypot(ax - bx, ay - by)
 
 
+def bboxes_overlap_with_margin(
+    a: Dict[str, float],
+    b: Dict[str, float],
+    margin: float = 0.0,
+) -> bool:
+    """Return whether two map-plane A* bboxes overlap after a small gate.
+
+    This is used for identity/de-duplication only, not for collision inflation.
+    Keeping it separate prevents a confirmed fused map object from being
+    replaced by a much larger temporary LiDAR-cluster avoidance radius.
+    """
+    try:
+        ax0 = float(a["x_min"]) - margin
+        ax1 = float(a["x_max"]) + margin
+        ay0 = float(a["z_min"]) - margin
+        ay1 = float(a["z_max"]) + margin
+        bx0 = float(b["x_min"])
+        bx1 = float(b["x_max"])
+        by0 = float(b["z_min"])
+        by1 = float(b["z_max"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return ax0 <= bx1 and ax1 >= bx0 and ay0 <= by1 and ay1 >= by0
+
+
 def bbox_copy_as_memory(bbox: Dict[str, float], now: float, *, hits: int = 1) -> Dict[str, float]:
     cx, cy = bbox_center(bbox)
     copied = {
@@ -593,6 +618,11 @@ class TeamDynamicAStarPlannerNode(Node):
         # launch-defined checkpoint goal.  Dedicated mission goals still work.
         self.declare_parameter("accept_external_goal_updates", True)
         self.declare_parameter("mission_goal_pose_topic", "/tank/mission/goal_pose")
+        # A turret pitch-limit reposition is a temporary direct goal.  It must
+        # not be forced through the next engagement checkpoint waypoint.
+        self.declare_parameter("reposition_goal_pose_topic", "/tank/mission/reposition_goal")
+        # SCENARIO2_FIXED_FALLBACK_55_230: short gun-angle moves must not inherit the 10 m route goal tolerance.
+        self.declare_parameter("reposition_goal_tolerance_m", 3.0)
         self.declare_parameter("max_expansions", MAX_EXPANSIONS)
         self.declare_parameter("use_route_waypoints", USE_ROUTE_WAYPOINTS)
         self.declare_parameter("route_map_name", ROUTE_MAP_NAME)
@@ -606,6 +636,11 @@ class TeamDynamicAStarPlannerNode(Node):
         self.declare_parameter("terrain_weight", TERRAIN_WEIGHT)
         self.declare_parameter("use_lidar_cluster_bboxes", USE_LIDAR_CLUSTER_BBOXES)
         self.declare_parameter("lidar_cluster_bbox_margin", LIDAR_CLUSTER_BBOX_MARGIN)
+        # If a LiDAR cluster overlaps an obstacle that is already confirmed in
+        # the static/fused map, retain the map object's own radius/inflation and
+        # suppress only the duplicate temporary cluster layer.
+        self.declare_parameter("suppress_lidar_clusters_matching_persistent_map", True)
+        self.declare_parameter("lidar_cluster_persistent_match_margin_m", 2.0)
         # 데이터셋 기반 차량 운동 제약. 경로가 통과 가능한 원호일 때만 적용한다.
         self.declare_parameter("minimum_turn_radius_m", MINIMUM_TURN_RADIUS_M)
         self.declare_parameter("turn_arc_sample_step_m", TURN_ARC_SAMPLE_STEP_M)
@@ -692,6 +727,12 @@ class TeamDynamicAStarPlannerNode(Node):
         self.mission_goal_pose_topic = str(
             self.get_parameter("mission_goal_pose_topic").value
         )
+        self.reposition_goal_pose_topic = str(
+            self.get_parameter("reposition_goal_pose_topic").value
+        )
+        self.reposition_goal_tolerance_m = max(
+            0.5, float(self.get_parameter("reposition_goal_tolerance_m").value)
+        )
         self.max_expansions = int(self.get_parameter("max_expansions").value)
         self.use_route_waypoints = bool(self.get_parameter("use_route_waypoints").value)
         self.route_map_name = str(self.get_parameter("route_map_name").value)
@@ -714,6 +755,12 @@ class TeamDynamicAStarPlannerNode(Node):
         self.terrain_weight = float(self.get_parameter("terrain_weight").value)
         self.use_lidar_cluster_bboxes = bool(self.get_parameter("use_lidar_cluster_bboxes").value)
         self.lidar_cluster_bbox_margin = float(self.get_parameter("lidar_cluster_bbox_margin").value)
+        self.suppress_lidar_clusters_matching_persistent_map = bool(
+            self.get_parameter("suppress_lidar_clusters_matching_persistent_map").value
+        )
+        self.lidar_cluster_persistent_match_margin_m = max(0.0, float(
+            self.get_parameter("lidar_cluster_persistent_match_margin_m").value
+        ))
         self.minimum_turn_radius_m = max(0.0, float(self.get_parameter("minimum_turn_radius_m").value))
         self.turn_arc_sample_step_m = max(0.15, float(self.get_parameter("turn_arc_sample_step_m").value))
         self.brake_distance_m = max(0.0, float(self.get_parameter("brake_distance_m").value))
@@ -776,8 +823,14 @@ class TeamDynamicAStarPlannerNode(Node):
         if bool(self.get_parameter("default_goal_enabled").value):
             self.goal_pos = (float(self.get_parameter("default_goal_x").value), float(self.get_parameter("default_goal_y").value))
         self.gt_obstacles: List[Dict[str, float]] = []
+        self.temporary_direct_goal_active = False
         self.lidar_obstacles = LidarObstacleMemory()
+        # Raw DBSCAN boxes remain available for RViz/debug.  The filtered list
+        # is the only one allowed to influence A* and path-block replanning.
         self.latest_cluster_bboxes: List[Dict[str, float]] = []
+        self.latest_plannable_cluster_bboxes: List[Dict[str, float]] = []
+        self.latest_cluster_suppressed_count = 0
+        self.latest_cluster_suppressed_sources: Dict[str, int] = {}
         self.latest_cluster_count = 0
         self.lidar_cluster_memory: List[Dict[str, float]] = []
         self.lidar_cluster_memory_last_prune_wall = -1e9
@@ -843,6 +896,9 @@ class TeamDynamicAStarPlannerNode(Node):
         self.create_subscription(
             PoseStamped, self.mission_goal_pose_topic, self.mission_goal_pose_cb, 10
         )
+        self.create_subscription(
+            PoseStamped, self.reposition_goal_pose_topic, self.reposition_goal_pose_cb, 10
+        )
         self.create_subscription(String, TOPIC_MAP_OBSTACLES, self.obstacles_cb, 10)
         self.create_subscription(PointCloud2, TOPIC_LIDAR_DETECTED_MAP, self.lidar_cb, 10)
         self.create_subscription(String, TOPIC_LIDAR_CLUSTERS, self.lidar_clusters_cb, 10)
@@ -863,7 +919,8 @@ class TeamDynamicAStarPlannerNode(Node):
             f"static_inflate={self.static_obstacle_inflate}, "
             f"discovered_astar={self.use_discovered_objects_for_astar}, "
             f"route_lock={self.route_commit_lock_sec}s, route_index_never_decrease={self.route_index_never_decrease}, "
-            f"lidar_memory_block_trigger={self.use_lidar_memory_for_path_block}"
+            f"lidar_memory_block_trigger={self.use_lidar_memory_for_path_block}, "
+            f"dedupe_lidar_vs_persistent_map={self.suppress_lidar_clusters_matching_persistent_map}"
         )
 
     def wall_time(self) -> float:
@@ -888,7 +945,14 @@ class TeamDynamicAStarPlannerNode(Node):
                 self.route_remaining_waypoints = []
         self.current_pos = new_pos
 
-    def _set_goal(self, new_goal: Tuple[float, float], reason: str) -> None:
+    def _set_goal(
+        self,
+        new_goal: Tuple[float, float],
+        reason: str,
+        *,
+        preserve_route_checkpoint_progress: bool = False,
+        force: bool = False,
+    ) -> None:
         """Set a new global goal only when it differs meaningfully.
 
         Both the public simulator goal topic and the internal mission goal topic
@@ -897,7 +961,7 @@ class TeamDynamicAStarPlannerNode(Node):
         # 목적지가 '의미있게' 바뀔 때만 전역경로 재생성. 0.5m는 과민했다 — /tank/goal/pose에
         # ros_bridge(시뮬 POST)와 planner(2Hz)가 이중 발행해, 좌표변환 부동소수 차로도 매번
         # route를 비워 lookahead가 프레임마다 흔들렸다. goal_tolerance(10m)와 정합되게 10m로 상향.
-        if self.goal_pos is None or get_distance(new_goal, self.goal_pos) > 10.0:
+        if force or self.goal_pos is None or get_distance(new_goal, self.goal_pos) > 10.0:
             self.goal_pos = new_goal
             self.route = []
             self.plan_request_pending = True
@@ -910,15 +974,17 @@ class TeamDynamicAStarPlannerNode(Node):
             self.route_index = 0
             self.route_index_floor = 0
             self.route_commit_until_wall = -1e9
-            self.route_checkpoint_index = 0
-            self.route_checkpoint_total = 0
-            self.route_remaining_waypoints = []
+            if not preserve_route_checkpoint_progress:
+                self.route_checkpoint_index = 0
+                self.route_checkpoint_total = 0
+                self.route_remaining_waypoints = []
 
     def goal_pose_cb(self, msg: PoseStamped) -> None:
         # In Scenario-2 the simulator still POSTs its original enemy-position
         # destination.  It must not overwrite the firing checkpoint.
         if not self.accept_external_goal_updates:
             return
+        self.temporary_direct_goal_active = False
         self._set_goal(
             (float(msg.pose.position.x), float(msg.pose.position.y)),
             "goal_updated",
@@ -927,10 +993,28 @@ class TeamDynamicAStarPlannerNode(Node):
     def mission_goal_pose_cb(self, msg: PoseStamped) -> None:
         # Only mission orchestration (the ballistic node) uses this topic.
         # It remains enabled even when external simulator goals are locked.
+        self.temporary_direct_goal_active = False
         self._set_goal(
             (float(msg.pose.position.x), float(msg.pose.position.y)),
             "mission_goal_updated",
         )
+
+    def reposition_goal_pose_cb(self, msg: PoseStamped) -> None:
+        # Temporary gun-angle reposition: plan directly to this point so the
+        # normal route-through list cannot skip to a later firing checkpoint.
+        self.temporary_direct_goal_active = True
+        self._set_goal(
+            (float(msg.pose.position.x), float(msg.pose.position.y)),
+            "turret_pitch_reposition_goal",
+            preserve_route_checkpoint_progress=True,
+            force=True,
+        )
+
+    def _active_goal_tolerance_m(self) -> float:
+        """Use a tight completion radius only for temporary gun-angle goals."""
+        if self.temporary_direct_goal_active:
+            return self.reposition_goal_tolerance_m
+        return self.goal_tolerance
 
     def obstacles_cb(self, msg: String) -> None:
         try:
@@ -943,6 +1027,8 @@ class TeamDynamicAStarPlannerNode(Node):
         # 리스트가 비어 있어도 갱신한다. 안 그러면 stale GT 장애물이 영영 남을 수 있다.
         old_obstacles = self.gt_obstacles
         self.gt_obstacles = obs
+        self._refresh_plannable_cluster_bboxes()
+        self._drop_lidar_memory_matching_persistent_map()
         if self.use_gt_obstacles and obs != old_obstacles:
             self.route = []
             self.plan_request_pending = True
@@ -1008,14 +1094,19 @@ class TeamDynamicAStarPlannerNode(Node):
                         continue
             self.latest_cluster_bboxes = bboxes
             self.latest_cluster_count = len(clusters) if isinstance(clusters, list) else 0
-            if self.enable_lidar_cluster_memory and bboxes:
-                self.remember_lidar_cluster_bboxes(bboxes)
+            self._refresh_plannable_cluster_bboxes()
+            if self.enable_lidar_cluster_memory and self.latest_plannable_cluster_bboxes:
+                # Only unmatched clusters enter temporary memory.  A cluster
+                # that becomes a confirmed fused-map object is removed below.
+                self.remember_lidar_cluster_bboxes(self.latest_plannable_cluster_bboxes)
             else:
                 self.prune_lidar_cluster_memory(self.wall_time())
+            self._drop_lidar_memory_matching_persistent_map()
             if self.use_lidar_cluster_bboxes:
-                # 동적 재탐색이 꺼져 있어도 클러스터에서 유도한 A* bbox를 발행한다.
-                # RViz/디버그 노드가 DBSCAN 출력이 planner bbox 입력에 연결됐는지 확인할 수 있도록.
-                self.publish_lidar_bboxes(bboxes)
+                # Publish the *planning* layer: RViz now shows exactly which
+                # unconfirmed clusters can alter A*, while raw DBSCAN remains
+                # available on its original topic.
+                self.publish_lidar_bboxes(self.latest_plannable_cluster_bboxes)
         except Exception as exc:
             self.get_logger().warn(f"failed to parse lidar clusters: {exc}")
 
@@ -1037,6 +1128,8 @@ class TeamDynamicAStarPlannerNode(Node):
                     bbox["_inflate_override"] = 0.0
                 else:
                     bbox["_inflate_override"] = self.discovered_obstacle_inflate
+            self._refresh_plannable_cluster_bboxes()
+            self._drop_lidar_memory_matching_persistent_map()
         except Exception as exc:
             self.get_logger().warn(f"failed to parse discovered objects for A*: {exc}")
 
@@ -1047,6 +1140,74 @@ class TeamDynamicAStarPlannerNode(Node):
             return list(self.discovered_bboxes)
         # discovered bbox 자체는 class별 물리 반경이고, A*에는 별도 inflate를 적용한다.
         return list(self.discovered_bboxes)
+
+    def _persistent_map_bboxes_for_lidar_dedup(self) -> List[Dict[str, float]]:
+        """Return already-confirmed map obstacles with their source labels.
+
+        Static scenario-2 map objects include the reconstructed/fused objects
+        saved by reconnaissance.  Runtime discovered objects are included only
+        after their confirmation gate, preserving the distinction between a
+        confirmed map obstacle and an unconfirmed LiDAR cluster.
+        """
+        out: List[Dict[str, float]] = []
+        for source, boxes in (
+            ("static_map", self.static_obstacles),
+            ("gt_map", self.gt_obstacles if self.use_gt_obstacles else []),
+            (
+                "fused_discovered",
+                self.discovered_bboxes if self.use_discovered_objects_for_astar else [],
+            ),
+        ):
+            for bbox in boxes:
+                if not isinstance(bbox, dict):
+                    continue
+                copied = dict(bbox)
+                copied.setdefault("_persistent_source", source)
+                out.append(copied)
+        return out
+
+    def _filter_lidar_bboxes_against_persistent_map(
+        self,
+        bboxes: Sequence[Dict[str, float]],
+    ) -> Tuple[List[Dict[str, float]], Dict[str, int]]:
+        if not self.suppress_lidar_clusters_matching_persistent_map:
+            return list(bboxes), {}
+        persistent = self._persistent_map_bboxes_for_lidar_dedup()
+        if not persistent:
+            return list(bboxes), {}
+        kept: List[Dict[str, float]] = []
+        suppressed: Dict[str, int] = {}
+        margin = self.lidar_cluster_persistent_match_margin_m
+        for bbox in bboxes:
+            matched = next(
+                (
+                    known for known in persistent
+                    if bboxes_overlap_with_margin(bbox, known, margin)
+                ),
+                None,
+            )
+            if matched is None:
+                kept.append(bbox)
+                continue
+            source = str(matched.get("_persistent_source", "persistent_map"))
+            suppressed[source] = suppressed.get(source, 0) + 1
+        return kept, suppressed
+
+    def _refresh_plannable_cluster_bboxes(self) -> None:
+        filtered, suppressed = self._filter_lidar_bboxes_against_persistent_map(
+            self.latest_cluster_bboxes
+        )
+        self.latest_plannable_cluster_bboxes = filtered
+        self.latest_cluster_suppressed_count = sum(suppressed.values())
+        self.latest_cluster_suppressed_sources = suppressed
+
+    def _drop_lidar_memory_matching_persistent_map(self) -> None:
+        if not self.lidar_cluster_memory:
+            return
+        filtered, _ = self._filter_lidar_bboxes_against_persistent_map(
+            self.lidar_cluster_memory
+        )
+        self.lidar_cluster_memory = filtered
 
     def prune_lidar_cluster_memory(self, now: float) -> None:
         if not self.enable_lidar_cluster_memory:
@@ -1126,10 +1287,15 @@ class TeamDynamicAStarPlannerNode(Node):
     def build_lidar_bboxes(self) -> List[Dict[str, float]]:
         current: List[Dict[str, float]] = []
         if self.use_lidar_cluster_bboxes and self.latest_cluster_bboxes:
-            current = list(self.latest_cluster_bboxes)
+            self._refresh_plannable_cluster_bboxes()
+            current = list(self.latest_plannable_cluster_bboxes)
         else:
-            current = self.lidar_obstacles.build_bboxes(self.lidar_cluster_eps, self.lidar_cluster_min_samples)
+            raw_current = self.lidar_obstacles.build_bboxes(
+                self.lidar_cluster_eps, self.lidar_cluster_min_samples
+            )
+            current, _ = self._filter_lidar_bboxes_against_persistent_map(raw_current)
         memory = self.build_lidar_cluster_memory_bboxes(current)
+        memory, _ = self._filter_lidar_bboxes_against_persistent_map(memory)
         return list(current) + memory
 
     def maybe_plan(self, reason: str) -> None:
@@ -1146,6 +1312,7 @@ class TeamDynamicAStarPlannerNode(Node):
 
         start_pos = self.current_pos
         goal_pos = self.goal_pos
+        force_direct_goal = bool(self.temporary_direct_goal_active)
 
         obstacles: List[Dict[str, float]] = []
         if self.use_gt_obstacles:
@@ -1168,7 +1335,10 @@ class TeamDynamicAStarPlannerNode(Node):
 
         threading.Thread(
             target=self._plan_worker,
-            args=(reason, start_pos, goal_pos, obstacles, lidar_bboxes, discovered_bboxes),
+            args=(
+                reason, start_pos, goal_pos, obstacles, lidar_bboxes,
+                discovered_bboxes, force_direct_goal,
+            ),
             daemon=True
         ).start()
 
@@ -1328,12 +1498,13 @@ class TeamDynamicAStarPlannerNode(Node):
         goal_pos: Tuple[float, float],
         obstacles: List[Dict[str, float]],
         lidar_bboxes: List[Dict[str, float]],
-        discovered_bboxes: List[Dict[str, float]]
+        discovered_bboxes: List[Dict[str, float]],
+        force_direct_goal: bool = False,
     ) -> None:
         try:
             route: List[Tuple[float, float]] = []
             route_mode = "direct_astar"
-            if self.use_route_waypoints:
+            if self.use_route_waypoints and not force_direct_goal:
                 try:
                     route_config = self.route_config_file or None
                     waypoints = get_route_waypoints(self.route_map_name, self.route_id, route_config)
@@ -1373,7 +1544,9 @@ class TeamDynamicAStarPlannerNode(Node):
                     static_obstacles=self.static_obstacles,
                     static_inflate=self.static_obstacle_inflate,
                 )
-                route_mode = "direct_astar"
+                route_mode = (
+                    "temporary_reposition_direct" if force_direct_goal else "direct_astar"
+                )
 
             route_profile: List[Dict[str, Any]] = []
             vehicle_status: Dict[str, Any] = dict(self.vehicle_geometry_status)
@@ -1550,7 +1723,7 @@ class TeamDynamicAStarPlannerNode(Node):
         if self.current_pos is None or not self.route:
             return None
         at_goal = (self.goal_pos is not None
-                   and get_distance(self.current_pos, self.goal_pos) < self.goal_tolerance)
+                   and get_distance(self.current_pos, self.goal_pos) < self._active_goal_tolerance_m())
         if at_goal:
             target = self.goal_pos
             idx = len(self.route) - 1
@@ -1590,6 +1763,7 @@ class TeamDynamicAStarPlannerNode(Node):
             "route_index": self.route_index,
             "start": {"x": self.current_pos[0], "y": self.current_pos[1]} if self.current_pos else None,
             "goal": {"x": self.goal_pos[0], "y": self.goal_pos[1]} if self.goal_pos else None,
+            "temporary_direct_goal_active": self.temporary_direct_goal_active,
             "lookahead": {"x": lookahead[0], "y": lookahead[1]} if lookahead else None,
             "use_gt_obstacles": self.use_gt_obstacles,
             "gt_obstacle_count": len(self.gt_obstacles),
@@ -1597,6 +1771,11 @@ class TeamDynamicAStarPlannerNode(Node):
             "lidar_history_points": self.lidar_obstacles.history_count,
             "lidar_cluster_count": self.latest_cluster_count,
             "lidar_cluster_bbox_count": len(self.latest_cluster_bboxes),
+            "lidar_cluster_plannable_bbox_count": len(self.latest_plannable_cluster_bboxes),
+            "lidar_cluster_suppressed_matching_persistent_count": self.latest_cluster_suppressed_count,
+            "lidar_cluster_suppressed_sources": self.latest_cluster_suppressed_sources,
+            "suppress_lidar_clusters_matching_persistent_map": self.suppress_lidar_clusters_matching_persistent_map,
+            "lidar_cluster_persistent_match_margin_m": self.lidar_cluster_persistent_match_margin_m,
             "lidar_cluster_memory_count": len(self.lidar_cluster_memory),
             "lidar_cluster_memory_astar_bbox_count": len(self.build_lidar_cluster_memory_bboxes(self.latest_cluster_bboxes)),
             "enable_lidar_cluster_memory": self.enable_lidar_cluster_memory,
@@ -1698,11 +1877,16 @@ class TeamDynamicAStarPlannerNode(Node):
                 )
             else:
                 lidar_memory_blocked = False
+            self._refresh_plannable_cluster_bboxes()
+            plannable_cluster_bboxes = (
+                self.latest_plannable_cluster_bboxes
+                if self.use_lidar_cluster_bboxes else []
+            )
             cluster_blocked = is_path_blocked_by_bboxes(
                 self.current_pos,
                 self.route,
                 self.route_index,
-                self.latest_cluster_bboxes if self.use_lidar_cluster_bboxes else [],
+                plannable_cluster_bboxes,
                 self.lidar_block_min_distance,
                 self.lidar_block_max_distance,
                 self.path_block_margin,
@@ -1716,13 +1900,13 @@ class TeamDynamicAStarPlannerNode(Node):
                     self.current_pos,
                     self.route,
                     self.route_index,
-                    self.latest_cluster_bboxes,
+                    plannable_cluster_bboxes,
                     self.emergency_replan_min_distance,
                     self.emergency_replan_front_distance,
                     self.emergency_replan_margin,
                 )
             self.emergency_cluster_blocked = bool(emergency_cluster_blocked)
-            cluster_memory_bboxes = self.build_lidar_cluster_memory_bboxes(self.latest_cluster_bboxes)
+            cluster_memory_bboxes = self.build_lidar_cluster_memory_bboxes(plannable_cluster_bboxes)
             cluster_memory_blocked = is_path_blocked_by_bboxes(
                 self.current_pos,
                 self.route,
@@ -1810,7 +1994,7 @@ class TeamDynamicAStarPlannerNode(Node):
             need_plan = True
             reason = "periodic_refresh"
 
-        if get_distance(self.current_pos, self.goal_pos) < self.goal_tolerance:
+        if get_distance(self.current_pos, self.goal_pos) < self._active_goal_tolerance_m():
             # 컨트롤러가 멈추는 동안에도 최종 목표점을 계속 발행한다.
             pass
         elif need_plan:
