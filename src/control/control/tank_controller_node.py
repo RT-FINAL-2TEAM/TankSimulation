@@ -59,6 +59,10 @@ from control.config import (
     TOPIC_PLAYER_POSE,
     TOPIC_PLAYER_STATE,
     TURN_WS_WEIGHT,
+    TOPIC_PATH_POINTS,
+    ENABLE_PLANNER_SPEED_PROFILE,
+    PLANNER_SPEED_PROFILE_TTL_SEC,
+    PLANNER_GOAL_STOP_DISTANCE_M,
 )
 
 
@@ -115,9 +119,20 @@ class TeamPathControllerNode(Node):
         self.declare_parameter("max_speed", 25.0)
         self.declare_parameter("max_yaw_rate", 2.0)
         self.declare_parameter("goal_tolerance", 10.0)
+        # Goal 도착 후 simulator pause는 일반 정찰/주행에는 유용하지만,
+        # scenario2의 정지-조준-발사 단계에서는 /get_action을 계속 받아야 한다.
+        self.declare_parameter("pause_on_goal_reached", True)
+        # Keep the controller alive at a stop-aim-fire checkpoint.  The legacy
+        # default preserves the previous behavior for ordinary one-way runs.
+        self.declare_parameter("exit_on_goal_reached", True)
         self.declare_parameter("enable_local_target", ENABLE_LOCAL_TARGET)
         self.declare_parameter("target_ttl_sec", TARGET_TTL_SEC)
         self.declare_parameter("mission_type", "mission")  # 'recon', 'mission', 'return'
+        # 단일 /tank/control/command 발행자를 유지하기 위한 포탑 override 입력.
+        # ballistic_turret_node 같은 교전 노드는 이 topic만 발행하고, 이 컨트롤러가
+        # 주행 명령과 합성해 simulator로 보낸다.
+        self.declare_parameter("turret_override_topic", "/tank/turret/override")
+        self.declare_parameter("turret_override_ttl_sec", 0.35)
         self.declare_parameter("heading_deadband_deg", HEADING_DEADBAND_DEG)
         self.declare_parameter("steering_full_error_deg", STEERING_FULL_ERROR_DEG)
         self.declare_parameter("min_ad_weight", MIN_AD_WEIGHT)
@@ -204,6 +219,11 @@ class TeamPathControllerNode(Node):
         self.declare_parameter("forward_guard_target_distance", 12.0)
         self.declare_parameter("forward_guard_max_search_points", 120)
         self.declare_parameter("forward_guard_allow_in_danger", False)
+        # A*가 발행하는 곡선/감속 profile. APF의 desired_motion은 여기서 사용하지 않는다.
+        self.declare_parameter("enable_planner_speed_profile", ENABLE_PLANNER_SPEED_PROFILE)
+        self.declare_parameter("planner_path_points_topic", TOPIC_PATH_POINTS)
+        self.declare_parameter("planner_speed_profile_ttl_sec", PLANNER_SPEED_PROFILE_TTL_SEC)
+        self.declare_parameter("planner_goal_stop_distance_m", PLANNER_GOAL_STOP_DISTANCE_M)
 
         self.enable_local_target = bool(self.get_parameter("enable_local_target").value)
         self.target_ttl_sec = float(self.get_parameter("target_ttl_sec").value)
@@ -224,9 +244,15 @@ class TeamPathControllerNode(Node):
         self.crawl_turn_ws_weight = float(self.get_parameter("crawl_turn_ws_weight").value)
         self.max_yaw_rate = float(self.get_parameter("max_yaw_rate").value)
         self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
+        self.pause_on_goal_reached = bool(self.get_parameter("pause_on_goal_reached").value)
+        self.exit_on_goal_reached = bool(self.get_parameter("exit_on_goal_reached").value)
         self.enable_local_target = bool(self.get_parameter("enable_local_target").value)
         self.target_ttl_sec = float(self.get_parameter("target_ttl_sec").value)
         self.mission_type = str(self.get_parameter("mission_type").value).lower()
+        self.turret_override_topic = str(self.get_parameter("turret_override_topic").value)
+        self.turret_override_ttl_sec = max(0.05, float(self.get_parameter("turret_override_ttl_sec").value))
+        self._turret_override: Optional[Dict[str, Any]] = None
+        self._turret_override_stamp: float = -1e9
 
         # ── 정찰 전용 "지각 주도 관측" 소비 (mission_type==recon에서만) ──────────
         # local_path_node의 /tank/recon/observe_request(미분류 후보)를 받아
@@ -343,6 +369,10 @@ class TeamPathControllerNode(Node):
         self.forward_guard_target_distance = float(self.get_parameter("forward_guard_target_distance").value)
         self.forward_guard_max_search_points = int(self.get_parameter("forward_guard_max_search_points").value)
         self.forward_guard_allow_in_danger = bool(self.get_parameter("forward_guard_allow_in_danger").value)
+        self.enable_planner_speed_profile = bool(self.get_parameter("enable_planner_speed_profile").value)
+        self.planner_path_points_topic = str(self.get_parameter("planner_path_points_topic").value)
+        self.planner_speed_profile_ttl_sec = max(0.1, float(self.get_parameter("planner_speed_profile_ttl_sec").value))
+        self.planner_goal_stop_distance_m = max(0.1, float(self.get_parameter("planner_goal_stop_distance_m").value))
         self._steering_direction_lock_cmd: str = ""
         self._steering_direction_lock_until: float = 0.0
         self._steering_direction_lock_reason: str = "none"
@@ -402,6 +432,11 @@ class TeamPathControllerNode(Node):
 
         self.global_path: list[tuple[float, float]] = []
         self.trajectory_history: list[tuple[float, float]] = []
+        self.planner_speed_points: List[Dict[str, Any]] = []
+        self.planner_vehicle_geometry: Dict[str, Any] = {}
+        self.planner_route_version: Optional[int] = None
+        self._planner_profile_stamp_mono: float = -1e9
+        self._planner_profile_status: Dict[str, Any] = {"active": False, "reason": "no_profile"}
 
         self.pub_cmd = self.create_publisher(String, TOPIC_CONTROL_COMMAND, 10)
         self.pub_status = self.create_publisher(String, TOPIC_CONTROL_STATUS, 10)
@@ -411,7 +446,9 @@ class TeamPathControllerNode(Node):
         self.create_subscription(PoseStamped, TOPIC_LOOKAHEAD_POSE, self.lookahead_cb, 10)
         self.create_subscription(PoseStamped, TOPIC_LOCAL_TARGET_POSE, self.local_target_cb, 10)
         self.create_subscription(NavPath, "/tank/global_path", self.global_path_cb, 10)
+        self.create_subscription(String, self.planner_path_points_topic, self.planner_path_points_cb, 10)
         self.create_subscription(String, TOPIC_COLLISION_EVENT, self.collision_cb, 10)
+        self.create_subscription(String, self.turret_override_topic, self.turret_override_cb, 10)
         self.create_subscription(String, self.safety_status_topic, self.safety_status_cb, 10)
         self.create_subscription(String, self.planner_status_topic, self.planner_status_cb, 10)
         self.create_subscription(String, self.planner_feasibility_topic, self.planner_feasibility_cb, 10)
@@ -500,6 +537,21 @@ class TeamPathControllerNode(Node):
 
     def collision_cb(self, msg: String) -> None:
         self.collision_count += 1
+
+    def turret_override_cb(self, msg: String) -> None:
+        """Receive a short-lived turret-only override from the engagement layer.
+
+        The controller remains the *only* publisher of /tank/control/command,
+        so movement and turret actions cannot race at the bridge.
+        """
+        try:
+            payload = json.loads(msg.data)
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        self._turret_override = payload
+        self._turret_override_stamp = time.monotonic()
 
     def safety_status_cb(self, msg: String) -> None:
         try:
@@ -1277,32 +1329,93 @@ class TeamPathControllerNode(Node):
         weight = clamp(weight, 0.0, self.max_ad_weight)
         return cmd, weight, yaw_error, desired_yaw
 
+    def planner_path_points_cb(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+            points = payload.get("points", []) if isinstance(payload, dict) else []
+            if not isinstance(points, list):
+                return
+            cleaned: List[Dict[str, Any]] = []
+            for point in points:
+                if not isinstance(point, dict):
+                    continue
+                try:
+                    cleaned.append({
+                        "x": float(point["x"]), "y": float(point["y"]),
+                        "phase": str(point.get("phase", "cruise")),
+                        "point_type": str(point.get("point_type", "straight")),
+                        "recommended_ws_weight": float(point.get("recommended_ws_weight", self.straight_ws_weight)),
+                        "recommended_speed_mps": float(point.get("recommended_speed_mps", 0.0)),
+                        "distance_to_goal_m": float(point.get("distance_to_goal_m", 0.0)),
+                    })
+                except (KeyError, TypeError, ValueError):
+                    continue
+            self.planner_speed_points = cleaned
+            self.planner_vehicle_geometry = payload.get("vehicle_geometry", {}) if isinstance(payload, dict) else {}
+            self.planner_route_version = payload.get("route_version") if isinstance(payload, dict) else None
+            self._planner_profile_stamp_mono = time.monotonic()
+        except Exception:
+            return
+
+    def _planner_profile_at_current_pose(self) -> Optional[Dict[str, Any]]:
+        if not self.enable_planner_speed_profile or self.current_pos is None:
+            self._planner_profile_status = {"active": False, "reason": "disabled_or_no_pose"}
+            return None
+        age = time.monotonic() - self._planner_profile_stamp_mono
+        if not self.planner_speed_points or age > self.planner_speed_profile_ttl_sec:
+            self._planner_profile_status = {"active": False, "reason": "stale_or_empty", "age_sec": round(age, 3)}
+            return None
+        nearest = min(self.planner_speed_points, key=lambda p: get_distance(self.current_pos, (p["x"], p["y"])))
+        profile = dict(nearest)
+        profile["age_sec"] = round(age, 3)
+        profile["active"] = True
+        self._planner_profile_status = profile
+        return profile
+
+    def _effective_goal_stop_distance(self) -> float:
+        profile = self._planner_profile_at_current_pose()
+        if profile is not None:
+            return self.planner_goal_stop_distance_m
+        return self.goal_tolerance
+
+    def apply_planner_speed_profile(
+        self, cmd_ws: str, ws_weight: float, speed_mode: str
+    ) -> Tuple[str, float, str, Dict[str, Any]]:
+        profile = self._planner_profile_at_current_pose()
+        if profile is None:
+            return cmd_ws, ws_weight, speed_mode, dict(self._planner_profile_status)
+        phase = str(profile.get("phase", "cruise"))
+        suggested = max(0.0, min(1.0, float(profile.get("recommended_ws_weight", ws_weight))))
+        distance_to_goal = float(profile.get("distance_to_goal_m", 0.0))
+        # 실제 goal 근처에서만 stop phase를 강제한다. 오래된 마지막 point가 멀리 있는 문제를 막는다.
+        if phase == "stop" and self.goal_pos is not None and self.current_pos is not None and get_distance(self.current_pos, self.goal_pos) <= self.planner_goal_stop_distance_m:
+            return "STOP", 1.0, "planner_stop", profile
+        if cmd_ws == "W" and suggested < ws_weight:
+            return "W", suggested, f"{speed_mode}|planner_{phase}", profile
+        if cmd_ws == "W" and phase == "curve":
+            return "W", min(ws_weight, suggested), f"{speed_mode}|planner_curve", profile
+        return cmd_ws, ws_weight, speed_mode, profile
+
     def calculate_speed(self, target: Tuple[float, float], yaw_error: float) -> Tuple[str, float, str]:
         assert self.current_pos is not None
         abs_err = abs(yaw_error)
-        distance_to_goal = get_distance(self.current_pos, self.goal_pos) if self.goal_pos else None
-
-        if self.goal_pos is not None and distance_to_goal is not None and distance_to_goal < self.goal_tolerance:
+        if self.goal_pos is not None and get_distance(self.current_pos, self.goal_pos) < self._effective_goal_stop_distance():
             self.mission_complete = True
 
-            # 시나리오(mission_type)에 따른 도착 후 행동 분기
-            if self.mission_type == "mission":
-                self.fire_cmd = True
-            else:
-                self.fire_cmd = False
-
-            if not hasattr(self, '_stop_published_count'):
-                self._stop_published_count = 0
-            self._stop_published_count += 1
-            if self._stop_published_count > 10:
-                self.get_logger().info(f"Mission Complete [{self.mission_type}]: Destination Reached. Terminating Control Node.")
-                import sys
-                sys.exit(0)
-            self.last_speed_policy_status = {
-                "enabled": self.enable_dynamic_speed_policy,
-                "mode": "goal_reached",
-                "distance_to_goal_m": distance_to_goal,
-            }
+            # The ballistic checkpoint needs this node to keep publishing
+            # /tank/control/command; otherwise the turret override cannot reach
+            # the simulator after the first second at the checkpoint.
+            if self.exit_on_goal_reached:
+                if not hasattr(self, '_stop_published_count'):
+                    self._stop_published_count = 0
+                self._stop_published_count += 1
+                if self._stop_published_count > 10:
+                    self.get_logger().info(
+                        f"Mission Complete [{self.mission_type}]: Destination Reached. "
+                        "Terminating Control Node."
+                    )
+                    import sys
+                    sys.exit(0)
             return "STOP", 1.0, "goal_reached"
 
         if get_distance(self.current_pos, target) < 1.0 and self.goal_pos and get_distance(target, self.goal_pos) < self.stop_distance:
@@ -1419,6 +1532,14 @@ class TeamPathControllerNode(Node):
 
     def escape_command_if_needed(self, target: Optional[Tuple[float, float]] = None) -> Optional[Tuple[Dict[str, Any], str]]:
         if not self.enable_stuck_escape or self.current_pos is None:
+            return None
+        # Goal/checkpoint에서의 STOP은 의도된 대기다. 이를 stuck으로 오인해
+        # 후진하면 포탑 조준 중 차체가 흔들리고, 사격 뒤 복귀 goal도 망가진다.
+        if self.goal_pos is not None and get_distance(self.current_pos, self.goal_pos) < self._effective_goal_stop_distance():
+            t = self.current_sim_time if self.current_sim_time > 0.0 else time.time()
+            self.last_stuck_check_pos = self.current_pos
+            self.last_stuck_check_yaw = self.current_yaw
+            self.last_stuck_check_time = t
             return None
         # 정찰 의도적 dwell(정지관측) 중에는 stuck-escape를 끈다 — 의도 정지를 끼임으로 오인 방지.
         # 베이스라인을 현재 위치/시각으로 리셋해 dwell 종료 후 stuck 윈도가 새로 시작하게 한다.
@@ -1564,6 +1685,55 @@ class TeamPathControllerNode(Node):
             "fire": False,
         }
 
+    @staticmethod
+    def _sanitize_turret_axis(part: Any, allowed: set[str]) -> Dict[str, Any]:
+        """Validate a turret axis from the override boundary without throwing."""
+        if not isinstance(part, dict):
+            return {"command": "", "weight": 0.0}
+        command = str(part.get("command", ""))
+        if command not in allowed:
+            command = ""
+        try:
+            weight = float(part.get("weight", 0.0))
+        except (TypeError, ValueError):
+            weight = 0.0
+        weight = clamp(weight, 0.0, 1.0)
+        if not command:
+            weight = 0.0
+        return {"command": command, "weight": weight}
+
+    def apply_turret_override(self, action: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Merge a fresh active override into one simulator command.
+
+        ``hold_motion`` intentionally cancels W/S and A/D during the final
+        ballistic aiming phase.  The override expires quickly if its producer
+        stops, restoring the normal driving controller automatically.
+        """
+        override = self._turret_override
+        age = time.monotonic() - self._turret_override_stamp
+        if not isinstance(override, dict) or age > self.turret_override_ttl_sec:
+            return action, {"active": False, "reason": "missing_or_stale", "age_sec": round(age, 3)}
+        if not bool(override.get("active", False)):
+            return action, {"active": False, "reason": "inactive", "age_sec": round(age, 3)}
+
+        action["turretQE"] = self._sanitize_turret_axis(override.get("turretQE"), {"Q", "E"})
+        action["turretRF"] = self._sanitize_turret_axis(override.get("turretRF"), {"R", "F"})
+        action["fire"] = bool(override.get("fire", False))
+        hold_motion = bool(override.get("hold_motion", False))
+        if hold_motion:
+            action["moveWS"] = {"command": "STOP", "weight": 1.0}
+            action["moveAD"] = {"command": "", "weight": 0.0}
+        status = override.get("status") if isinstance(override.get("status"), dict) else {}
+        return action, {
+            "active": True,
+            "age_sec": round(age, 3),
+            "hold_motion": hold_motion,
+            "fire": action["fire"],
+            "turretQE": action["turretQE"],
+            "turretRF": action["turretRF"],
+            "producer": status,
+        }
+
     def publish_command(self, action: Dict[str, Any]) -> None:
         msg = String()
         msg.data = json.dumps(action, ensure_ascii=False, separators=(",", ":"))
@@ -1595,8 +1765,12 @@ class TeamPathControllerNode(Node):
         escape = self.escape_command_if_needed(target)
         if escape is not None:
             action, mode = escape
+            action, turret_override_status = self.apply_turret_override(action)
             self.publish_command(action)
-            self.publish_status({"ok": True, "mode": mode, "target_source": source, "command": action})
+            self.publish_status({
+                "ok": True, "mode": mode, "target_source": source,
+                "turret_override": turret_override_status, "command": action,
+            })
             return
 
         cmd_ad, w_ad, yaw_error, desired_yaw = self.calculate_steering(target)
@@ -1665,6 +1839,8 @@ class TeamPathControllerNode(Node):
         cmd_ws, w_ws, speed_mode, turn_overspeed_guard_status = self.apply_turn_overspeed_guard(
             cmd_ws, w_ws, yaw_error, speed_mode, safety_mode, apf_vector_control
         )
+        # planner 곡선/감속 profile은 최종 W 상한으로만 적용한다. 안전/APF STOP은 항상 우선한다.
+        cmd_ws, w_ws, speed_mode, planner_profile_status = self.apply_planner_speed_profile(cmd_ws, w_ws, speed_mode)
         # 정찰 전용: 미분류 후보 관측을 위한 ②감속/dwell + ③포탑 step-stare (recon에서만, 마지막에 적용).
         recon_turret_qe: Dict[str, Any] = {"command": "", "weight": 0.0}
         recon_obs_status: Dict[str, Any] = {"active": False}
@@ -1675,7 +1851,15 @@ class TeamPathControllerNode(Node):
         action = self.make_action(cmd_ws, w_ws, cmd_ad, w_ad)
         if recon_turret_qe.get("command"):
             action["turretQE"] = recon_turret_qe
-        if speed_mode == "goal_reached":
+        # 교전 노드의 override를 마지막에 합성한다. 특히 checkpoint에서 active이면
+        # goal_reached의 control:pause를 억제해 simulator가 /get_action을 계속 호출하고
+        # Q/E/R/F 및 fire pulse를 실제로 받을 수 있게 한다.
+        action, turret_override_status = self.apply_turret_override(action)
+        if (
+            speed_mode == "goal_reached"
+            and self.pause_on_goal_reached
+            and not turret_override_status.get("active", False)
+        ):
             # 목적지 도달 시 시뮬레이터 일시정지 요청.
             # 브릿지 select_action_command가 latest_command를 그대로 반환하므로
             # 이 control 필드가 /get_action 응답에 실려 시뮬로 전달된다.
@@ -1706,6 +1890,8 @@ class TeamPathControllerNode(Node):
             "speed_mode": speed_mode,
             "speed_policy": self.last_speed_policy_status,
             "recon_observation": recon_obs_status,
+            "planner_speed_profile": planner_profile_status,
+            "planner_vehicle_geometry": self.planner_vehicle_geometry,
             "safety": {
                 "enabled": self.enable_safety_speed_limit,
                 "mode": self.safety_mode,
@@ -1721,9 +1907,13 @@ class TeamPathControllerNode(Node):
                 "turn_overspeed_guard": turn_overspeed_guard_status,
                 "target_guard": self.target_guard_status,
             },
+            "turret_override": turret_override_status,
             "controller_profile": {
                 "straight_ws_weight": self.straight_ws_weight,
                 "turn_ws_weight": self.turn_ws_weight,
+                "enable_planner_speed_profile": self.enable_planner_speed_profile,
+                "planner_speed_profile_ttl_sec": self.planner_speed_profile_ttl_sec,
+                "planner_goal_stop_distance_m": self.planner_goal_stop_distance_m,
                 "crawl_pivot_ws_weight": self.crawl_pivot_ws_weight,
                 "crawl_turn_ws_weight": self.crawl_turn_ws_weight,
                 "crawl_pivot_angle_deg": self.crawl_pivot_angle_deg,

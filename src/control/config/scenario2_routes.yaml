@@ -1,0 +1,19 @@
+# Scenario-2 two-target firing-route override.
+# Keep the base path_planning/config/routes.yaml unchanged for reconnaissance.
+# The vehicle must physically pass both firing checkpoints in order.
+finalmap:
+  start: [59.0, 27.0]
+  destination: [50.0, 260.0]
+  corridor_width: 20.0
+  routes:
+    A:
+      # Existing safe corridor waypoint.
+      - [50.0, 140.0]
+      # Engagement 1: stop, fire at static target (50,285,8.5), lower barrel.
+      - [48.0, 224.0]
+      # Engagement 2: stop, fire at the existing final enemy, lower barrel.
+      - [50.0, 260.0]
+    B:
+      - [199.0, 109.0]
+      - [192.0, 166.0]
+      - [123.0, 239.0]

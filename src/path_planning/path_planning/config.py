@@ -173,3 +173,32 @@ TERRAIN_COST_FILE = os.environ.get("TANK_PLANNER_TERRAIN_COST_FILE", "")
 TERRAIN_WEIGHT = env_float("TANK_PLANNER_TERRAIN_WEIGHT", 0.6)
 USE_LIDAR_CLUSTER_BBOXES = env_bool("TANK_PLANNER_USE_LIDAR_CLUSTER_BBOXES", True)
 LIDAR_CLUSTER_BBOX_MARGIN = env_float("TANK_PLANNER_LIDAR_CLUSTER_BBOX_MARGIN", 1.0)
+
+# ---------------------------------------------------------------------------
+# 전차 동역학 기반 A* 후처리 / 속도 프로파일
+# ---------------------------------------------------------------------------
+# 제어 데이터셋의 저속 선회 결과를 보수적으로 반영한 기본값이다.
+# 원호가 들어갈 공간이 없으면 반경을 줄이지 않고 기존 코너를 유지한다.
+MINIMUM_TURN_RADIUS_M = env_float("TANK_PLANNER_MIN_TURN_RADIUS_M", 6.0)
+TURN_ARC_SAMPLE_STEP_M = env_float("TANK_PLANNER_TURN_ARC_SAMPLE_STEP_M", 0.75)
+BRAKE_DISTANCE_M = env_float("TANK_PLANNER_BRAKE_DISTANCE_M", 3.0)
+CRUISE_WS_WEIGHT = env_float("TANK_PLANNER_CRUISE_WS_WEIGHT", 0.60)
+CURVE_WS_WEIGHT = env_float("TANK_PLANNER_CURVE_WS_WEIGHT", 0.30)
+BRAKE_WS_WEIGHT = env_float("TANK_PLANNER_BRAKE_WS_WEIGHT", 0.20)
+FORWARD_SPEED_MPS_PER_WEIGHT = env_float("TANK_PLANNER_FORWARD_SPEED_MPS_PER_WEIGHT", 13.6)
+
+# fusion/discovered 장애물과 A* 및 RViz가 동일한 회피반경을 사용하도록 한 단일 기준.
+# 값은 물체 중심 기준 base 반경이고, safety inflate는 별도 합산한다.
+DISCOVERED_CLASS_RADIUS: Dict[str, float] = {
+    "rock": 4.0,
+    "car": 4.0,
+    "tank": 4.5,
+    "house": 5.5,
+    "wall": 4.0,
+    "tent": 4.0,
+    "tree": 4.0,
+    "person": 1.5,
+    "human": 1.5,
+    "unknown": 3.0,
+}
+DISCOVERED_OBSTACLE_INFLATE = env_float("TANK_PLANNER_DISCOVERED_OBSTACLE_INFLATE", 2.0)

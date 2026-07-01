@@ -55,11 +55,17 @@ TOPIC_FUSION_DEBUG_STATUS = "/tank/debug/fusion/status"
 # 정찰 전용: 미분류 후보(라이다엔 잡혔으나 카메라 분류 안 된 클러스터)를 controller에 알려
 # 감속/dwell(전방 후보) + 포탑 step-stare(옆 후보) 큐로 쓰게 한다. mission_type==recon에서만 발행.
 TOPIC_OBSERVE_REQUEST = "/tank/recon/observe_request"
+# Scenario-2 mission gate. When enabled, route_A.json must not report
+# ``reached`` merely because the vehicle arrived at the firing checkpoint.
+# The ballistic node opens this gate only after it has fired and returned.
+TOPIC_TURRET_STATUS = "/tank/turret/status"
 
 from lidar.config import TOPIC_LIDAR_DETECTED_MAP
 from path_planning.config import (
     CAMERA_LIDAR_PROJECTION_PARAMS,
     CLASS_COLOR_DEFAULTS,
+    DISCOVERED_CLASS_RADIUS,
+    DISCOVERED_OBSTACLE_INFLATE,
     LOCAL_PATH_TIMER_SEC,
     MAP_FRAME,
     SERVICE_DISCOVERED_CLEAR,
@@ -132,6 +138,12 @@ class DiscoveredObject:
     class_votes: Dict[str, float] = field(default_factory=dict)
     is_confirmed: bool = False
     confirmed_wall: Optional[float] = None
+    # raw_*는 이번 센서 프레임 측정, map_*은 planner/RViz가 쓰는 안정화 좌표다.
+    raw_map_x: float = 0.0
+    raw_map_y: float = 0.0
+    raw_map_z: float = 0.0
+    position_state: str = "candidate"
+    avoidance_radius_m: float = 0.0
 
 
 class LocalPathNode(Node):
@@ -211,6 +223,11 @@ class LocalPathNode(Node):
         self.mapping_enabled = bool(self._cfg(["mapping", "enabled"], True))
         self.merge_radius_m = float(self._cfg(["mapping", "merge_radius_m"], 5.0))
         self.ema_alpha = float(self._cfg(["mapping", "position_ema_alpha"], 0.35))
+        # 후보 상태에서는 EMA + 1회 이동 상한을 쓰고, 확정 후에는 지도 좌표를 동결한다.
+        self.freeze_position_on_confirm = bool(self._cfg(["mapping", "freeze_position_on_confirm"], True))
+        self.candidate_max_step_m = max(0.05, float(self._cfg(["mapping", "candidate_max_step_m"], 1.0)))
+        self.candidate_outlier_reject_m = max(self.candidate_max_step_m, float(self._cfg(["mapping", "candidate_outlier_reject_m"], 6.0)))
+        self.avoidance_inflate_m = max(0.0, float(self._cfg(["mapping", "avoidance_inflate_m"], DISCOVERED_OBSTACLE_INFLATE)))
         self.add_classes = set(str(x).lower() for x in self._cfg(["mapping", "add_classes"], ["person", "rock", "tank", "car", "house", "tent"]))
         self.merge_radius_by_class = dict(self._cfg(["mapping", "merge_radius_by_class"], {}) or {})
         self.save_directory = Path(str(self._cfg(["mapping", "save_directory"], "~/tankcc/tank_discovered_maps"))).expanduser()
@@ -323,20 +340,36 @@ class LocalPathNode(Node):
         self.declare_parameter("recon_report_dir", "./recon_reports")
         self.declare_parameter("goal_pose_topic", "/tank/goal/pose")
         self.declare_parameter("goal_tolerance", 5.0)
+        # Scenario-2 sets this true. Until ballistic_turret_node reaches its
+        # terminal ``returned`` phase, arriving at the checkpoint is only an
+        # intermediate stop — it must not create route_A.json(reached=true),
+        # because the scenario runner interprets that file as mission success
+        # and terminates the whole ROS launch.
+        self.declare_parameter("require_turret_completion_for_reached", False)
+        self.declare_parameter("turret_status_topic", TOPIC_TURRET_STATUS)
 
         self.route_id = str(self.get_parameter("route_id").value)
         self.route_map_name = str(self.get_parameter("route_map_name").value)
         self.recon_report_dir = str(self.get_parameter("recon_report_dir").value)
         self.goal_pose_topic = str(self.get_parameter("goal_pose_topic").value)
         self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
+        self.require_turret_completion_for_reached = bool(
+            self.get_parameter("require_turret_completion_for_reached").value
+        )
+        self.turret_status_topic = str(self.get_parameter("turret_status_topic").value)
 
         self.recon_logger = ReconLogger(self.route_id, self.route_map_name, self.recon_report_dir)
         self.sim_time = 0.0
         self._last_sim_time = 0.0
         self._report_saved = False
         self.goal_pos = None
+        self._turret_phase = "unknown"
+        # False by default preserves existing recon/one-way route behavior.
+        self._turret_completion_seen = not self.require_turret_completion_for_reached
+        self._reach_gate_wait_logged = False
 
         self.create_subscription(PoseStamped, self.goal_pose_topic, self.goal_pose_cb, 10)
+        self.create_subscription(String, self.turret_status_topic, self.turret_status_cb, 10)
         self.create_subscription(String, "/tank/event/collision", self.collision_cb, 10)
 
         # 주행 품질 진단용 구독 (읽기만 — 제어/계획 거동은 안 건드림). recon_logger에 per-step 기록해
@@ -452,6 +485,27 @@ class LocalPathNode(Node):
     def goal_pose_cb(self, msg: PoseStamped) -> None:
         with self._lock:
             self.goal_pos = (float(msg.pose.position.x), float(msg.pose.position.y))
+
+    def turret_status_cb(self, msg: String) -> None:
+        """Open Scenario-2 completion gate only after return is physically done."""
+        try:
+            payload = json.loads(msg.data)
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        phase = str(payload.get("phase", "")).strip().lower()
+        if not phase:
+            return
+        with self._lock:
+            self._turret_phase = phase
+            if phase in {"returned", "complete"}:
+                self._turret_completion_seen = True
+            elif phase in {
+                "approach", "settling", "aim", "firing", "wait_impact",
+                "hit", "miss", "impact_timeout", "returning",
+            }:
+                self._turret_completion_seen = False
 
     def collision_cb(self, msg: String) -> None:
         with self._lock:
@@ -570,6 +624,8 @@ class LocalPathNode(Node):
             self.fused_current = fused
             if fused:
                 self.update_discovered_map_locked(fused)
+                # 현재 프레임 객체도 map 좌표를 새 raw 측정치가 아닌 안정화/동결 좌표로 다시 기입한다.
+                self._attach_stable_pose_to_fused_locked(fused)
 
             now = time.time()
             self.discovered = [
@@ -635,7 +691,21 @@ class LocalPathNode(Node):
                 py = self.player_pose.pose.position.y
                 dist = math.hypot(px - self.goal_pos[0], py - self.goal_pos[1])
                 if dist < self.goal_tolerance:
-                    if not self._report_saved:
+                    gate_open = (
+                        not self.require_turret_completion_for_reached
+                        or self._turret_completion_seen
+                    )
+                    if not gate_open:
+                        # Do not write route_A.json(reached=true) at (50,260).
+                        # The external Scenario-2 harness treats that file as an
+                        # immediate success signal and would kill the aim/fire node.
+                        if not self._reach_gate_wait_logged:
+                            self.get_logger().info(
+                                "Goal radius reached; withholding route report until "
+                                f"turret completion (phase={self._turret_phase!r})"
+                            )
+                            self._reach_gate_wait_logged = True
+                    elif not self._report_saved:
                         self.recon_logger.reached = True
                         self.recon_logger.save_report()
                         self._report_saved = True
@@ -824,6 +894,63 @@ class LocalPathNode(Node):
             return finish("ok_fallback_path", fused)
         return finish("fallback_no_match")
 
+    def _avoidance_radius_for_class(self, class_name: str) -> float:
+        base = float(DISCOVERED_CLASS_RADIUS.get(str(class_name).lower(), DISCOVERED_CLASS_RADIUS["unknown"]))
+        return base + self.avoidance_inflate_m
+
+    def _candidate_filtered_position(
+        self,
+        existing: DiscoveredObject,
+        raw_x: float,
+        raw_y: float,
+        raw_z: float,
+    ) -> tuple[float, float, float, bool]:
+        """후보 단계의 급격한 프레임 이동을 거부하고 EMA 이동량도 제한한다."""
+        dx, dy, dz = raw_x - existing.map_x, raw_y - existing.map_y, raw_z - existing.map_z
+        distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if distance > self.candidate_outlier_reject_m:
+            return existing.map_x, existing.map_y, existing.map_z, False
+        alpha = max(0.0, min(1.0, self.ema_alpha))
+        step_x, step_y, step_z = alpha * dx, alpha * dy, alpha * dz
+        step_norm = math.sqrt(step_x * step_x + step_y * step_y + step_z * step_z)
+        if step_norm > self.candidate_max_step_m:
+            scale = self.candidate_max_step_m / step_norm
+            step_x, step_y, step_z = step_x * scale, step_y * scale, step_z * scale
+        return existing.map_x + step_x, existing.map_y + step_y, existing.map_z + step_z, True
+
+    def _copy_stable_pose_to_fused(self, fused_obj: Dict[str, Any], tracked: DiscoveredObject) -> None:
+        raw = fused_obj.get("position_map") if isinstance(fused_obj.get("position_map"), dict) else {}
+        fused_obj["raw_position_map"] = {
+            "x": self._as_float(raw.get("x"), tracked.raw_map_x),
+            "y": self._as_float(raw.get("y"), tracked.raw_map_y),
+            "z": self._as_float(raw.get("z"), tracked.raw_map_z),
+            "frame_id": self.map_frame,
+        }
+        fused_obj["position_map"] = {
+            "x": float(tracked.map_x), "y": float(tracked.map_y), "z": float(tracked.map_z), "frame_id": self.map_frame,
+        }
+        fused_obj["stable_object_id"] = tracked.object_id
+        fused_obj["position_state"] = tracked.position_state
+        fused_obj["avoidance_radius_m"] = float(tracked.avoidance_radius_m)
+        fused_obj["avoidance_radius_includes_planner_inflate"] = True
+        fused_obj["is_confirmed"] = bool(tracked.is_confirmed)
+
+    def _attach_stable_pose_to_fused_locked(self, fused: List[Dict[str, Any]]) -> None:
+        for item in fused:
+            pos = item.get("position_map") if isinstance(item.get("position_map"), dict) else {}
+            cls = str(item.get("className", "unknown")).lower()
+            tracked = self._find_existing_discovered(
+                cls, self._as_float(pos.get("x")), self._as_float(pos.get("y")),
+                self._as_optional_int(item.get("trackId", item.get("track_id"))),
+            )
+            if tracked is not None:
+                self._copy_stable_pose_to_fused(item, tracked)
+            else:
+                item.setdefault("raw_position_map", dict(pos))
+                item.setdefault("position_state", "raw")
+                item.setdefault("avoidance_radius_m", self._avoidance_radius_for_class(cls))
+                item.setdefault("avoidance_radius_includes_planner_inflate", True)
+
     def update_discovered_map_locked(self, fused: List[Dict[str, Any]]) -> None:
         if not self.mapping_enabled:
             return
@@ -831,6 +958,7 @@ class LocalPathNode(Node):
         for obj in fused:
             class_name = str(obj.get("className", "unknown")).lower()
             if class_name not in self.add_classes:
+                obj.setdefault("avoidance_radius_m", self._avoidance_radius_for_class(class_name))
                 continue
             if self.semantic_requires_cluster and not bool(obj.get("discovered_eligible", False)):
                 continue
@@ -846,10 +974,9 @@ class LocalPathNode(Node):
             distance_m = self._as_float(obj.get("distance_m"), 0.0)
             track_id = self._as_optional_int(obj.get("trackId", obj.get("track_id")))
             class_fixed_id = self._as_optional_int(obj.get("classFixedId", obj.get("class_fixed_id")))
-            
             existing = self._find_existing_discovered(class_name, x, y, track_id=track_id)
             vote_weight = max(conf, 1e-6) if self.class_vote_by_confidence else 1.0
-            
+
             if existing is None:
                 object_id = f"detected_{class_name}_{self._next_id:04d}"
                 self._next_id += 1
@@ -868,26 +995,45 @@ class LocalPathNode(Node):
                     track_id=track_id,
                     class_fixed_id=class_fixed_id,
                     class_votes={class_name: vote_weight},
+                    raw_map_x=x,
+                    raw_map_y=y,
+                    raw_map_z=z,
+                    position_state="candidate",
+                    avoidance_radius_m=self._avoidance_radius_for_class(class_name),
                 )
                 self._refresh_confirmation(candidate, now)
                 self.discovered.append(candidate)
+                self._copy_stable_pose_to_fused(obj, candidate)
+                continue
+
+            # 모든 프레임의 raw 측정치는 저장하지만, 확정 후 map_x/y/z는 절대 덮어쓰지 않는다.
+            existing.raw_map_x, existing.raw_map_y, existing.raw_map_z = x, y, z
+            existing.distance_m = distance_m
+            existing.confidence = max(existing.confidence, conf)
+            existing.last_seen_wall = now
+            existing.source = str(obj.get("source", existing.source))
+            if existing.track_id is None and track_id is not None:
+                existing.track_id = track_id
+            if class_fixed_id is not None:
+                existing.class_fixed_id = class_fixed_id
+            existing.class_votes[class_name] = existing.class_votes.get(class_name, 0.0) + vote_weight
+            existing.class_name = max(existing.class_votes.items(), key=lambda kv: kv[1])[0]
+            existing.avoidance_radius_m = self._avoidance_radius_for_class(existing.class_name)
+
+            if existing.is_confirmed and self.freeze_position_on_confirm:
+                existing.position_state = "frozen"
             else:
-                a = max(0.0, min(1.0, self.ema_alpha))
-                existing.map_x = (1.0 - a) * existing.map_x + a * x
-                existing.map_y = (1.0 - a) * existing.map_y + a * y
-                existing.map_z = (1.0 - a) * existing.map_z + a * z
-                existing.distance_m = distance_m
-                existing.confidence = max(existing.confidence, conf)
-                existing.observation_count += 1
-                existing.last_seen_wall = now
-                existing.source = str(obj.get("source", existing.source))
-                if existing.track_id is None and track_id is not None:
-                    existing.track_id = track_id
-                if class_fixed_id is not None:
-                    existing.class_fixed_id = class_fixed_id
-                existing.class_votes[class_name] = existing.class_votes.get(class_name, 0.0) + vote_weight
-                existing.class_name = max(existing.class_votes.items(), key=lambda kv: kv[1])[0]
+                nx, ny, nz, accepted = self._candidate_filtered_position(existing, x, y, z)
+                if accepted:
+                    existing.map_x, existing.map_y, existing.map_z = nx, ny, nz
+                    existing.observation_count += 1
+                    existing.position_state = "candidate_tracking"
+                else:
+                    existing.position_state = "candidate_outlier_rejected"
                 self._refresh_confirmation(existing, now)
+                if existing.is_confirmed and self.freeze_position_on_confirm:
+                    existing.position_state = "frozen"
+            self._copy_stable_pose_to_fused(obj, existing)
 
     def _parse_detection(self, det: Dict[str, Any]) -> Optional[ParsedDetection]:
         if not isinstance(det, dict):
@@ -1742,7 +1888,12 @@ class LocalPathNode(Node):
         known_static = self._match_static_object(class_name, x, y)
         obj = {
             "className": class_name, "confidence": confidence, "bbox": bbox, "camera_heading_deg": camera_heading,
-            "distance_m": distance_m, "nearest_distance_m": distance_m, "position_map": {"x": x, "y": y, "z": z, "frame_id": self.map_frame},
+            "distance_m": distance_m, "nearest_distance_m": distance_m,
+            "position_map": {"x": x, "y": y, "z": z, "frame_id": self.map_frame},
+            "raw_position_map": {"x": x, "y": y, "z": z, "frame_id": self.map_frame},
+            "position_state": "raw",
+            "avoidance_radius_m": self._avoidance_radius_for_class(class_name),
+            "avoidance_radius_includes_planner_inflate": True,
             "matched_lidar_points": matched_lidar_points, "used_lidar_points": used_lidar_points,
             "known_static": known_static is not None, "matched_static": known_static, "source": source,
         }
@@ -1786,6 +1937,8 @@ class LocalPathNode(Node):
         if obj.observation_count >= self.min_confirm_observations and age_sec >= self.min_confirm_age_sec:
             obj.is_confirmed = True
             obj.confirmed_wall = now
+            if self.freeze_position_on_confirm:
+                obj.position_state = "frozen"
 
     # ------------------------------------------------------------------
     # 퍼블리싱(Publishing) / 서비스
@@ -1914,7 +2067,9 @@ class LocalPathNode(Node):
             source = str(obj.get("source", ""))
             markers.markers.append(self._sphere_marker("fused_object", mid, x, y, z, self.sphere_scale, color, self.current_lifetime_sec)); mid += 1
             markers.markers.append(self._line_marker("fused_object_distance", mid, [(px, py, pz + 2.0), (x, y, z)], self._color_for_class(cls, 0.75), self.current_lifetime_sec)); mid += 1
-            label = f"LIVE {cls} {dist:.1f}m conf={conf:.2f}\n{source.replace('yolo_lidar_', '')}"
+            radius = self._as_float(obj.get("avoidance_radius_m"), self._avoidance_radius_for_class(cls))
+            state = str(obj.get("position_state", "raw"))
+            label = f"LIVE {cls} {dist:.1f}m r={radius:.1f}m [{state}]\n{source.replace('yolo_lidar_', '')}"
             if known:
                 label += " static"
             markers.markers.append(self._text_marker("fused_object_label", mid, x, y, z + 1.8, label, self._color_for_class(cls, 1.0), self.current_lifetime_sec)); mid += 1
@@ -1940,7 +2095,7 @@ class LocalPathNode(Node):
             base_id = idx * 3
             markers.markers.append(self._cube_marker("discovered_object", base_id, x, y, z, self.discovered_cube_scale, color))
             status = "SAVED" if obj.is_confirmed else "CANDIDATE"
-            label = f"{status} {obj.class_name}\nobs={obj.observation_count} conf={obj.confidence:.2f}"
+            label = f"{status} {obj.class_name} r={obj.avoidance_radius_m:.1f}m\nobs={obj.observation_count} conf={obj.confidence:.2f} [{obj.position_state}]"
             markers.markers.append(self._text_marker("discovered_object_label", base_id + 1, x, y, z + 2.0, label, self._color_for_class(obj.class_name, 1.0), 0.0))
 
             if obj.is_confirmed:

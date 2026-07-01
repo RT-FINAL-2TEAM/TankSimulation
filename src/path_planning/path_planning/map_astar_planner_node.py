@@ -40,6 +40,15 @@ from path_planning.config import (
     DEFAULT_GOAL_ENABLED,
     DEFAULT_GOAL_X,
     DEFAULT_GOAL_Y,
+    MINIMUM_TURN_RADIUS_M,
+    TURN_ARC_SAMPLE_STEP_M,
+    BRAKE_DISTANCE_M,
+    CRUISE_WS_WEIGHT,
+    CURVE_WS_WEIGHT,
+    BRAKE_WS_WEIGHT,
+    FORWARD_SPEED_MPS_PER_WEIGHT,
+    DISCOVERED_CLASS_RADIUS,
+    DISCOVERED_OBSTACLE_INFLATE,
     DYNAMIC_REPLAN_COOLDOWN_SEC,
     ENABLE_DYNAMIC_REPLAN,
     ENABLE_PERIODIC_REPLAN,
@@ -101,6 +110,7 @@ from path_planning.team_path_planning import (
     load_static_obstacles_from_map,
     DEFAULT_STATIC_INFLATE,
 )
+from path_planning.vehicle_path_geometry import build_speed_profile, round_polyline_with_min_turn_radius
 
 
 def clamp(v: float, lo: float, hi: float) -> float:
@@ -354,21 +364,6 @@ def parse_obstacles_payload(payload: Any) -> List[Dict[str, float]]:
                 bboxes.append(bbox)
     return bboxes
 
-DISCOVERED_CLASS_RADIUS = {
-    # A* persistent obstacle 반경. 값은 전체 폭이 아니라 중심 기준 반경이다.
-    # rock/car 실제 폭이 약 8m라면 radius는 4m가 기준이다. 추가 안전여유는
-    # discovered_obstacle_inflate에서 별도로 준다.
-    "rock": 4.0,
-    "car": 4.0,
-    "tank": 4.5,
-    "house": 5.5,
-    "wall": 4.0,
-    "tent": 4.0,
-    "tree": 4.0,
-    "unknown": 3.0,
-}
-
-
 DEFAULT_SEMANTIC_RISK_SCORES = {
     "tank": 100.0,
     "house": 50.0,
@@ -387,6 +382,7 @@ DEFAULT_SEMANTIC_RISK_RADII = {
 }
 
 
+# DISCOVERED_CLASS_RADIUS는 path_planning.config의 단일 기준을 사용한다(fusion_mapping/config 신설).
 def _as_float(v: Any, default: float = 0.0) -> float:
     try:
         return float(v)
@@ -448,7 +444,11 @@ def parse_discovered_objects_payload(
         if xy is None:
             continue
         x, y = xy
-        radius = float(DISCOVERED_CLASS_RADIUS.get(cls, default_radius))
+        # local_path_node가 발행한 avoidance_radius_m은 base 반경과 A* 안전여유를 이미 합산한 값이다.
+        # 이 값이 있으면 이후 add_obstacles에서 inflate를 다시 더하지 않는다.
+        published_radius = _as_float(obj.get("avoidance_radius_m"), 0.0)
+        includes_inflate = published_radius > 0.0
+        radius = published_radius if includes_inflate else float(DISCOVERED_CLASS_RADIUS.get(cls, default_radius))
         bboxes.append({
             "x_min": x - radius,
             "x_max": x + radius,
@@ -456,9 +456,11 @@ def parse_discovered_objects_payload(
             "z_max": y + radius,
             "source": "discovered_object",
             "class_name": cls,
-            "object_id": str(obj.get("object_id", obj.get("id", ""))),
+            "object_id": str(obj.get("stable_object_id", obj.get("object_id", obj.get("id", "")))),
             "observation_count": obs_count,
             "is_confirmed": confirmed,
+            "avoidance_radius_m": radius,
+            "_avoidance_radius_includes_inflate": includes_inflate,
         })
     return bboxes
 
@@ -625,6 +627,11 @@ class TeamDynamicAStarPlannerNode(Node):
         self.declare_parameter("default_goal_enabled", DEFAULT_GOAL_ENABLED)
         self.declare_parameter("default_goal_x", DEFAULT_GOAL_X)
         self.declare_parameter("default_goal_y", DEFAULT_GOAL_Y)
+        # Scenario-specific lock: when false, the simulator's legacy
+        # /set_destination -> /tank/goal/pose message cannot replace the
+        # launch-defined checkpoint goal.  Dedicated mission goals still work.
+        self.declare_parameter("accept_external_goal_updates", True)
+        self.declare_parameter("mission_goal_pose_topic", "/tank/mission/goal_pose")
         self.declare_parameter("max_expansions", MAX_EXPANSIONS)
         self.declare_parameter("use_route_waypoints", USE_ROUTE_WAYPOINTS)
         self.declare_parameter("route_map_name", ROUTE_MAP_NAME)
@@ -666,6 +673,14 @@ class TeamDynamicAStarPlannerNode(Node):
         self.declare_parameter("avoid_side_lock_sec", 4.0)
         self.declare_parameter("use_lidar_cluster_bboxes", USE_LIDAR_CLUSTER_BBOXES)
         self.declare_parameter("lidar_cluster_bbox_margin", LIDAR_CLUSTER_BBOX_MARGIN)
+        # 데이터셋 기반 차량 운동 제약. 경로가 통과 가능한 원호일 때만 적용한다.
+        self.declare_parameter("minimum_turn_radius_m", MINIMUM_TURN_RADIUS_M)
+        self.declare_parameter("turn_arc_sample_step_m", TURN_ARC_SAMPLE_STEP_M)
+        self.declare_parameter("brake_distance_m", BRAKE_DISTANCE_M)
+        self.declare_parameter("cruise_ws_weight", CRUISE_WS_WEIGHT)
+        self.declare_parameter("curve_ws_weight", CURVE_WS_WEIGHT)
+        self.declare_parameter("brake_ws_weight", BRAKE_WS_WEIGHT)
+        self.declare_parameter("forward_speed_mps_per_weight", FORWARD_SPEED_MPS_PER_WEIGHT)
         # Known/discovered obstacle costmap policy.
         self.declare_parameter("static_obstacle_inflate", DEFAULT_STATIC_INFLATE)
         self.declare_parameter("use_discovered_objects_for_astar", True)
@@ -673,7 +688,7 @@ class TeamDynamicAStarPlannerNode(Node):
         self.declare_parameter("discovered_confirmed_only", True)
         self.declare_parameter("discovered_min_observations", 2)
         self.declare_parameter("discovered_default_radius", 3.5)
-        self.declare_parameter("discovered_obstacle_inflate", 2.0)
+        self.declare_parameter("discovered_obstacle_inflate", DISCOVERED_OBSTACLE_INFLATE)
         self.declare_parameter("ignored_discovered_classes_for_astar", "person,human,blue,red")
         # LiDAR cluster persistence: 현재 프레임에서 cluster가 잠깐 사라져도 A* costmap에는 TTL 동안 유지한다.
         self.declare_parameter("enable_lidar_cluster_memory", True)
@@ -744,6 +759,12 @@ class TeamDynamicAStarPlannerNode(Node):
         self.lookahead_distance = float(self.get_parameter("lookahead_distance").value)
         self.publish_path_period_sec = float(self.get_parameter("publish_path_period_sec").value)
         self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
+        self.accept_external_goal_updates = bool(
+            self.get_parameter("accept_external_goal_updates").value
+        )
+        self.mission_goal_pose_topic = str(
+            self.get_parameter("mission_goal_pose_topic").value
+        )
         self.max_expansions = int(self.get_parameter("max_expansions").value)
         self.use_route_waypoints = bool(self.get_parameter("use_route_waypoints").value)
         self.route_map_name = str(self.get_parameter("route_map_name").value)
@@ -795,6 +816,13 @@ class TeamDynamicAStarPlannerNode(Node):
         self.avoid_side_lock_sec = float(self.get_parameter("avoid_side_lock_sec").value)
         self.use_lidar_cluster_bboxes = bool(self.get_parameter("use_lidar_cluster_bboxes").value)
         self.lidar_cluster_bbox_margin = float(self.get_parameter("lidar_cluster_bbox_margin").value)
+        self.minimum_turn_radius_m = max(0.0, float(self.get_parameter("minimum_turn_radius_m").value))
+        self.turn_arc_sample_step_m = max(0.15, float(self.get_parameter("turn_arc_sample_step_m").value))
+        self.brake_distance_m = max(0.0, float(self.get_parameter("brake_distance_m").value))
+        self.cruise_ws_weight = max(0.0, float(self.get_parameter("cruise_ws_weight").value))
+        self.curve_ws_weight = max(0.0, float(self.get_parameter("curve_ws_weight").value))
+        self.brake_ws_weight = max(0.0, float(self.get_parameter("brake_ws_weight").value))
+        self.forward_speed_mps_per_weight = max(0.0, float(self.get_parameter("forward_speed_mps_per_weight").value))
         self.static_obstacle_inflate = float(self.get_parameter("static_obstacle_inflate").value)
         self.use_discovered_objects_for_astar = bool(self.get_parameter("use_discovered_objects_for_astar").value)
         self.discovered_objects_topic = str(self.get_parameter("discovered_objects_topic").value)
@@ -864,6 +892,17 @@ class TeamDynamicAStarPlannerNode(Node):
         self.discovered_confirmed_count = 0
         self.path_block_source = "none"
         self.route: List[Tuple[float, float]] = []
+        # route_point_profile는 /tank/planner/path_points와 control 사이의 명시적 계약이다.
+        self.route_point_profile: List[Dict[str, Any]] = []
+        self.vehicle_geometry_status: Dict[str, Any] = {
+            "enabled": True,
+            "minimum_turn_radius_m": self.minimum_turn_radius_m,
+            "brake_distance_m": self.brake_distance_m,
+            "arc_sample_step_m": self.turn_arc_sample_step_m,
+            "rounded_corner_count": 0,
+            "unrounded_corner_count": 0,
+            "rejected_by_clearance_count": 0,
+        }
         self.route_version = 0
         self.route_index = 0
         # route_index는 재계획 중에도 진행 상태로 취급한다. dynamic replan 후 일정 시간 동안
@@ -915,6 +954,11 @@ class TeamDynamicAStarPlannerNode(Node):
         self.create_subscription(PoseStamped, TOPIC_PLAYER_POSE, self.player_pose_cb, 10)
         self.create_subscription(String, TOPIC_PLAYER_STATE, self.player_state_cb, 10)
         self.create_subscription(PoseStamped, TOPIC_GOAL_POSE, self.goal_pose_cb, 10)
+        # Internal mission transitions use a separate topic so Scenario-2 can
+        # keep the checkpoint goal locked while still returning after firing.
+        self.create_subscription(
+            PoseStamped, self.mission_goal_pose_topic, self.mission_goal_pose_cb, 10
+        )
         self.create_subscription(String, TOPIC_MAP_OBSTACLES, self.obstacles_cb, 10)
         self.create_subscription(PointCloud2, TOPIC_LIDAR_DETECTED_MAP, self.lidar_cb, 10)
         self.create_subscription(String, TOPIC_LIDAR_CLUSTERS, self.lidar_clusters_cb, 10)
@@ -1150,8 +1194,12 @@ class TeamDynamicAStarPlannerNode(Node):
                 self.route_remaining_waypoints = []
         self.current_pos = new_pos
 
-    def goal_pose_cb(self, msg: PoseStamped) -> None:
-        new_goal = (float(msg.pose.position.x), float(msg.pose.position.y))
+    def _set_goal(self, new_goal: Tuple[float, float], reason: str) -> None:
+        """Set a new global goal only when it differs meaningfully.
+
+        Both the public simulator goal topic and the internal mission goal topic
+        share this path; the caller decides which source is allowed.
+        """
         # 목적지가 '의미있게' 바뀔 때만 전역경로 재생성. 0.5m는 과민했다 — /tank/goal/pose에
         # ros_bridge(시뮬 POST)와 planner(2Hz)가 이중 발행해, 좌표변환 부동소수 차로도 매번
         # route를 비워 lookahead가 프레임마다 흔들렸다. goal_tolerance(10m)와 정합되게 10m로 상향.
@@ -1159,8 +1207,8 @@ class TeamDynamicAStarPlannerNode(Node):
             self.goal_pos = new_goal
             self.route = []
             self.plan_request_pending = True
-            self.plan_request_reason = "goal_updated"
-            self.last_replan_reason = "goal_updated"
+            self.plan_request_reason = reason
+            self.last_replan_reason = reason
             self.path_block_hit_count = 0
             self.dynamic_replan_count = 0
             self.last_dynamic_replan_pos = None
@@ -1171,6 +1219,24 @@ class TeamDynamicAStarPlannerNode(Node):
             self.route_checkpoint_index = 0
             self.route_checkpoint_total = 0
             self.route_remaining_waypoints = []
+
+    def goal_pose_cb(self, msg: PoseStamped) -> None:
+        # In Scenario-2 the simulator still POSTs its original enemy-position
+        # destination.  It must not overwrite the firing checkpoint.
+        if not self.accept_external_goal_updates:
+            return
+        self._set_goal(
+            (float(msg.pose.position.x), float(msg.pose.position.y)),
+            "goal_updated",
+        )
+
+    def mission_goal_pose_cb(self, msg: PoseStamped) -> None:
+        # Only mission orchestration (the ballistic node) uses this topic.
+        # It remains enabled even when external simulator goals are locked.
+        self._set_goal(
+            (float(msg.pose.position.x), float(msg.pose.position.y)),
+            "mission_goal_updated",
+        )
 
     def obstacles_cb(self, msg: String) -> None:
         try:
@@ -1272,7 +1338,11 @@ class TeamDynamicAStarPlannerNode(Node):
                 default_radius=self.discovered_default_radius,
             )
             for bbox in self.discovered_bboxes:
-                bbox["_inflate_override"] = self.dynamic_discovered_inflate()
+                # avoidance_radius_m가 합산 반경이면 이 단계에서 다시 inflate하면 RViz 원과 A*가 달라진다.
+                if bool(bbox.get("_avoidance_radius_includes_inflate", False)):
+                    bbox["_inflate_override"] = 0.0
+                else:
+                    bbox["_inflate_override"] = self.discovered_obstacle_inflate
         except Exception as exc:
             self.get_logger().warn(f"failed to parse discovered objects for A*: {exc}")
 
@@ -1512,6 +1582,54 @@ class TeamDynamicAStarPlannerNode(Node):
             f"(weight={self.terrain_weight}) from {path}")
         return grid or None
 
+    def _build_vehicle_collision_grid(self, obstacles: List[Dict[str, float]]) -> List[List[int]]:
+        """A*와 동일한 inflate 규칙의 costmap으로 원호 샘플 충돌을 검사한다."""
+        grid = create_grid(self.map_width, self.map_height, self.resolution)
+        add_obstacles(grid, self.static_obstacles, self.resolution, self.static_obstacle_inflate)
+        add_obstacles(grid, obstacles, self.resolution, self.inflate)
+        return grid
+
+    def _apply_vehicle_geometry(
+        self,
+        route: List[Tuple[float, float]],
+        obstacles: List[Dict[str, float]],
+    ) -> Tuple[List[Tuple[float, float]], List[Dict[str, Any]], Dict[str, Any]]:
+        """A* polyline을 실제 전차의 회전/정지 제약을 만족하는 profile path로 변환한다."""
+        if not route:
+            return [], [], dict(self.vehicle_geometry_status)
+        grid = self._build_vehicle_collision_grid(obstacles)
+        rows = len(grid)
+        cols = len(grid[0]) if rows else 0
+
+        def is_free(x: float, y: float) -> bool:
+            ix = int(math.floor(float(x) / self.resolution))
+            iy = int(math.floor(float(y) / self.resolution))
+            return 0 <= ix < cols and 0 <= iy < rows and grid[iy][ix] == 0
+
+        geometry = round_polyline_with_min_turn_radius(
+            route,
+            minimum_turn_radius_m=self.minimum_turn_radius_m,
+            arc_sample_step_m=self.turn_arc_sample_step_m,
+            is_free=is_free,
+        )
+        profile = build_speed_profile(
+            geometry.points,
+            geometry.point_kinds,
+            brake_distance_m=self.brake_distance_m,
+            cruise_ws_weight=self.cruise_ws_weight,
+            curve_ws_weight=self.curve_ws_weight,
+            brake_ws_weight=self.brake_ws_weight,
+            speed_per_weight_mps=self.forward_speed_mps_per_weight,
+        )
+        status = geometry.as_dict(
+            minimum_turn_radius_m=self.minimum_turn_radius_m,
+            brake_distance_m=self.brake_distance_m,
+            arc_sample_step_m=self.turn_arc_sample_step_m,
+        )
+        status["input_polyline_points"] = len(route)
+        status["output_profile_points"] = len(geometry.points)
+        return geometry.points, profile, status
+
     def _plan_worker(
         self,
         reason: str,
@@ -1581,6 +1699,11 @@ class TeamDynamicAStarPlannerNode(Node):
                 )
                 route_mode = "direct_astar"
 
+            route_profile: List[Dict[str, Any]] = []
+            vehicle_status: Dict[str, Any] = dict(self.vehicle_geometry_status)
+            if route:
+                route, route_profile, vehicle_status = self._apply_vehicle_geometry(route, obstacles)
+
             if route:
                 accepted, reject_reason, candidate_quality = self.should_accept_candidate_route(route, reason)
                 if not accepted:
@@ -1606,6 +1729,8 @@ class TeamDynamicAStarPlannerNode(Node):
                     self.last_candidate_reject_reason = "accepted"
                     self.last_route_quality = candidate_quality
                     self.update_path_commitment_after_accept(route, reason)
+                    self.route_point_profile = route_profile
+                    self.vehicle_geometry_status = vehicle_status
                     now_wall = self.wall_time()
                     # 일반적으로 새 경로는 새 좌표계(route point list)를 갖지만, dynamic replan에서는
                     # 현재 체크포인트 진행 상태를 뒤로 되돌리면 lookahead가 반대방향으로 튄다.
@@ -1638,6 +1763,8 @@ class TeamDynamicAStarPlannerNode(Node):
                 feasibility = self.publish_feasibility_status(route, reason)
                 self.get_logger().info(
                     f"A* path updated: reason={reason}, mode={route_mode}, points={len(route)}, "
+                    f"rounded={vehicle_status.get('rounded_corner_count', 0)}, "
+                    f"unrounded={vehicle_status.get('unrounded_corner_count', 0)}, "
                     f"obstacles={len(obstacles)}, lidar_bboxes={len(lidar_bboxes)}, discovered_bboxes={len(discovered_bboxes)}, "
                     f"dyn_inflate={self.dynamic_inflate():.2f}, stop_d={self.vehicle_model.stopping_distance(self.current_speed):.2f}, "
                     f"semantic_risk={self.enable_semantic_risk_cost}, theta_w={self.theta_heading_weight_for_plan():.2f}, "
@@ -1692,7 +1819,17 @@ class TeamDynamicAStarPlannerNode(Node):
             ps.pose.orientation.w = 1.0
             path_msg.poses.append(ps)
         self.pub_path.publish(path_msg)
-        payload = {"route_version": self.route_version, "points": [{"x": x, "y": y} for x, y in self.route]}
+        profile = self.route_point_profile if len(self.route_point_profile) == len(self.route) else [
+            {"x": float(x), "y": float(y), "point_type": "straight", "phase": "cruise", "recommended_ws_weight": self.cruise_ws_weight,
+             "recommended_speed_mps": self.cruise_ws_weight * self.forward_speed_mps_per_weight, "distance_to_goal_m": 0.0}
+            for x, y in self.route
+        ]
+        payload = {
+            "route_version": self.route_version,
+            "frame_id": MAP_FRAME,
+            "vehicle_geometry": self.vehicle_geometry_status,
+            "points": profile,
+        }
         msg = String()
         msg.data = json.dumps(payload, ensure_ascii=False)
         self.pub_points.publish(msg)
@@ -1826,6 +1963,13 @@ class TeamDynamicAStarPlannerNode(Node):
             "use_discovered_objects_for_astar": self.use_discovered_objects_for_astar,
             "discovered_confirmed_only": self.discovered_confirmed_only,
             "discovered_min_observations": self.discovered_min_observations,
+            "vehicle_geometry": self.vehicle_geometry_status,
+            "path_profile": {
+                "cruise_ws_weight": self.cruise_ws_weight,
+                "curve_ws_weight": self.curve_ws_weight,
+                "brake_ws_weight": self.brake_ws_weight,
+                "speed_per_weight_mps": self.forward_speed_mps_per_weight,
+            },
             "path_block_source": self.path_block_source,
             "emergency_cluster_blocked": self.emergency_cluster_blocked,
             "emergency_cluster_replan_enabled": self.emergency_cluster_replan_enabled,

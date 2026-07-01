@@ -576,3 +576,18 @@ LOCAL_TARGET_MARKER_RADIUS = float(os.environ.get("TANK_LOCAL_TARGET_MARKER_RADI
 
 # path_planning에서 발행하는 A* 전역 경로.
 TOPIC_GLOBAL_PATH = "/tank/global_path"
+
+# ---------------------------------------------------------------------------
+# Fused/discovered 및 정적 장애물 회피반경 시각화
+# ---------------------------------------------------------------------------
+# rviz_visualization은 위치를 다시 필터링하지 않는다. path_planning이 발행한
+# 안정화된 position_map / avoidance_radius_m을 그대로 그린다.
+TOPIC_FUSED_OBJECTS = "/tank/perception/fused_objects"
+TOPIC_DISCOVERED_OBJECTS = "/tank/map/discovered/objects"
+TOPIC_RVIZ_DYNAMIC_AVOIDANCE_MARKERS = "/tank/rviz/dynamic_avoidance_markers"
+TOPIC_RVIZ_STATIC_AVOIDANCE_MARKERS = "/tank/rviz/static_avoidance_markers"
+DYNAMIC_AVOIDANCE_DISK_Z_OFFSET = float(os.environ.get("TANK_DYNAMIC_AVOIDANCE_DISK_Z_OFFSET", "0.10"))
+DYNAMIC_AVOIDANCE_DISK_HEIGHT = float(os.environ.get("TANK_DYNAMIC_AVOIDANCE_DISK_HEIGHT", "0.08"))
+DYNAMIC_AVOIDANCE_TEXT_HEIGHT = float(os.environ.get("TANK_DYNAMIC_AVOIDANCE_TEXT_HEIGHT", "0.80"))
+DYNAMIC_AVOIDANCE_TEXT_Z_OFFSET = float(os.environ.get("TANK_DYNAMIC_AVOIDANCE_TEXT_Z_OFFSET", "1.00"))
+DYNAMIC_AVOIDANCE_RADIUS_FALLBACK_M = float(os.environ.get("TANK_DYNAMIC_AVOIDANCE_RADIUS_FALLBACK_M", "5.0"))

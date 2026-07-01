@@ -76,6 +76,31 @@ def generate_launch_description():
         default_value='west',
         description='Side bias for A*: west (for A), east (for B)'
     )
+    route_config_file_arg = DeclareLaunchArgument(
+        'route_config_file',
+        default_value=route_config_file,
+        description='Route YAML (scenario2 can provide a checkpoint-specific route).',
+    )
+    default_goal_x_arg = DeclareLaunchArgument(
+        'default_goal_x', default_value='110.0',
+        description='Initial map-frame x goal used by the global planner.',
+    )
+    default_goal_y_arg = DeclareLaunchArgument(
+        'default_goal_y', default_value='276.5',
+        description='Initial map-frame y goal used by the global planner.',
+    )
+    pause_on_goal_reached_arg = DeclareLaunchArgument(
+        'pause_on_goal_reached', default_value='true',
+        description='Request simulator pause at goal (false for stop-aim-fire checkpoints).',
+    )
+    exit_on_goal_reached_arg = DeclareLaunchArgument(
+        'exit_on_goal_reached', default_value='true',
+        description='Keep controller alive at a stop-aim-fire checkpoint when false.',
+    )
+    accept_external_goal_updates_arg = DeclareLaunchArgument(
+        'accept_external_goal_updates', default_value='true',
+        description='Accept simulator /set_destination updates on /tank/goal/pose.',
+    )
 
     # 시나리오2 인계: 정찰로 만든 합본맵/지형격자를 planner에 주입하기 위한 오버라이드.
     # 기본값 = finalmap / 빈 지형 → 정찰(recon) 동작 불변(behavior-preserving).
@@ -113,11 +138,21 @@ def generate_launch_description():
         'start_rosbridge', default_value='true',
         description='Auto-start rosbridge_websocket(:9090) for the web 3D viewer if installed.'
     )
+    require_turret_completion_for_reached_arg = DeclareLaunchArgument(
+        'require_turret_completion_for_reached', default_value='false',
+        description='Gate route report completion on /tank/turret/status terminal phase.'
+    )
 
     return LaunchDescription([
         mission_type_arg,
         route_id_arg,
         route_side_arg,
+        route_config_file_arg,
+        default_goal_x_arg,
+        default_goal_y_arg,
+        pause_on_goal_reached_arg,
+        exit_on_goal_reached_arg,
+        accept_external_goal_updates_arg,
         static_map_file_arg,
         terrain_cost_file_arg,
         recon_min_confirm_obs_arg,
@@ -126,6 +161,7 @@ def generate_launch_description():
         recon_report_dir_arg,
         start_rosbridge_arg,
         OpaqueFunction(function=_maybe_rosbridge),
+        require_turret_completion_for_reached_arg,
         SetEnvironmentVariable("TANK_START_CONTROL", "start"),
         SetEnvironmentVariable("TANK_APF_PASSTHROUGH_WHEN_CLEAR", "true"),
 
@@ -176,7 +212,7 @@ def generate_launch_description():
                 "enable_periodic_replan": False,
                 # TankSimulation route A/B strategy is now active in the ROS2 planner.
                 "use_route_waypoints": True,
-                "route_config_file": route_config_file,
+                "route_config_file": LaunchConfiguration("route_config_file"),
                 "route_map_name": "finalmap",
                 "route_id": LaunchConfiguration("route_id"),
                 "route_side": LaunchConfiguration("route_side"),
@@ -278,10 +314,12 @@ def generate_launch_description():
                 "publish_path_period_sec": 2.0,
                 "goal_tolerance": 10.0,
                 "default_goal_enabled": True,
-                # 주행 목적지 = routes.yaml destination 단일 출처로 통일 (110.0, 276.5).
-                # 적전차 리스폰(135.46, 276.87)과는 별개 — 전차는 목적지에서 멈추는 정찰 관측 개념.
-                "default_goal_x": 110.0,
-                "default_goal_y": 276.5,
+                # 기본은 기존 finalmap 목적지. 시나리오2는 checkpoint (50,260)로 override한다.
+                "default_goal_x": ParameterValue(LaunchConfiguration("default_goal_x"), value_type=float),
+                "default_goal_y": ParameterValue(LaunchConfiguration("default_goal_y"), value_type=float),
+                # Scenario2 locks the firing checkpoint against legacy simulator destination posts.
+                "accept_external_goal_updates": ParameterValue(
+                    LaunchConfiguration("accept_external_goal_updates"), value_type=bool),
             }],
         ),
 
@@ -309,6 +347,9 @@ def generate_launch_description():
                 "recon_report_dir": LaunchConfiguration("recon_report_dir"),
                 # 정찰 전용 미분류-후보 관측요청(observe_request) 발행은 mission_type==recon에서만.
                 "mission_type": LaunchConfiguration("mission_type"),
+                "require_turret_completion_for_reached": ParameterValue(
+                    LaunchConfiguration("require_turret_completion_for_reached"), value_type=bool),
+                "turret_status_topic": "/tank/turret/status",
             }],
         ),
         # Node(
@@ -468,6 +509,10 @@ def generate_launch_description():
                 "forward_guard_allow_in_danger": False,
                 "mission_type": LaunchConfiguration("mission_type"),
                 "goal_tolerance": 10.0,
+                "pause_on_goal_reached": ParameterValue(
+                    LaunchConfiguration("pause_on_goal_reached"), value_type=bool),
+                "exit_on_goal_reached": ParameterValue(
+                    LaunchConfiguration("exit_on_goal_reached"), value_type=bool),
                 "heading_deadband_deg": 5.0,
                 "steering_full_error_deg": 45.0,
                 "min_ad_weight": 0.0,
