@@ -11,6 +11,35 @@ from .llm_reporter import LLMReporter
 from .route_risk_io import load_json, save_json
 
 
+def _load_env_file() -> None:
+    """프로젝트 루트 .env를 os.environ에 반영(이미 지정된 값은 유지).
+
+    `ros2 run risk_analysis route_risk_node`처럼 쉘 export 없이 띄워도 TANK_LLM_MODEL/URL 등
+    LLM 설정을 .env에서 읽게 한다. 이게 없으면 코드 기본값(qwen3:0.6b)으로 호출돼, 그 모델이
+    안 받아진 PC에서 ollama 404(model not found)가 난다. ros_bridge.config.load_env_file 경량 미러.
+    """
+    candidates = []
+    root = os.environ.get("TANK_PROJECT_ROOT")
+    if root:
+        candidates.append(os.path.join(root, ".env"))
+    candidates.append(os.path.join(os.getcwd(), ".env"))
+    here = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(6):
+        here = os.path.dirname(here)
+        candidates.append(os.path.join(here, ".env"))
+    for path in candidates:
+        if not os.path.isfile(path):
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        return
+
+
 class RouteRiskNode(Node):
     def __init__(self):
         super().__init__("route_risk_node")
@@ -111,6 +140,7 @@ class RouteRiskNode(Node):
 
 
 def main(args=None):
+    _load_env_file()  # .env의 TANK_LLM_MODEL/URL을 노드·LLMReporter가 읽기 전에 반영(404 방지)
     rclpy.init(args=args)
 
     node = RouteRiskNode()
