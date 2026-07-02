@@ -320,6 +320,22 @@ def check_bridge_auto() -> None:
         print("[경고] /health 확인 실패 — 브릿지가 떠 있는지(auto), 포트(5000)를 확인하세요.")
 
 
+def load_env_file() -> None:
+    """프로젝트 루트 .env를 os.environ에 반영(setdefault) — 하위 subprocess(route_risk_node/
+    build_mission_plan 등)가 TANK_LLM_MODEL 등 LLM 설정을 상속하게 한다. (각 노드도 자체 로드하지만
+    오케스트레이터에서도 보장 — 쉘 export 없이 재정찰해도 모델 불일치/404가 안 나게.)"""
+    env_path = os.environ.get("TANK_ENV_FILE") or os.path.join(PROJECT_ROOT, ".env")
+    if not os.path.isfile(env_path):
+        return
+    with open(env_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
 def clear_stale_reports() -> None:
     """이전 정찰의 파생·패널 산출물을 제거 — 새 정찰 시작 시 MFD 패널이 '대기'로 비도록.
     (route_A/B.json은 아래 루프에서 루트별로 별도 제거한다.)"""
@@ -344,6 +360,7 @@ def clear_stale_reports() -> None:
 
 
 def main() -> int:
+    load_env_file()  # subprocess(route_risk_node/build_mission_plan)가 .env의 LLM 설정 상속
     rclpy.init()
     watcher = PoseWatcher()
     spin = threading.Thread(target=rclpy.spin, args=(watcher,), daemon=True)
