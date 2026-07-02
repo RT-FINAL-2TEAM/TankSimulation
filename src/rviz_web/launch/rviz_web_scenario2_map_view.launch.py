@@ -38,8 +38,11 @@ def generate_launch_description():
         DeclareLaunchArgument("start_rosbridge", default_value="true"),
         DeclareLaunchArgument("scenario2_map", default_value=default_map),
         DeclareLaunchArgument("terrain_npz", default_value=default_terrain),
-        DeclareLaunchArgument("mesh_grid_cell", default_value="0.8"),
-        DeclareLaunchArgument("mesh_max_cells", default_value="60000"),
+        # 웹(rosbridge→JSON) 전용: 지형 메쉬는 단일 TRIANGLE_LIST 마커라 셀이 많으면 메시지가
+        # 수십 MB가 돼 rosbridge가 브라우저로 못 넘긴다(데스크톱 RViz는 직접 ROS2라 무관). 그래서
+        # 셀을 성글게 잡아 relay 가능하게 한다. 더 고해상도가 필요하면 mesh_max_cells↑(단, 안 뜨면 다시↓).
+        DeclareLaunchArgument("mesh_grid_cell", default_value="1.2"),
+        DeclareLaunchArgument("mesh_max_cells", default_value="10000"),
 
         # rosbridge websocket: browser -> ROS2 topic bridge
         ExecuteProcess(
