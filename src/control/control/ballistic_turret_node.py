@@ -43,6 +43,7 @@ TOPIC_TURRET_OVERRIDE = "/tank/turret/override"
 TOPIC_TURRET_STATUS = "/tank/turret/status"
 TOPIC_ENGAGE_RESULT = "/tank/engage/result"
 TOPIC_MISSION_GOAL = "/tank/mission/goal_pose"
+TOPIC_REPOSITION_GOAL = "/tank/mission/reposition_goal"
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -91,6 +92,10 @@ class BallisticTurretNode(Node):
         self.declare_parameter("body_pitch_sign", 1.0)
         self.declare_parameter("body_roll_sign", 1.0)
         self.declare_parameter("turret_yaw_feedback_is_world", True)
+        # playerTurretY/get_action_turret.y is exposed as a map/world gun
+        # elevation in the current simulator.  Keep the switch explicit for
+        # older simulator builds that report a hull-relative elevation.
+        self.declare_parameter("turret_pitch_feedback_is_world", True)
         self.declare_parameter("muzzle_offset_right_m", 0.0)
         self.declare_parameter("muzzle_offset_forward_m", 0.0)
         self.declare_parameter("body_attitude_ttl_sec", 1.0)
@@ -142,6 +147,20 @@ class BallisticTurretNode(Node):
         self.declare_parameter("return_radius_m", 10.0)
         self.declare_parameter("return_goal_topic", TOPIC_MISSION_GOAL)
 
+        # When the target solution is below/above the mechanically reachable
+        # gun pitch because the hull is tilted, do not hold F/R forever.
+        # Instead release the hull, request a short direct A* reposition along
+        # the current route heading, then solve/aim again from the new attitude.
+        self.declare_parameter("reposition_on_unreachable_pitch", True)
+        # Planner goal-stop distance is 10m by default, so the target must be
+        # farther than that for the controller to make physical progress.
+        self.declare_parameter("reposition_goal_offset_m", 16.0)
+        self.declare_parameter("reposition_min_travel_m", 3.0)
+        self.declare_parameter("reposition_arrival_radius_m", 10.5)
+        self.declare_parameter("reposition_timeout_sec", 35.0)
+        self.declare_parameter("reposition_max_attempts", 2)
+        self.declare_parameter("reposition_goal_topic", TOPIC_REPOSITION_GOAL)
+
         self.target_pose_ttl_sec = max(0.05, float(self.get_parameter("target_pose_ttl_sec").value))
         self.default_checkpoint_settle_sec = max(
             0.0, float(self.get_parameter("checkpoint_settle_sec").value)
@@ -165,6 +184,9 @@ class BallisticTurretNode(Node):
         ) >= 0.0 else -1.0
         self.turret_yaw_feedback_is_world = bool(
             self.get_parameter("turret_yaw_feedback_is_world").value
+        )
+        self.turret_pitch_feedback_is_world = bool(
+            self.get_parameter("turret_pitch_feedback_is_world").value
         )
         self.muzzle_offset_right_m = float(
             self.get_parameter("muzzle_offset_right_m").value
@@ -252,6 +274,25 @@ class BallisticTurretNode(Node):
         )
         self.return_radius_m = max(0.5, float(self.get_parameter("return_radius_m").value))
         self.return_goal_topic = str(self.get_parameter("return_goal_topic").value)
+        self.reposition_on_unreachable_pitch = bool(
+            self.get_parameter("reposition_on_unreachable_pitch").value
+        )
+        self.reposition_goal_offset_m = max(0.5, float(
+            self.get_parameter("reposition_goal_offset_m").value
+        ))
+        self.reposition_min_travel_m = max(0.0, float(
+            self.get_parameter("reposition_min_travel_m").value
+        ))
+        self.reposition_arrival_radius_m = max(0.5, float(
+            self.get_parameter("reposition_arrival_radius_m").value
+        ))
+        self.reposition_timeout_sec = max(1.0, float(
+            self.get_parameter("reposition_timeout_sec").value
+        ))
+        self.reposition_max_attempts = max(0, int(
+            self.get_parameter("reposition_max_attempts").value
+        ))
+        self.reposition_goal_topic = str(self.get_parameter("reposition_goal_topic").value)
 
         # Latest simulator state.
         self.player_pose: Optional[Tuple[float, float, float]] = None
@@ -291,6 +332,12 @@ class BallisticTurretNode(Node):
         self.centered_since_wall: Optional[float] = None
         self.centering_reason: Optional[str] = None
         self.last_result: Optional[Dict[str, Any]] = None
+        self.reposition_attempts = 0
+        self.reposition_goal: Optional[Tuple[float, float]] = None
+        self.reposition_start_pose: Optional[Tuple[float, float]] = None
+        self.reposition_started_wall: Optional[float] = None
+        self.reposition_reason: Optional[str] = None
+        self.last_reposition_solution: Optional[Dict[str, Any]] = None
         self.stage_results: List[Dict[str, Any]] = []
         self.return_goal_sent = False
         self.return_started_wall: Optional[float] = None
@@ -300,6 +347,7 @@ class BallisticTurretNode(Node):
         self.status_pub = self.create_publisher(String, TOPIC_TURRET_STATUS, 10)
         self.engage_result_pub = self.create_publisher(String, TOPIC_ENGAGE_RESULT, 10)
         self.return_goal_pub = self.create_publisher(PoseStamped, self.return_goal_topic, 10)
+        self.reposition_goal_pub = self.create_publisher(PoseStamped, self.reposition_goal_topic, 10)
 
         self.create_subscription(PoseStamped, TOPIC_PLAYER_POSE, self._player_pose_cb, 10)
         self.create_subscription(PoseStamped, TOPIC_ENEMY_POSE, self._enemy_pose_cb, 10)
@@ -319,7 +367,9 @@ class BallisticTurretNode(Node):
             f"engagements=[{plan_text}], return=({self.return_point[0]:.1f},{self.return_point[1]:.1f}), "
             f"k={self.k:.6f}, muzzle_h={self.muzzle_height_m:.3f}m, "
             f"attitude_comp={self.use_body_attitude_compensation}, "
+            f"pitch_feedback_world={self.turret_pitch_feedback_is_world}, "
             f"pitch_sign={self.body_pitch_sign:+.0f}, roll_sign={self.body_roll_sign:+.0f}, "
+            f"reposition_on_pitch_limit={self.reposition_on_unreachable_pitch}, "
             f"center_after_fire={self.center_turret_after_engagement}"
         )
 
@@ -345,6 +395,7 @@ class BallisticTurretNode(Node):
             ),
             "target_from_enemy_pose": bool(self.get_parameter("target_from_enemy_pose").value),
             "target_height_offset_m": self.default_target_height_offset_m,
+            "reposition": {},
         }]
         raw = str(self.get_parameter("engagements_json").value).strip()
         if not raw:
@@ -382,6 +433,10 @@ class BallisticTurretNode(Node):
                     "target_from_enemy_pose": bool(item.get("target_from_enemy_pose", False)),
                     "target_height_offset_m": float(
                         offset if offset is not None else self.default_target_height_offset_m
+                    ),
+                    "reposition": (
+                        dict(item.get("reposition"))
+                        if isinstance(item.get("reposition"), dict) else {}
                     ),
                 })
             return stages
@@ -554,16 +609,25 @@ class BallisticTurretNode(Node):
             self.player_pose[1] - self.return_point[1],
         ) <= self.return_radius_m
 
-    def _publish_return_goal(self, reason: str) -> None:
-        if not self.return_enabled or self.return_goal_sent:
-            return
+    def _make_goal_pose(self, point: Tuple[float, float]) -> PoseStamped:
         msg = PoseStamped()
         msg.header.frame_id = "tank_map"
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.pose.position.x = self.return_point[0]
-        msg.pose.position.y = self.return_point[1]
+        msg.pose.position.x = float(point[0])
+        msg.pose.position.y = float(point[1])
         msg.pose.orientation.w = 1.0
-        self.return_goal_pub.publish(msg)
+        return msg
+
+    def _publish_mission_goal(self, point: Tuple[float, float], reason: str) -> None:
+        self.return_goal_pub.publish(self._make_goal_pose(point))
+        self.get_logger().info(
+            f"Mission goal ({reason}): ({point[0]:.1f},{point[1]:.1f})"
+        )
+
+    def _publish_return_goal(self, reason: str) -> None:
+        if not self.return_enabled or self.return_goal_sent:
+            return
+        self._publish_mission_goal(self.return_point, f"final_return:{reason}")
         self.return_goal_sent = True
         self.return_started_wall = time.monotonic()
         self.get_logger().info(
@@ -598,6 +662,12 @@ class BallisticTurretNode(Node):
         self.centered_since_wall = None
         self.centering_reason = None
         self.last_result = None
+        self.reposition_attempts = 0
+        self.reposition_goal = None
+        self.reposition_start_pose = None
+        self.reposition_started_wall = None
+        self.reposition_reason = None
+        self.last_reposition_solution = None
 
     def _advance_or_return(self, reason: str) -> None:
         completed = {
@@ -613,6 +683,9 @@ class BallisticTurretNode(Node):
             self.stage_index += 1
             self._reset_stage_runtime()
             next_stage = self.stage
+            # A temporary direct reposition goal must never become the next
+            # engagement goal.  Restore the normal checkpoint route here.
+            self._publish_mission_goal(next_stage["checkpoint"], "next_engagement_checkpoint")
             self.get_logger().info(
                 f"Engagement {finished_id} complete; continuing to stage "
                 f"{self.stage_index + 1}/{len(self.engagements)} "
@@ -757,8 +830,227 @@ class BallisticTurretNode(Node):
             "turret_yaw_feedback_is_world": self.turret_yaw_feedback_is_world,
         }
 
-    def _desired_solution(self) -> Tuple[Optional[Dict[str, float]], Optional[str]]:
-        """Solve a world ballistic arc, then convert it to hull-relative gimbal angles."""
+    @staticmethod
+    def _local_gun_direction(
+        relative_yaw_deg: float,
+        relative_pitch_deg: float,
+    ) -> Tuple[float, float, float]:
+        """Return a unit muzzle direction in the hull-local frame.
+
+        Hull-local axes are right(+x), forward(+y), up(+z); this is the same
+        convention used by ``_world_from_body_rotation``.
+        """
+        yaw = math.radians(relative_yaw_deg)
+        pitch = math.radians(relative_pitch_deg)
+        horizontal = math.cos(pitch)
+        return (
+            math.sin(yaw) * horizontal,
+            math.cos(yaw) * horizontal,
+            math.sin(pitch),
+        )
+
+    def _world_pitch_from_local_gun(
+        self,
+        relative_yaw_deg: float,
+        relative_pitch_deg: float,
+    ) -> float:
+        world_dir = self._mat_vec(
+            self._world_from_body_rotation(),
+            self._local_gun_direction(relative_yaw_deg, relative_pitch_deg),
+        )
+        return math.degrees(math.atan2(world_dir[2], math.hypot(world_dir[0], world_dir[1])))
+
+    def _effective_pitch_limits(self, relative_yaw_deg: float) -> Dict[str, float]:
+        """Mechanical local limits expressed in the active feedback frame.
+
+        The physical F/R limits remain hull-relative.  On a slope, however,
+        their equivalent map/world elevation depends on hull pitch, roll, and
+        turret yaw.  Publishing both frames prevents the controller from
+        treating a world-frame telemetry value as a fixed local limit.
+        """
+        world_at_min = self._world_pitch_from_local_gun(
+            relative_yaw_deg, self.min_pitch_deg
+        )
+        world_at_max = self._world_pitch_from_local_gun(
+            relative_yaw_deg, self.max_pitch_deg
+        )
+        return {
+            "mechanical_min_pitch_deg": self.min_pitch_deg,
+            "mechanical_max_pitch_deg": self.max_pitch_deg,
+            "world_min_pitch_deg": min(world_at_min, world_at_max),
+            "world_max_pitch_deg": max(world_at_min, world_at_max),
+            "world_pitch_at_mechanical_min_deg": world_at_min,
+            "world_pitch_at_mechanical_max_deg": world_at_max,
+        }
+
+    def _feedback_pitch_for_local_command(
+        self,
+        relative_yaw_deg: float,
+        local_pitch_deg: float,
+    ) -> float:
+        if self.turret_pitch_feedback_is_world:
+            return self._world_pitch_from_local_gun(relative_yaw_deg, local_pitch_deg)
+        return local_pitch_deg
+
+    def _turret_relative_yaw_from_feedback(self) -> float:
+        if self.turret_yaw_deg is None:
+            return 0.0
+        if self.turret_yaw_feedback_is_world:
+            return normalize_180(self.turret_yaw_deg - self.body_yaw_deg)
+        return normalize_180(self.turret_yaw_deg)
+
+    def _stage_reposition_config(self) -> Dict[str, Any]:
+        raw = self.stage.get("reposition", {})
+        raw = raw if isinstance(raw, dict) else {}
+        heading = as_finite_float(raw.get("heading_deg"))
+        goal_offset = as_finite_float(raw.get("goal_offset_m"))
+        min_travel = as_finite_float(raw.get("min_travel_m"))
+        arrival_radius = as_finite_float(raw.get("arrival_radius_m"))
+        timeout = as_finite_float(raw.get("timeout_sec"))
+        max_attempts = as_finite_float(raw.get("max_attempts"))
+        return {
+            "enabled": bool(raw.get("enabled", self.reposition_on_unreachable_pitch)),
+            "heading_deg": heading,
+            "goal_offset_m": max(
+                0.5,
+                float(self.reposition_goal_offset_m if goal_offset is None else goal_offset),
+            ),
+            "min_travel_m": max(
+                0.0,
+                float(self.reposition_min_travel_m if min_travel is None else min_travel),
+            ),
+            "arrival_radius_m": max(
+                0.5,
+                float(self.reposition_arrival_radius_m if arrival_radius is None else arrival_radius),
+            ),
+            "timeout_sec": max(
+                1.0,
+                float(self.reposition_timeout_sec if timeout is None else timeout),
+            ),
+            "max_attempts": max(
+                0,
+                int(self.reposition_max_attempts if max_attempts is None else max_attempts),
+            ),
+        }
+
+    # SCENARIO2_FIXED_FALLBACK_55_230
+    def _stage_fixed_fallback_goals(self) -> List[Tuple[float, float]]:
+        """Return explicit stage fallback firing positions in declared order.
+
+        A stage that declares ``fallback_goals`` intentionally does *not* fall
+        back to the generic heading-offset reposition.  This prevents a failed
+        fixed firing point from silently producing the old northbound candidate.
+        """
+        raw = self.stage.get("reposition", {})
+        raw = raw if isinstance(raw, dict) else {}
+        values = raw.get("fallback_goals", [])
+        if not isinstance(values, list):
+            return []
+
+        goals: List[Tuple[float, float]] = []
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            x = as_finite_float(value.get("x"))
+            y = as_finite_float(value.get("y"))
+            if x is None or y is None:
+                continue
+            goals.append((float(x), float(y)))
+        return goals
+
+    def _start_reposition_for_pitch_limit(
+        self,
+        solution: Dict[str, Any],
+        reason: str,
+        now: float,
+    ) -> bool:
+        """Release the hull and request a short direct route-local reposition.
+
+        This is intentionally a *planner* request rather than a raw W command:
+        the A* stack retains collision checks and the normal controller retains
+        its steering/safety logic.
+        """
+        if self.player_pose is None:
+            return False
+        cfg = self._stage_reposition_config()
+        if not cfg["enabled"] or self.reposition_attempts >= cfg["max_attempts"]:
+            return False
+
+        start = (self.player_pose[0], self.player_pose[1])
+        fixed_fallback_goals = self._stage_fixed_fallback_goals()
+        if fixed_fallback_goals:
+            # Explicit fallback positions are authoritative for this stage.
+            # Once they are exhausted we report the pitch-limit failure rather
+            # than recreating the previous generic northbound offset goal.
+            if self.reposition_attempts >= len(fixed_fallback_goals):
+                return False
+            goal = fixed_fallback_goals[self.reposition_attempts]
+            goal_source = f"fixed_fallback[{self.reposition_attempts + 1}/{len(fixed_fallback_goals)}]"
+        else:
+            heading_deg = cfg["heading_deg"]
+            if heading_deg is None:
+                # The incoming hull heading is the best route-tangent fallback
+                # at a checkpoint; scenario files may override it explicitly.
+                heading_deg = self.body_yaw_deg
+            heading = math.radians(float(heading_deg))
+            goal = (
+                start[0] + math.sin(heading) * cfg["goal_offset_m"],
+                start[1] + math.cos(heading) * cfg["goal_offset_m"],
+            )
+            goal_source = f"heading_offset:{float(heading_deg):.1f}deg"
+        self.reposition_attempts += 1
+        self.reposition_start_pose = start
+        self.reposition_goal = goal
+        self.reposition_started_wall = now
+        self.reposition_reason = reason
+        self.last_reposition_solution = dict(solution)
+        self.phase = "reposition_for_shot"
+        self._reset_aim_dwell()
+        self.reposition_goal_pub.publish(self._make_goal_pose(goal))
+        self.get_logger().warn(
+            f"Pitch limit at stage={self.stage_index + 1}/{len(self.engagements)} "
+            f"({reason}); direct route-local reposition {self.reposition_attempts}/{cfg['max_attempts']} "
+            f"mode={goal_source} target=({goal[0]:.1f},{goal[1]:.1f})"
+        )
+        return True
+
+    def _reposition_status(self, now: float) -> Dict[str, Any]:
+        cfg = self._stage_reposition_config()
+        start = self.reposition_start_pose
+        goal = self.reposition_goal
+        current = (self.player_pose[0], self.player_pose[1]) if self.player_pose else None
+        travelled = (
+            math.hypot(current[0] - start[0], current[1] - start[1])
+            if current is not None and start is not None else 0.0
+        )
+        distance_to_goal = (
+            math.hypot(current[0] - goal[0], current[1] - goal[1])
+            if current is not None and goal is not None else None
+        )
+        return {
+            "attempt": self.reposition_attempts,
+            "max_attempts": cfg["max_attempts"],
+            "reason": self.reposition_reason,
+            "goal_source": "fixed_fallback" if self._stage_fixed_fallback_goals() else "heading_offset",
+            "goal": {"x": goal[0], "y": goal[1]} if goal else None,
+            "start": {"x": start[0], "y": start[1]} if start else None,
+            "travelled_m": round(travelled, 3),
+            "min_travel_m": cfg["min_travel_m"],
+            "distance_to_goal_m": round(distance_to_goal, 3) if distance_to_goal is not None else None,
+            "arrival_radius_m": cfg["arrival_radius_m"],
+            "elapsed_sec": round(max(0.0, now - (self.reposition_started_wall or now)), 3),
+            "timeout_sec": cfg["timeout_sec"],
+        }
+
+    def _desired_solution(self) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """Solve a world ballistic arc and express it in the feedback frame.
+
+        Gun travel limits are mechanical hull-relative limits.  The simulator
+        reports pitch as a world elevation by default, so a slope changes the
+        *world* minimum/maximum even though the local F/R limits do not move.
+        The returned solution therefore carries both frames and reports a
+        structured pitch-limit reason instead of blindly driving F/R.
+        """
         if self.player_pose is None:
             return None, "no_player_pose"
 
@@ -807,24 +1099,28 @@ class BallisticTurretNode(Node):
         target_relative_pitch_deg = math.degrees(math.atan2(
             desired_body_dir[2], horizontal_body
         ))
-        if target_relative_pitch_deg < self.min_pitch_deg or target_relative_pitch_deg > self.max_pitch_deg:
-            return None, f"pitch_limit:{target_relative_pitch_deg:.2f}deg"
 
-        # playerTurretX is published as an absolute map heading by this simulator.
-        # Keep the local alternative parameterized so a future simulator variant
-        # can expose relative turret yaw without changing the geometry.
+        # playerTurretX is absolute map yaw in the current simulator.
         target_feedback_yaw_deg = (
             normalize_180(self.body_yaw_deg + target_relative_yaw_deg)
             if self.turret_yaw_feedback_is_world else target_relative_yaw_deg
         )
-        return {
+        target_feedback_pitch_deg = self._feedback_pitch_for_local_command(
+            target_relative_yaw_deg, target_relative_pitch_deg
+        )
+        limits = self._effective_pitch_limits(target_relative_yaw_deg)
+        solution: Dict[str, Any] = {
             "distance_m": distance,
             "target_yaw_deg": target_feedback_yaw_deg,
-            "target_pitch_deg": target_relative_pitch_deg,
+            "target_pitch_deg": target_feedback_pitch_deg,
+            "target_control_pitch_deg": target_feedback_pitch_deg,
             "target_world_yaw_deg": world_yaw_deg,
             "target_world_pitch_deg": world_pitch_deg,
             "target_relative_yaw_deg": target_relative_yaw_deg,
             "target_relative_pitch_deg": target_relative_pitch_deg,
+            "pitch_feedback_frame": (
+                "world" if self.turret_pitch_feedback_is_world else "hull_relative"
+            ),
             "target_z_m": target_z,
             "muzzle_x_m": muzzle_x,
             "muzzle_y_m": muzzle_y,
@@ -832,7 +1128,18 @@ class BallisticTurretNode(Node):
             "muzzle_offset_world_x_m": muzzle_offset_world[0],
             "muzzle_offset_world_y_m": muzzle_offset_world[1],
             "muzzle_offset_world_z_m": muzzle_offset_world[2],
-        }, None
+            **limits,
+        }
+        # IMPORTANT: these local mechanical numbers are diagnostic only here.
+        # Do not reposition based on body attitude / transformed local angle.
+        # The simulator's *actual* turret elevation feedback decides whether an
+        # R/F hard stop has been reached in the closed-loop aiming state.
+        if target_relative_pitch_deg < self.min_pitch_deg:
+            solution["theoretical_relative_pitch_limit"] = "below_min"
+        elif target_relative_pitch_deg > self.max_pitch_deg:
+            solution["theoretical_relative_pitch_limit"] = "above_max"
+        return solution, None
+
 
     @staticmethod
     def _yaw_weight(error_deg: float, max_weight: float) -> float:
@@ -857,6 +1164,74 @@ class BallisticTurretNode(Node):
         else:  # F
             weight = (target_rate - 0.294) / 3.397
         return clamp(weight, 0.20, max_weight)
+
+    # SCENARIO2_PHYSICAL_PITCH_LIMIT_ONLY
+    def _reset_physical_pitch_watch(self) -> None:
+        """Clear the R/F movement watchdog used only while pitch is commanded."""
+        self._physical_pitch_watch = None
+
+    def _observe_physical_pitch_watch(
+        self,
+        *,
+        now: float,
+        command: str,
+        current_pitch_deg: Optional[float],
+        target_pitch_deg: float,
+    ) -> Dict[str, Any]:
+        """Detect a *real* R/F hard stop from turret feedback.
+
+        This deliberately does not use body pitch/roll or nominal local gun
+        limits as a decision.  A hard stop exists only when the same R/F
+        direction has been commanded and turret-elevation feedback has not
+        changed by ``motion_epsilon_deg`` for ``stall_sec``.
+        """
+        stall_sec = 0.80
+        motion_epsilon_deg = 0.08
+
+        if command not in {"R", "F"} or current_pitch_deg is None:
+            self._reset_physical_pitch_watch()
+            return {
+                "active": False,
+                "stalled": False,
+                "reason": "no_pitch_command",
+                "stall_sec": stall_sec,
+                "motion_epsilon_deg": motion_epsilon_deg,
+            }
+
+        watch = getattr(self, "_physical_pitch_watch", None)
+        if not isinstance(watch, dict) or watch.get("command") != command:
+            watch = {
+                "command": command,
+                "baseline_pitch_deg": float(current_pitch_deg),
+                "started_wall": now,
+                "last_motion_wall": now,
+            }
+            self._physical_pitch_watch = watch
+
+        baseline = float(watch["baseline_pitch_deg"])
+        change_deg = float(current_pitch_deg) - baseline
+        if abs(change_deg) >= motion_epsilon_deg:
+            # The gun is still physically moving.  Restart only the no-motion
+            # timer, preserving the original command direction for debugging.
+            watch["baseline_pitch_deg"] = float(current_pitch_deg)
+            watch["last_motion_wall"] = now
+            change_deg = 0.0
+
+        no_motion_sec = max(0.0, now - float(watch["last_motion_wall"]))
+        stalled = no_motion_sec >= stall_sec
+        return {
+            "active": True,
+            "stalled": stalled,
+            "command": command,
+            "current_pitch_deg": float(current_pitch_deg),
+            "target_pitch_deg": float(target_pitch_deg),
+            "baseline_pitch_deg": float(watch["baseline_pitch_deg"]),
+            "change_since_baseline_deg": round(change_deg, 4),
+            "no_motion_sec": round(no_motion_sec, 3),
+            "stall_sec": stall_sec,
+            "motion_epsilon_deg": motion_epsilon_deg,
+            "reason": "feedback_stalled_at_physical_endstop" if stalled else "feedback_moving_or_waiting",
+        }
 
     @staticmethod
     def _axis(command: str, weight: float) -> Dict[str, Any]:
@@ -887,6 +1262,10 @@ class BallisticTurretNode(Node):
             "completed_engagements": self.stage_results,
             "target_locked": self.engagement_target is not None,
             "body_attitude": self._body_attitude_debug(),
+            "pitch_feedback_frame": (
+                "world" if self.turret_pitch_feedback_is_world else "hull_relative"
+            ),
+            "reposition": self._reposition_status(time.monotonic()),
         }
 
     def _publish_override(
@@ -929,6 +1308,70 @@ class BallisticTurretNode(Node):
                 "phase": self.phase,
                 "return": {"x": self.return_point[0], "y": self.return_point[1]},
                 "return_goal_sent": self.return_goal_sent,
+            })
+            self._publish_override(
+                active=False, hold_motion=False,
+                turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                fire=False, status=status,
+            )
+            return
+
+        # A pitch-limit reposition publishes a temporary direct planner goal.
+        # Do not use the normal route-waypoint mode here: otherwise the planner
+        # can jump ahead to the next engagement checkpoint before the gun has
+        # re-acquired a feasible attitude.
+        if self.phase == "reposition_for_shot":
+            cfg = self._stage_reposition_config()
+            rstatus = self._reposition_status(now)
+            travelled = float(rstatus.get("travelled_m") or 0.0)
+            distance_to_goal = rstatus.get("distance_to_goal_m")
+            arrived = (
+                distance_to_goal is not None
+                and float(distance_to_goal) <= cfg["arrival_radius_m"]
+                and travelled >= cfg["min_travel_m"]
+            )
+            timed_out = (
+                self.reposition_started_wall is not None
+                and now - self.reposition_started_wall >= cfg["timeout_sec"]
+            )
+            if arrived:
+                self.phase = "settling"
+                self.checkpoint_enter_wall = now
+                status = self._stage_status_base(active=True)
+                status.update({
+                    "phase": "settling_after_reposition",
+                    "reposition": rstatus,
+                    "reason": "reposition_arrived_reacquire_aim",
+                })
+                self._publish_override(
+                    active=True, hold_motion=True,
+                    turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                    fire=False, status=status,
+                )
+                return
+            if timed_out:
+                self.get_logger().warn(
+                    f"Reposition timeout at stage={self.stage_index + 1}; rechecking pitch solution"
+                )
+                self.phase = "aim"
+                self._reset_aim_dwell()
+                status = self._stage_status_base(active=True)
+                status.update({
+                    "phase": "aim",
+                    "reposition": rstatus,
+                    "reason": "reposition_timeout_recheck",
+                })
+                self._publish_override(
+                    active=True, hold_motion=True,
+                    turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                    fire=False, status=status,
+                )
+                return
+            status = self._stage_status_base(active=False)
+            status.update({
+                "phase": "reposition_for_shot",
+                "reposition": rstatus,
+                "reason": self.reposition_reason,
             })
             self._publish_override(
                 active=False, hold_motion=False,
@@ -1021,9 +1464,13 @@ class BallisticTurretNode(Node):
                 and feedback_age <= self.turret_feedback_ttl_sec
             )
             current_pitch = self.turret_elevation_deg if feedback_fresh else None
+            lower_relative_yaw_deg = self._turret_relative_yaw_from_feedback()
+            lower_target_feedback_pitch_deg = self._feedback_pitch_for_local_command(
+                lower_relative_yaw_deg, self.lower_barrel_target_deg
+            )
             reached = (
                 current_pitch is not None
-                and current_pitch <= self.lower_barrel_target_deg + self.lower_barrel_tolerance_deg
+                and current_pitch <= lower_target_feedback_pitch_deg + self.lower_barrel_tolerance_deg
             )
             timed_out = (
                 self.lowering_started_wall is not None
@@ -1041,7 +1488,12 @@ class BallisticTurretNode(Node):
             status.update({
                 "phase": "lowering_barrel",
                 "lowering_reason": self.lowering_reason,
-                "lower_barrel_target_deg": self.lower_barrel_target_deg,
+                "lower_barrel_target_relative_deg": self.lower_barrel_target_deg,
+                "lower_barrel_target_feedback_pitch_deg": lower_target_feedback_pitch_deg,
+                "lower_barrel_relative_yaw_deg": lower_relative_yaw_deg,
+                "pitch_feedback_frame": (
+                    "world" if self.turret_pitch_feedback_is_world else "hull_relative"
+                ),
                 "current_pitch_deg": current_pitch,
                 "lower_barrel_reached": reached,
                 "lower_barrel_stable_sec": round(stable_sec, 3),
@@ -1191,11 +1643,30 @@ class BallisticTurretNode(Node):
             return
 
         # Closed-loop aiming stage.
+        #
+        # Axis order is intentional:
+        #   1) Q/E must align yaw first.
+        #   2) Only then is R/F allowed to move.
+        #   3) A physical limit is confirmed exclusively by *unchanged turret
+        #      elevation feedback* while R or F is being commanded.
+        #
+        # Chassis pitch/roll remains part of ballistic target geometry, but it
+        # never independently triggers a reposition.
         solution, reason = self._desired_solution()
-        if solution is None:
+        if reason is not None or solution is None:
             self.phase = "aim_error"
             status = self._stage_status_base(active=True)
-            status.update({"phase": self.phase, "reason": reason})
+            if solution is not None:
+                status.update(solution)
+            status.update({
+                "phase": "aim_error",
+                "reason": reason or "empty_solution",
+                "physical_pitch_limit": {
+                    "active": False,
+                    "stalled": False,
+                    "reason": "no_ballistic_solution",
+                },
+            })
             self._publish_override(
                 active=True, hold_motion=True,
                 turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
@@ -1209,13 +1680,20 @@ class BallisticTurretNode(Node):
             or self.turret_elevation_deg is None
             or feedback_age > self.turret_feedback_ttl_sec
         ):
+            self._reset_physical_pitch_watch()
             status = self._stage_status_base(active=True)
+            status.update(solution)
             status.update({
                 "phase": "aim",
                 "reason": "no_turret_feedback" if (
                     self.turret_yaw_deg is None or self.turret_elevation_deg is None
                 ) else "turret_feedback_stale",
                 "turret_feedback_age_sec": round(max(0.0, feedback_age), 3),
+                "physical_pitch_limit": {
+                    "active": False,
+                    "stalled": False,
+                    "reason": "feedback_not_fresh",
+                },
             })
             self._reset_aim_dwell()
             self._publish_override(
@@ -1227,19 +1705,106 @@ class BallisticTurretNode(Node):
 
         yaw_error = normalize_180(solution["target_yaw_deg"] - self.turret_yaw_deg)
         pitch_error = solution["target_pitch_deg"] - self.turret_elevation_deg
-        on_target = (
-            abs(yaw_error) <= self.yaw_tolerance_deg
-            and abs(pitch_error) <= self.pitch_tolerance_deg
-        )
-        yaw_weight = 0.0 if abs(yaw_error) <= self.yaw_control_deadband_deg else self._yaw_weight(
-            yaw_error, self.yaw_weight_max
-        )
-        pitch_weight = 0.0 if abs(pitch_error) <= self.pitch_control_deadband_deg else self._pitch_weight(
-            pitch_error, self.pitch_weight_max
-        )
-        yaw_cmd = "E" if yaw_error > 0.0 else "Q"
-        pitch_cmd = "R" if pitch_error > 0.0 else "F"
+        yaw_aligned = abs(yaw_error) <= self.yaw_tolerance_deg
+        pitch_aligned = abs(pitch_error) <= self.pitch_tolerance_deg
 
+        yaw_cmd = ""
+        yaw_weight = 0.0
+        pitch_cmd = ""
+        pitch_weight = 0.0
+        yaw_control_debug: Dict[str, Any] = {"mode": "yaw_aligned"}
+        physical_pitch_limit: Dict[str, Any]
+        aim_axis = "on_target"
+
+        if not yaw_aligned:
+            # Never mix Q/E and R/F during acquisition.  It gives a stable,
+            # reproducible bearing before checking real pitch travel.
+            self._reset_physical_pitch_watch()
+            if hasattr(self, "_damped_aim_yaw_control"):
+                yaw_cmd, yaw_weight, yaw_control_debug = self._damped_aim_yaw_control(yaw_error, now)
+            else:
+                yaw_weight = (
+                    0.0 if abs(yaw_error) <= self.yaw_control_deadband_deg
+                    else self._yaw_weight(yaw_error, self.yaw_weight_max)
+                )
+                yaw_cmd = ("E" if yaw_error > 0.0 else "Q") if yaw_weight > 0.0 else ""
+                yaw_control_debug = {
+                    "mode": "standard_track",
+                    "reverse_hold_active": False,
+                }
+            physical_pitch_limit = {
+                "active": False,
+                "stalled": False,
+                "reason": "waiting_for_yaw_alignment",
+            }
+            aim_axis = "yaw"
+        elif not pitch_aligned:
+            # Actual R/F travel test: stay on the yaw target and watch the
+            # simulator feedback.  Only a proven no-motion endstop can move
+            # the vehicle to a fallback firing position.
+            if hasattr(self, "_aim_yaw_last_cmd"):
+                self._aim_yaw_last_cmd = ""
+            if hasattr(self, "_aim_yaw_reverse_hold_until"):
+                self._aim_yaw_reverse_hold_until = 0.0
+            pitch_cmd = "R" if pitch_error > 0.0 else "F"
+            pitch_weight = self._pitch_weight(pitch_error, self.pitch_weight_max)
+            physical_pitch_limit = self._observe_physical_pitch_watch(
+                now=now,
+                command=pitch_cmd if pitch_weight > 0.0 else "",
+                current_pitch_deg=self.turret_elevation_deg,
+                target_pitch_deg=solution["target_pitch_deg"],
+            )
+            aim_axis = "pitch"
+
+            if physical_pitch_limit.get("stalled", False):
+                stall_reason = (
+                    "physical_pitch_endstop:"
+                    f"cmd={pitch_cmd},current={self.turret_elevation_deg:.3f},"
+                    f"target={solution['target_pitch_deg']:.3f},"
+                    f"error={pitch_error:.3f}"
+                )
+                if self._start_reposition_for_pitch_limit(solution, stall_reason, now):
+                    status = self._stage_status_base(active=False)
+                    status.update(solution)
+                    status.update({
+                        "phase": "reposition_for_shot",
+                        "reason": stall_reason,
+                        "aim_axis": "physical_pitch_endstop",
+                        "physical_pitch_limit": physical_pitch_limit,
+                        "reposition": self._reposition_status(now),
+                    })
+                    self._publish_override(
+                        active=False, hold_motion=False,
+                        turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                        fire=False, status=status,
+                    )
+                    return
+
+                self.phase = "aim_error"
+                status = self._stage_status_base(active=True)
+                status.update(solution)
+                status.update({
+                    "phase": "aim_error",
+                    "reason": f"no_fallback_after_{stall_reason}",
+                    "aim_axis": "physical_pitch_endstop",
+                    "physical_pitch_limit": physical_pitch_limit,
+                    "reposition": self._reposition_status(now),
+                })
+                self._publish_override(
+                    active=True, hold_motion=True,
+                    turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                    fire=False, status=status,
+                )
+                return
+        else:
+            self._reset_physical_pitch_watch()
+            physical_pitch_limit = {
+                "active": False,
+                "stalled": False,
+                "reason": "target_pitch_reached",
+            }
+
+        on_target = yaw_aligned and pitch_aligned
         if on_target:
             if self.on_target_since_wall is None:
                 self.on_target_since_wall = now
@@ -1254,6 +1819,7 @@ class BallisticTurretNode(Node):
         status.update(solution)
         status.update({
             "phase": "aim",
+            "aim_axis": aim_axis,
             "current_yaw_deg": self.turret_yaw_deg,
             "current_pitch_deg": self.turret_elevation_deg,
             "pitch_feedback_sign": self.pitch_feedback_sign,
@@ -1267,6 +1833,8 @@ class BallisticTurretNode(Node):
             "aim_stable_sec_required": self.aim_stable_sec,
             "turret_feedback_age_sec": round(max(0.0, feedback_age), 3),
             "turret_feedback_source": self.turret_feedback_source,
+            "yaw_control": yaw_control_debug,
+            "physical_pitch_limit": physical_pitch_limit,
             "tolerances_deg": {
                 "yaw_fire": self.yaw_tolerance_deg,
                 "pitch_fire": self.pitch_tolerance_deg,
@@ -1307,6 +1875,7 @@ class BallisticTurretNode(Node):
             turret_rf=self._axis(pitch_cmd, pitch_weight),
             fire=False, status=status,
         )
+
 
 
 def main(args=None) -> None:

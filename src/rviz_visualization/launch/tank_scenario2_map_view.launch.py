@@ -12,8 +12,6 @@ apply_terrain이 finalmap(나무만) + latest(=B) 지형만 보여주는 것과 
 실행:
   ros2 launch rviz_visualization tank_scenario2_map_view.launch.py
   ros2 launch rviz_visualization tank_scenario2_map_view.launch.py route:=B   # B 지형/맵 보기
-  # 데스크톱 RViz2 창 없이 마커 발행 노드만(웹 RViz 3D 피드용):
-  ros2 launch rviz_visualization tank_scenario2_map_view.launch.py use_rviz:=false
 """
 import os
 from pathlib import Path
@@ -21,7 +19,6 @@ from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
-from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -57,8 +54,6 @@ def generate_launch_description():
     return LaunchDescription([
         scenario2_map_arg,
         terrain_npz_arg,
-        # 데스크톱 RViz2 창 on/off (false면 마커 발행 노드만 → 웹 RViz 3D 피드)
-        DeclareLaunchArgument("use_rviz", default_value="true"),
         # 1) 정적 맵 레이어 = scenario2_map.map (finalmap 나무 + 발견 장애물).
         #    발견객체는 metadata.class_name으로 범주 매칭되어 종류별 색/모양으로 렌더된다.
         Node(
@@ -111,6 +106,5 @@ def generate_launch_description():
         ExecuteProcess(
             cmd=["rviz2", "-d", rviz_config],
             output="screen",
-            condition=IfCondition(LaunchConfiguration("use_rviz")),
         ),
     ])

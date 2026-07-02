@@ -11,24 +11,18 @@
 
 실행:
     ros2 launch rviz_visualization tank_rviz.launch.py
-    # 데스크톱 RViz2 창 없이 마커 발행 노드만(웹 RViz 3D 피드용):
-    ros2 launch rviz_visualization tank_rviz.launch.py use_rviz:=false
 
 주의:
 - 이 launch는 시뮬레이션 물리를 실행하지 않는다(Tank Challenge 시뮬레이터가 담당).
 - RViz2는 ROS2 topic을 시각화하는 viewer 역할만 한다.
 - finalmap.map을 정적맵으로 로드해 표시하므로, 자율 스택 없이 bridge만 있어도 맵이 보인다.
-- use_rviz:=false면 RViz2 창을 띄우지 않고 마커 발행 노드(static_map/visualizer/terrain)만 실행한다.
-  → 웹 대시보드의 RViz 3D 탭이 데스크톱 RViz와 동일한 마커(정적맵·객체·위험·지형)를 받게 된다.
 """
 
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
-from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.actions import ExecuteProcess
 from launch_ros.actions import Node
 
 
@@ -40,8 +34,6 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
-            # 데스크톱 RViz2 창 on/off (false면 마커 발행 노드만 → 웹 RViz 3D 피드)
-            DeclareLaunchArgument("use_rviz", default_value="true"),
             # A. finalmap 정적맵 로더 — /tank/rviz/recon_map_markers + occupancy/risk grid 발행
             Node(
                 package="rviz_visualization",
@@ -96,11 +88,10 @@ def generate_launch_description():
                     }
                 ],
             ),
-            # D. RViz2 실행 (finalmap 정적맵 + 라이브 인지 표시) — use_rviz:=false면 생략
+            # D. RViz2 실행 (finalmap 정적맵 + 라이브 인지 표시)
             ExecuteProcess(
                 cmd=["rviz2", "-d", rviz_config],
                 output="screen",
-                condition=IfCondition(LaunchConfiguration("use_rviz")),
             ),
         ]
     )

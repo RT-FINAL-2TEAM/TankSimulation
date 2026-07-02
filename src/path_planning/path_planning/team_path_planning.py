@@ -102,11 +102,6 @@ def _build_cost_map(
     grid: list[list[int]], res: float, clearance_weight: float,
     waypoints: list[tuple[float, float]] = None, side: str = None,
     terrain_grid: dict = None, terrain_weight: float = 0.0,
-    semantic_risk_sources: list[dict] | None = None,
-    semantic_risk_scores: dict[str, float] | None = None,
-    semantic_risk_radii: dict[str, float] | None = None,
-    semantic_risk_weight: float = 0.0,
-    semantic_risk_radius_scale: float = 1.0,
 ) -> list[list[float]]:
     """A* 이동 비용에 더할 셀별 추가 비용맵을 생성합니다.
 
@@ -154,13 +149,6 @@ def _build_cost_map(
         for (ix, iy), rough in terrain_grid.items():
             if 0 <= iy < rows and 0 <= ix < cols and grid[iy][ix] == 0:
                 cost[iy][ix] += terrain_weight * float(rough)
-
-    # Semantic risk cost: tank/house/car/tent/rock처럼 의미가 확정된 발견 객체 주변에
-    # class별 soft cost를 추가한다. 충돌 영역 자체는 hard obstacle로 유지된다.
-    _add_semantic_risk_cost(
-        cost, grid, res, semantic_risk_sources, semantic_risk_scores, semantic_risk_radii,
-        semantic_risk_weight, semantic_risk_radius_scale
-    )
     return cost
 
 
@@ -211,84 +199,35 @@ def get_neighbors(node: tuple[int, int], grid: list[list[int]]) -> list[tuple[in
     return neighbors
 
 def astar_search(grid: list[list[int]], start: tuple[int, int], goal: tuple[int, int],
-                 cost_map: list[list[float]] = None,
-                 heading_change_weight: float = 0.0) -> list[tuple[int, int]]:
-    """A* 알고리즘을 사용해 경로를 탐색합니다.
+                 cost_map: list[list[float]] = None) -> list[tuple[int, int]]:
+    """A* 알고리즘을 사용해 최단 경로를 탐색합니다.
 
-    cost_map: 셀별 추가 이동 비용(채널 중심/사이드 바이어스/semantic risk/terrain).
-    heading_change_weight > 0이면 state를 (x, y, dir_idx)로 확장해 방향 변화 비용을 추가한다.
-    완전한 Hybrid A*는 아니지만, 2D A*의 급격한 꺾임을 줄이는 theta-aware-lite 단계다.
+    cost_map: 셀별 추가 이동 비용(채널 중심/사이드 바이어스). 모두 음이 아니므로
+    휴리스틱(직선거리)은 여전히 admissible → 경로 정확성 유지.
     """
-    directions = [
-        (0, 1), (1, 0), (0, -1), (-1, 0),
-        (1, 1), (1, -1), (-1, 1), (-1, -1)
-    ]
-
-    if heading_change_weight <= 1e-9:
-        frontier = []
-        heapq.heappush(frontier, (0, start))
-        came_from = {start: None}
-        cost_so_far = {start: 0}
-        while frontier:
-            _, current = heapq.heappop(frontier)
-            if current == goal:
-                break
-            for next_node in get_neighbors(current, grid):
-                move_cost = 1.414 if next_node[0] != current[0] and next_node[1] != current[1] else 1.0
-                if cost_map is not None:
-                    move_cost += cost_map[next_node[1]][next_node[0]]
-                new_cost = cost_so_far[current] + move_cost
-                if next_node not in cost_so_far or new_cost < cost_so_far[next_node]:
-                    cost_so_far[next_node] = new_cost
-                    priority = new_cost + heuristic(next_node, goal)
-                    heapq.heappush(frontier, (priority, next_node))
-                    came_from[next_node] = current
-        return reconstruct_path(came_from, start, goal)
-
-    rows, cols = len(grid), len(grid[0])
-    start_state = (start[0], start[1], -1)  # -1 = 아직 진행방향 미정
-    frontier: list[tuple[float, tuple[int, int, int]]] = []
-    heapq.heappush(frontier, (heuristic(start, goal), start_state))
-    came_from: dict[tuple[int, int, int], tuple[int, int, int] | None] = {start_state: None}
-    cost_so_far: dict[tuple[int, int, int], float] = {start_state: 0.0}
-    goal_state = None
+    frontier = []
+    heapq.heappush(frontier, (0, start))
+    came_from = {start: None}
+    cost_so_far = {start: 0}
 
     while frontier:
         _, current = heapq.heappop(frontier)
-        x, y, prev_dir = current
-        if (x, y) == goal:
-            goal_state = current
+        if current == goal:
             break
-        for dir_idx, (dx, dy) in enumerate(directions):
-            nx, ny = x + dx, y + dy
-            if not (0 <= nx < cols and 0 <= ny < rows):
-                continue
-            if grid[ny][nx] != 0:
-                continue
-            move_cost = 1.414 if dx != 0 and dy != 0 else 1.0
-            if cost_map is not None:
-                move_cost += cost_map[ny][nx]
-            if prev_dir >= 0:
-                turn_steps = abs(dir_idx - prev_dir)
-                turn_steps = min(turn_steps, 8 - turn_steps)
-                move_cost += heading_change_weight * float(turn_steps)
-            next_state = (nx, ny, dir_idx)
-            new_cost = cost_so_far[current] + move_cost
-            if next_state not in cost_so_far or new_cost < cost_so_far[next_state]:
-                cost_so_far[next_state] = new_cost
-                priority = new_cost + heuristic((nx, ny), goal)
-                heapq.heappush(frontier, (priority, next_state))
-                came_from[next_state] = current
 
-    if goal_state is None:
-        return []
-    state_path = []
-    cur = goal_state
-    while cur is not None:
-        state_path.append(cur)
-        cur = came_from.get(cur)
-    state_path.reverse()
-    return [(x, y) for x, y, _ in state_path]
+        for next_node in get_neighbors(current, grid):
+            # 대각선 이동은 비용 1.414, 직진은 1.0
+            move_cost = 1.414 if next_node[0] != current[0] and next_node[1] != current[1] else 1.0
+            if cost_map is not None:
+                move_cost += cost_map[next_node[1]][next_node[0]]
+            new_cost = cost_so_far[current] + move_cost
+            if next_node not in cost_so_far or new_cost < cost_so_far[next_node]:
+                cost_so_far[next_node] = new_cost
+                priority = new_cost + heuristic(next_node, goal)
+                heapq.heappush(frontier, (priority, next_node))
+                came_from[next_node] = current
+
+    return reconstruct_path(came_from, start, goal)
 
 def reconstruct_path(came_from: dict, start: tuple[int, int], goal: tuple[int, int]) -> list[tuple[int, int]]:
     """찾아낸 경로 딕셔너리를 역추적하여 리스트로 만듭니다."""
@@ -349,146 +288,6 @@ def smooth_path(grid: list[list[int]], path: list[tuple[int, int]]) -> list[tupl
         
     return smoothed
 
-
-
-def _path_dist(a: tuple[float, float], b: tuple[float, float]) -> float:
-    return math.hypot(float(b[0]) - float(a[0]), float(b[1]) - float(a[1]))
-
-
-def _unit_vec(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float]:
-    d = _path_dist(a, b)
-    if d <= 1.0e-9:
-        return (0.0, 0.0)
-    return ((float(b[0]) - float(a[0])) / d, (float(b[1]) - float(a[1])) / d)
-
-
-def _turn_angle_deg(a: tuple[float, float], b: tuple[float, float], c: tuple[float, float]) -> float:
-    """연속 3점의 진행방향 변화각(deg)을 반환한다. 직선=0, 직각=90."""
-    v1 = _unit_vec(a, b)
-    v2 = _unit_vec(b, c)
-    dot = max(-1.0, min(1.0, v1[0] * v2[0] + v1[1] * v2[1]))
-    return math.degrees(math.acos(dot))
-
-
-def _append_densified(out: list[tuple[float, float]], p: tuple[float, float], spacing: float) -> None:
-    """마지막 점에서 p까지 spacing 간격으로 보간해 append한다."""
-    if not out:
-        out.append((float(p[0]), float(p[1])))
-        return
-    last = out[-1]
-    dist = _path_dist(last, p)
-    if dist <= 1.0e-6:
-        return
-    n = max(1, int(math.ceil(dist / max(0.2, spacing))))
-    for i in range(1, n + 1):
-        t = i / n
-        out.append((last[0] + (float(p[0]) - last[0]) * t, last[1] + (float(p[1]) - last[1]) * t))
-
-
-def _curve_is_free(
-    grid: list[list[int]],
-    curve: list[tuple[float, float]],
-    res: float,
-    margin_m: float,
-) -> bool:
-    """곡선 샘플들이 inflated grid 안에서 충돌 없는지 검사한다."""
-    if not grid or not grid[0]:
-        return True
-    rows, cols = len(grid), len(grid[0])
-    margin_cells = max(0, int(math.ceil(max(0.0, margin_m) / max(1.0e-6, res))))
-    for x_m, z_m in curve:
-        ix = int(round(float(x_m) / res))
-        iz = int(round(float(z_m) / res))
-        if ix < 0 or iz < 0 or ix >= cols or iz >= rows:
-            return False
-        for dz in range(-margin_cells, margin_cells + 1):
-            zz = iz + dz
-            if zz < 0 or zz >= rows:
-                return False
-            for dx in range(-margin_cells, margin_cells + 1):
-                xx = ix + dx
-                if xx < 0 or xx >= cols:
-                    return False
-                if grid[zz][xx] != 0:
-                    return False
-    return True
-
-
-def _quadratic_bezier(
-    p0: tuple[float, float],
-    p1: tuple[float, float],
-    p2: tuple[float, float],
-    spacing: float,
-) -> list[tuple[float, float]]:
-    approx_len = _path_dist(p0, p1) + _path_dist(p1, p2)
-    n = max(4, int(math.ceil(approx_len / max(0.2, spacing))))
-    pts: list[tuple[float, float]] = []
-    for i in range(n + 1):
-        t = i / n
-        u = 1.0 - t
-        x = u * u * p0[0] + 2.0 * u * t * p1[0] + t * t * p2[0]
-        z = u * u * p0[1] + 2.0 * u * t * p1[1] + t * t * p2[1]
-        pts.append((x, z))
-    return pts
-
-
-def curvature_smooth_path(
-    path: list[tuple[float, float]],
-    grid: list[list[int]],
-    res: float = 1.0,
-    enabled: bool = True,
-    min_turn_radius_m: float = 7.0,
-    max_corner_angle_deg: float = 25.0,
-    point_spacing_m: float = 1.0,
-    collision_check_margin_m: float = 1.0,
-) -> list[tuple[float, float]]:
-    """A* polyline corner를 전차가 선회 주행 가능한 곡선으로 완화한다.
-
-    - A*는 장애물 없는 corridor를 찾고, 이 함수는 그 corridor 안에서 corner를 둥글게 만든다.
-    - 각 corner는 quadratic Bezier로 대체한다. 곡선 샘플이 inflated grid와 충돌하면 해당 corner는 원래 polyline으로 둔다.
-    - 완전한 Hybrid A*는 아니지만, 정지 후 yaw pivot을 줄이는 post-smoothing 단계다.
-    """
-    if not enabled or len(path) < 3:
-        return path
-    spacing = max(0.3, float(point_spacing_m))
-    radius = max(0.5, float(min_turn_radius_m))
-    threshold = max(1.0, float(max_corner_angle_deg))
-    out: list[tuple[float, float]] = [(float(path[0][0]), float(path[0][1]))]
-    i = 1
-    while i < len(path) - 1:
-        prev = (float(path[i - 1][0]), float(path[i - 1][1]))
-        cur = (float(path[i][0]), float(path[i][1]))
-        nxt = (float(path[i + 1][0]), float(path[i + 1][1]))
-        len_in = _path_dist(prev, cur)
-        len_out = _path_dist(cur, nxt)
-        angle = _turn_angle_deg(prev, cur, nxt)
-        if angle < threshold or len_in < spacing * 1.5 or len_out < spacing * 1.5:
-            _append_densified(out, cur, spacing)
-            i += 1
-            continue
-        # 회전반경 R의 원호 tangent 길이를 근사하되, segment 절반을 넘지 않도록 제한한다.
-        cut = radius * math.tan(math.radians(min(angle, 135.0)) * 0.5)
-        cut = min(cut, len_in * 0.45, len_out * 0.45)
-        if cut < spacing:
-            _append_densified(out, cur, spacing)
-            i += 1
-            continue
-        vin = _unit_vec(prev, cur)
-        vout = _unit_vec(cur, nxt)
-        tangent_in = (cur[0] - vin[0] * cut, cur[1] - vin[1] * cut)
-        tangent_out = (cur[0] + vout[0] * cut, cur[1] + vout[1] * cut)
-        curve = _quadratic_bezier(tangent_in, cur, tangent_out, spacing)
-        if _curve_is_free(grid, curve, res, collision_check_margin_m):
-            _append_densified(out, tangent_in, spacing)
-            for p in curve[1:]:
-                _append_densified(out, p, spacing)
-        else:
-            # 곡선이 obstacle inflation을 침범하면 기존 corner를 유지한다.
-            _append_densified(out, cur, spacing)
-        i += 1
-    _append_densified(out, (float(path[-1][0]), float(path[-1][1])), spacing)
-    return out
-
 # 정찰(recon) 발견객체 class별 A* 회피 반경(m). 시나리오2 합본맵(scenario2_map.map)에서 사용.
 # tank 포함 — 발견 객체는 종류 불문 전부 회피(사용자 결정). person/human은 제외(저신뢰·설계상 제거).
 # tank는 여기서 회피 장애물이면서, 생성기가 별도 targets 목록에도 위치를 남겨 차후 교전 로직이 쓴다.
@@ -499,84 +298,6 @@ DISCOVERED_CLASS_RADIUS = {
     'tent': 2.5,
     'tank': 4.0,                            # 차체 + 버퍼
 }
-
-
-# Semantic risk layer: discovered object를 hard obstacle로만 보지 않고,
-# class별 위험 반경 안에 soft cost를 추가한다. 실제 충돌 금지 영역은 기존
-# discovered/class radius + inflation이 담당하고, 이 레이어는 "가능하면 멀리 우회" 용도다.
-DEFAULT_SEMANTIC_RISK_SCORES = {
-    'tank': 100.0,
-    'house': 50.0,
-    'car': 25.0,
-    'tent': 15.0,
-    'rock': 10.0,
-    'unknown': 5.0,
-}
-DEFAULT_SEMANTIC_RISK_RADII = {
-    'tank': 25.0,
-    'house': 18.0,
-    'car': 10.0,
-    'tent': 8.0,
-    'rock': 6.0,
-    'unknown': 5.0,
-}
-
-
-def _bbox_center_for_cost(obs: dict) -> tuple[float, float]:
-    return (
-        0.5 * (float(obs.get('x_min', 0.0)) + float(obs.get('x_max', 0.0))),
-        0.5 * (float(obs.get('z_min', 0.0)) + float(obs.get('z_max', 0.0))),
-    )
-
-
-def _add_semantic_risk_cost(
-    cost: list[list[float]],
-    grid: list[list[int]],
-    res: float,
-    sources: list[dict] | None,
-    scores: dict[str, float] | None,
-    radii: dict[str, float] | None,
-    weight: float,
-    radius_scale: float,
-) -> None:
-    """class별 semantic risk를 A* soft cost에 추가한다.
-
-    - sources는 discovered bbox 리스트를 사용한다.
-    - hard obstacle은 그대로 막고, 그 주변 위험 반경 안의 free cell에만 추가 비용을 준다.
-    - 비용은 중심에서 멀어질수록 2차 감쇠한다.
-    """
-    if not sources or weight <= 0.0:
-        return
-    rows, cols = len(grid), len(grid[0])
-    scores = scores or DEFAULT_SEMANTIC_RISK_SCORES
-    radii = radii or DEFAULT_SEMANTIC_RISK_RADII
-    radius_scale = max(0.05, float(radius_scale))
-    for obs in sources:
-        if not isinstance(obs, dict):
-            continue
-        cls = str(obs.get('class_name', obs.get('type', 'unknown'))).strip().lower() or 'unknown'
-        score = float(scores.get(cls, scores.get('unknown', 0.0)))
-        radius_m = float(radii.get(cls, radii.get('unknown', 0.0))) * radius_scale
-        if score <= 0.0 or radius_m <= 0.0:
-            continue
-        cx, cz = _bbox_center_for_cost(obs)
-        ix0 = max(0, int((cx - radius_m) / res))
-        ix1 = min(cols - 1, int((cx + radius_m) / res))
-        iz0 = max(0, int((cz - radius_m) / res))
-        iz1 = min(rows - 1, int((cz + radius_m) / res))
-        for iz in range(iz0, iz1 + 1):
-            row_cost = cost[iz]
-            row_grid = grid[iz]
-            z_m = iz * res
-            for ix in range(ix0, ix1 + 1):
-                if row_grid[ix] != 0:
-                    continue
-                x_m = ix * res
-                d = math.hypot(x_m - cx, z_m - cz)
-                if d > radius_m:
-                    continue
-                falloff = 1.0 - (d / radius_m)
-                row_cost[ix] += weight * score * falloff * falloff
 
 
 def load_static_obstacles_from_map(map_path: str) -> list[dict]:
@@ -650,17 +371,6 @@ def plan_global_path(
     side: str = None,
     terrain_grid: dict = None,
     terrain_weight: float = 0.0,
-    semantic_risk_sources: list[dict] | None = None,
-    semantic_risk_scores: dict[str, float] | None = None,
-    semantic_risk_radii: dict[str, float] | None = None,
-    semantic_risk_weight: float = 0.0,
-    semantic_risk_radius_scale: float = 1.0,
-    heading_change_weight: float = 0.0,
-    enable_curvature_smoothing: bool = False,
-    curvature_min_turn_radius_m: float = 7.0,
-    curvature_max_corner_angle_deg: float = 25.0,
-    curvature_point_spacing_m: float = 1.0,
-    curvature_collision_check_margin_m: float = 1.0,
 ) -> list[tuple[float, float]]:
     """시작점에서 목표점까지의 전역 경로를 생성합니다.
 
@@ -678,22 +388,16 @@ def plan_global_path(
     add_obstacles(grid, obstacles, res, inflate=inflate)
 
     cost_map = None
-    if clearance_weight > 0 or side or terrain_grid or semantic_risk_weight > 0:
-        cost_map = _build_cost_map(
-            grid, res, clearance_weight, waypoints_ref, side, terrain_grid, terrain_weight,
-            semantic_risk_sources, semantic_risk_scores, semantic_risk_radii,
-            semantic_risk_weight, semantic_risk_radius_scale
-        )
+    if clearance_weight > 0 or side or terrain_grid:
+        cost_map = _build_cost_map(grid, res, clearance_weight, waypoints_ref, side,
+                                   terrain_grid, terrain_weight)
 
     start_grid = (int(start_pos[0] / res), int(start_pos[1] / res))
     goal_grid = (int(goal_pos[0] / res), int(goal_pos[1] / res))
     # 목표가 막혀 있으면 벽으로 직진하지 않도록 의도한 채널 쪽 free 셀로 스냅
     goal_grid = _snap_goal(grid, goal_grid[0], goal_grid[1], side)
 
-    grid_path = astar_search(
-        grid, start_grid, goal_grid, cost_map=cost_map,
-        heading_change_weight=heading_change_weight
-    )
+    grid_path = astar_search(grid, start_grid, goal_grid, cost_map=cost_map)
     if not grid_path:
         return []
 
@@ -701,13 +405,6 @@ def plan_global_path(
 
     # 격자 좌표를 다시 실제 좌표(m)로 변환
     real_path = [(p[0] * res, p[1] * res) for p in smoothed_grid_path]
-    real_path = curvature_smooth_path(
-        real_path, grid, res=res, enabled=enable_curvature_smoothing,
-        min_turn_radius_m=curvature_min_turn_radius_m,
-        max_corner_angle_deg=curvature_max_corner_angle_deg,
-        point_spacing_m=curvature_point_spacing_m,
-        collision_check_margin_m=curvature_collision_check_margin_m,
-    )
     return real_path
 
 
@@ -722,17 +419,6 @@ def plan_path_through_waypoints(
     side: str = None,
     terrain_grid: dict = None,
     terrain_weight: float = 0.0,
-    semantic_risk_sources: list[dict] | None = None,
-    semantic_risk_scores: dict[str, float] | None = None,
-    semantic_risk_radii: dict[str, float] | None = None,
-    semantic_risk_weight: float = 0.0,
-    semantic_risk_radius_scale: float = 1.0,
-    heading_change_weight: float = 0.0,
-    enable_curvature_smoothing: bool = False,
-    curvature_min_turn_radius_m: float = 7.0,
-    curvature_max_corner_angle_deg: float = 25.0,
-    curvature_point_spacing_m: float = 1.0,
-    curvature_collision_check_margin_m: float = 1.0,
 ) -> list[tuple[float, float]]:
     """웨이포인트를 순서대로 경유하는 연결 경로를 생성합니다.
 
@@ -748,12 +434,9 @@ def plan_path_through_waypoints(
     add_obstacles(grid, dynamic_obstacles, res, inflate=inflate)
 
     cost_map = None
-    if clearance_weight > 0 or side or terrain_grid or semantic_risk_weight > 0:
-        cost_map = _build_cost_map(
-            grid, res, clearance_weight, waypoints, side, terrain_grid, terrain_weight,
-            semantic_risk_sources, semantic_risk_scores, semantic_risk_radii,
-            semantic_risk_weight, semantic_risk_radius_scale
-        )
+    if clearance_weight > 0 or side or terrain_grid:
+        cost_map = _build_cost_map(grid, res, clearance_weight, waypoints, side,
+                                   terrain_grid, terrain_weight)
 
     full_path: list[tuple[float, float]] = []
     prev = start_pos
@@ -768,10 +451,7 @@ def plan_path_through_waypoints(
     for wp in valid_waypoints:
         start_grid = (int(prev[0] / res), int(prev[1] / res))
         goal_grid = _snap_goal(grid, int(wp[0] / res), int(wp[1] / res), side)
-        grid_path = astar_search(
-        grid, start_grid, goal_grid, cost_map=cost_map,
-        heading_change_weight=heading_change_weight
-    )
+        grid_path = astar_search(grid, start_grid, goal_grid, cost_map=cost_map)
         if not grid_path:
             # 경로 생성 실패: 벽으로 직진하지 않도록 이 웨이포인트는 건너뜀
             # (다음 웨이포인트로 이어가며, 최종적으로 목적지까지 연결을 시도)
@@ -783,11 +463,4 @@ def plan_path_through_waypoints(
             full_path = list(seg)
         # 실제 도달 지점(스냅된 목표일 수 있음)으로 갱신
         prev = seg[-1]
-    full_path = curvature_smooth_path(
-        full_path, grid, res=res, enabled=enable_curvature_smoothing,
-        min_turn_radius_m=curvature_min_turn_radius_m,
-        max_corner_angle_deg=curvature_max_corner_angle_deg,
-        point_spacing_m=curvature_point_spacing_m,
-        collision_check_margin_m=curvature_collision_check_margin_m,
-    )
     return full_path
