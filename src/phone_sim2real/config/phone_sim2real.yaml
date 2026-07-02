@@ -1,0 +1,281 @@
+phone_yolo_gateway_node:
+  ros__parameters:
+    # Android app connects to http://<ubuntu_ip>:<phone_port><phone_endpoint>
+    phone_host: "0.0.0.0"
+    phone_port: 5002
+    phone_endpoint: "/phone/detect"
+    control_endpoint: "/phone/control"
+    status_topic: "/tank/phone_sim2real/status"
+    detections_topic: "/tank/phone_sim2real/detections"
+    imu_topic: "/tank/phone_sim2real/imu_raw"
+    imu_json_topic: "/tank/phone_sim2real/imu_json"
+    allow_any_client: true
+    allowed_clients: "127.0.0.1,::1"
+    publish_empty_detections: true
+    max_image_bytes: 2097152
+
+phone_virtual_obstacle_node:
+  ros__parameters:
+    # ----------------------------------------------------------------------
+    # 목적
+    # ----------------------------------------------------------------------
+    # APF를 쓰지 않는다. 스마트폰 이미지 YOLO 결과를 map-frame 가상 장애물로 만들고,
+    # 현재 scenario1/scenario2에서 이미 사용 중인 A* 동적 재계획 입력인
+    # /tank/phone_sim2real/synthetic_lidar_clusters 형식으로 발행하고 mux를 통해 planner에 공급한다.
+    # 즉, phone_sim2real은 직접 /tank/control/command를 발행하지 않는다.
+
+    map_frame: "tank_map"
+    player_pose_topic: "/tank/player/pose"
+    lookahead_pose_topic: "/tank/path/lookahead_pose"
+    detections_topic: "/tank/phone_sim2real/detections"
+    imu_json_topic: "/tank/phone_sim2real/imu_json"
+
+    # Debug / RViz / map-style outputs.
+    virtual_obstacles_topic: "/tank/phone_sim2real/virtual_obstacles"
+    discovered_objects_topic: "/tank/map/discovered/objects"
+    fused_objects_topic: "/tank/perception/fused_objects"
+    marker_topic: "/tank/rviz/phone_sim2real_markers"
+    fused_marker_topic: "/tank/rviz/fused_object_markers"
+    synthetic_cluster_marker_topic: "/tank/rviz/phone_sim2real_image_cluster_markers"
+
+    # APF-free 핵심 출력. 기존 map_astar_planner_node가 이 토픽을 구독하고,
+    # path corridor를 막는 cluster가 보이면 scenario 실행 중에도 동적 재계획한다.
+    enable_synthetic_lidar_clusters: true
+    synthetic_lidar_clusters_topic: "/tank/phone_sim2real/synthetic_lidar_clusters"
+    publish_empty_synthetic_clusters: false
+
+    # discovered/fused mirror는 RViz와 기존 map-style debug를 위해 유지한다.
+    enable_discovered_objects_publish: false
+    enable_fused_objects_mirror: false
+
+    # Android app sends 416x416 JPEGs. Keep these values aligned with the app.
+    image_width: 416
+    image_height: 416
+    camera_hfov_deg: 62.0
+    camera_vfov_deg: 48.0
+
+    # ----------------------------------------------------------------------
+    # 거리 추정 튜닝
+    # ----------------------------------------------------------------------
+    # calibrated_table: bbox 높이(px)를 사용자가 실험으로 만든 표에 매핑한다.
+    # pinhole: class_height_m_json + 카메라 vfov로 물리식 추정한다.
+    # 인쇄물/모니터 사진 시연은 calibrated_table 권장.
+    distance_mode: "calibrated_table"
+
+    # 1차 bbox 거리 추정값 = table_or_pinhole_distance * distance_scale + distance_bias_m
+    # 이 값은 "스마트폰 사진상 객체가 어느 정도 거리로 보이는가"에 대한 센서 추정값이다.
+    distance_scale: 1.0
+    distance_bias_m: 0.0
+    min_virtual_distance_m: 2.5
+    max_virtual_distance_m: 8.0
+
+    # 최종 map 배치 거리 = bbox 추정거리 * placement_distance_scale + placement_distance_bias_m
+    # 너무 가까우면 planner가 replan하기 전에 충돌하므로 turret 전방 14~22m 범위에 배치한다.
+    # 예: bbox 추정 5m -> 5*1.6+4 = 12m 전방에 가상 rock 생성.
+    placement_distance_scale: 1.4
+    placement_distance_bias_m: 4.0
+    min_placement_distance_m: 14.0
+    max_placement_distance_m: 22.0
+
+    # 실험 방법:
+    # 1) Android 화면에서 bbox 높이(px)를 보거나 /tank/phone_sim2real/virtual_obstacles의
+    #    bbox_size.height_px를 확인한다.
+    # 2) 그 때 전차가 회피를 시작했으면 하는 가상 거리(distance_m)를 정한다.
+    # 3) 아래 class_distance_table_json의 해당 클래스 표를 직접 수정한다.
+    #
+    # 예: car 사진을 지금 스마트폰 거리에서 찍었더니 bbox_height_px=55이고,
+    #     이때 A*가 7m 앞 장애물로 보길 원하면 car 표에
+    #     {"bbox_height_px":55,"distance_m":7.0}을 추가/수정한다.
+    #
+    # bbox_height_px가 작을수록 멀리, 클수록 가까이로 보정한다.
+    class_distance_table_json: >-
+      {
+        "car": [
+          {"bbox_height_px": 45, "distance_m": 8.0},
+          {"bbox_height_px": 70, "distance_m": 6.0},
+          {"bbox_height_px": 110, "distance_m": 4.0},
+          {"bbox_height_px": 170, "distance_m": 3.0},
+          {"bbox_height_px": 240, "distance_m": 2.5}
+        ],
+        "tank": [
+          {"bbox_height_px": 45, "distance_m": 8.0},
+          {"bbox_height_px": 75, "distance_m": 6.0},
+          {"bbox_height_px": 120, "distance_m": 4.2},
+          {"bbox_height_px": 185, "distance_m": 3.0},
+          {"bbox_height_px": 260, "distance_m": 2.5}
+        ],
+        "rock": [
+          {"bbox_height_px": 40, "distance_m": 7.5},
+          {"bbox_height_px": 70, "distance_m": 5.5},
+          {"bbox_height_px": 115, "distance_m": 3.8},
+          {"bbox_height_px": 180, "distance_m": 2.8},
+          {"bbox_height_px": 250, "distance_m": 2.5}
+        ],
+        "house": [
+          {"bbox_height_px": 55, "distance_m": 8.0},
+          {"bbox_height_px": 90, "distance_m": 6.0},
+          {"bbox_height_px": 145, "distance_m": 4.0},
+          {"bbox_height_px": 220, "distance_m": 3.0},
+          {"bbox_height_px": 300, "distance_m": 2.5}
+        ],
+        "tent": [
+          {"bbox_height_px": 45, "distance_m": 7.5},
+          {"bbox_height_px": 80, "distance_m": 5.2},
+          {"bbox_height_px": 130, "distance_m": 3.7},
+          {"bbox_height_px": 200, "distance_m": 2.7},
+          {"bbox_height_px": 280, "distance_m": 2.5}
+        ],
+        "unknown": [
+          {"bbox_height_px": 50, "distance_m": 8.0},
+          {"bbox_height_px": 90, "distance_m": 5.5},
+          {"bbox_height_px": 150, "distance_m": 3.5},
+          {"bbox_height_px": 240, "distance_m": 2.5}
+        ]
+      }
+
+    # pinhole 모드용 실제 객체 높이. calibrated_table 모드에서는 fallback으로만 쓴다.
+    class_height_m_json: '{"car":1.6,"person":1.7,"tank":2.4,"rock":1.2,"house":3.2,"tent":1.4,"unknown":1.6}'
+
+    # ----------------------------------------------------------------------
+    # 회피 장애물 크기 / planner cluster 변환
+    # ----------------------------------------------------------------------
+    # avoidance_radius_m는 discovered object와 synthetic cluster bbox 반경으로 사용된다.
+    # A*가 너무 크게 우회하면 줄이고, 너무 가까이 붙으면 키운다.
+    class_radius_m_json: '{"rock":4.0,"car":4.0,"tank":4.5,"house":5.5,"wall":4.0,"tent":4.0,"tree":4.0,"person":1.5,"human":1.5,"unknown":3.0}'
+    synthetic_cluster_radius_scale: 1.0
+    synthetic_cluster_min_radius_m: 1.5
+    synthetic_cluster_max_radius_m: 5.0
+    # 스마트폰 객체는 긴급 상황이므로 단일 점 장애물이 아니라 현재 경로를 가로막는 짧은 wall cluster로 발행한다.
+    emergency_path_wall_enabled: true
+    emergency_wall_cluster_count: 3
+    emergency_wall_half_width_m: 5.0
+    emergency_wall_radius_m: 3.5
+    emergency_wall_first_object_only: true
+    emergency_wall_source_tag: "phone_sim2real_emergency_path_wall"
+    # 스마트폰 장애물은 다른 map/fusion 레이어와 중복시키지 않고,
+    # 처음 발견 시점의 lookahead 경로 지점을 기억해 synthetic wall로만 planner에 넣는다.
+    emergency_wall_center_mode: "turret_snapshot"
+    emergency_wall_path_fraction: 1.0
+    emergency_wall_min_forward_m: 14.0
+    emergency_wall_max_forward_m: 22.0
+    emergency_wall_disable_discovered_fused: true
+    synthetic_cluster_count_hint: 8
+    synthetic_cluster_z_min: 0.2
+    synthetic_cluster_z_max: 2.2
+    synthetic_cluster_id_offset: 9000
+
+    # ----------------------------------------------------------------------
+    # Lock / injection / tracking / filtering
+    # ----------------------------------------------------------------------
+    # ego_relative_continuous: 매 프레임 현재 전차 기준으로 장애물 위치를 다시 계산한다.
+    # map_lock_on_confirmed: 추천값. 같은 객체가 N회 이상 잡히면 map 좌표에 고정한다.
+    # manual_lock: 앱의 LOCK OBSTACLE 버튼을 눌렀을 때만 map 좌표에 고정한다.
+    obstacle_anchor_mode: "ego_relative_continuous"
+    lock_after_observations: 1
+    locked_obstacle_ttl_sec: 8.0
+
+    # true면 locked/confirmed object만 synthetic LiDAR cluster로 내보낸다.
+    # 즉, 순간 오탐이 기존 A* 회피에 바로 들어가지 않게 막는다.
+    publish_locked_only_to_clusters: false
+    min_observations_for_cluster: 1
+
+    # Android 앱의 INJECT OFF / CLEAR / LOCK 명령을 받는다.
+    enable_phone_control_commands: true
+    clear_on_inject_off: false
+
+    obstacle_ttl_sec: 2.5
+    publish_hz: 30.0
+    min_confidence: 0.20
+    ignored_classes: "person,human,blue,red"
+
+    # class별 오탐 필터. rock 사진 상단에 작게 잡히는 car 같은 false positive 제거용.
+    class_filter_json: >-
+      {
+        "rock":  {"min_conf": 0.70, "min_bbox_height_px": 40, "min_bbox_area_px": 2500},
+        "car":   {"min_conf": 0.80, "min_bbox_height_px": 45, "min_bbox_area_px": 3000},
+        "tank":  {"min_conf": 0.75, "min_bbox_height_px": 45, "min_bbox_area_px": 3000},
+        "house": {"min_conf": 0.75, "min_bbox_height_px": 50, "min_bbox_area_px": 3500},
+        "tent":  {"min_conf": 0.70, "min_bbox_height_px": 45, "min_bbox_area_px": 2500},
+        "unknown": {"min_conf": 0.70, "min_bbox_height_px": 45, "min_bbox_area_px": 2500}
+      }
+
+    # 이미지 최상단 일부에서 발생하는 작은 오탐 제거. 416px 기준 0.08 ≈ 33px.
+    ignore_top_region_ratio: 0.08
+
+    dedupe_merge_distance_m: 1.5
+    track_merge_distance_m: 2.0
+    locked_bbox_match_px: 120.0
+    min_observations_for_publish: 1
+    max_active_tracks: 30
+
+    # 기본은 전차 heading + bbox 좌우 bearing만 사용한다.
+    # phone yaw를 쓰려면 스마트폰 방향과 전차 방향을 별도로 보정해야 한다.
+    use_phone_yaw: false
+    phone_yaw_offset_deg: 0.0
+    # 스마트폰 카메라로 객체를 인식하면 simulator turret/camera 전방에 장애물이 있다고 가정한다.
+    # body: 전차 차체 전방 기준, turret: turret/camera 전방 기준, phone: Android IMU 기준
+    bearing_reference_mode: "turret"
+    lookahead_stale_sec: 1.0
+    lookahead_min_distance_m: 1.0
+    turret_topic: "/tank/api/get_action/turret"
+    turret_subscription_type: "vector"
+    turret_vector_topic: "/tank/api/get_action/turret"
+    turret_vector_yaw_mode: "x_angle"
+    turret_angle_unit: "deg"
+    turret_yaw_offset_deg: 0.0
+    turret_yaw_convention: "sim_heading"
+    use_bbox_bearing: false
+    turret_stale_sec: 3.0
+    z_offset_m: 1.0
+    line_to_vehicle: true
+
+
+phone_cluster_mux_node:
+  ros__parameters:
+    real_cluster_topic: "/tank/visual_perception/lidar_clusters"
+    phone_cluster_topic: "/tank/phone_sim2real/synthetic_lidar_clusters"
+    muxed_cluster_topic: "/tank/phone_sim2real/muxed_lidar_clusters"
+    status_topic: "/tank/phone_sim2real/cluster_mux_status"
+    publish_rate_hz: 10.0
+    real_ttl_sec: 0.7
+    phone_ttl_sec: 1.2
+    dedupe_distance_m: 2.0
+    phone_id_offset: 9000
+    prefer_phone_on_overlap: true
+
+
+phone_emergency_brake_node:
+  ros__parameters:
+    detections_topic: "/tank/phone_sim2real/detections"
+    virtual_obstacles_topic: "/tank/phone_sim2real/virtual_obstacles"
+    synthetic_lidar_clusters_topic: "/tank/phone_sim2real/synthetic_lidar_clusters"
+    # ros_bridge가 직접 소비하는 one-shot override. /tank/control/command와 경쟁하지 않는다.
+    override_topic: "/tank/api/get_action/override"
+    status_topic: "/tank/phone_sim2real/emergency_status"
+    planner_status_topic: "/tank/planner/status"
+
+    enable_emergency_brake: true
+    trigger_on_detections: true
+    trigger_on_virtual_obstacles: true
+    trigger_on_synthetic_clusters: true
+    require_inject_enabled: true
+    ignored_classes: "person,human,blue,red"
+    min_detection_confidence: 0.50
+    min_virtual_confidence: 0.35
+
+    # 강화된 긴급 정지: 최소 시간 동안 정지하고, route_version 변경 또는 최대 정지시간까지 유지한다.
+    emergency_stop_min_sec: 3.0
+    emergency_stop_max_sec: 10.0
+    phone_signal_ttl_sec: 1.2
+    stop_until_route_version_change: true
+    stop_while_plan_failed: true
+    stop_while_emergency_blocked: true
+    # 계속 보인다고 영원히 정지하지는 않는다. route 변경/clear/최대시간 기준으로 해제한다.
+    stop_while_phone_signal_active: true
+    release_requires_route_change_or_clear: true
+    # 객체가 계속 보이는 동안 정지를 무한 연장하지 않는다.
+    # 객체가 이 시간 이상 사라졌다가 다시 보이면 새 긴급 이벤트로 취급한다.
+    event_clear_sec: 1.0
+    retrigger_cooldown_sec: 0.5
+    publish_hz: 30.0
+    status_hz: 5.0

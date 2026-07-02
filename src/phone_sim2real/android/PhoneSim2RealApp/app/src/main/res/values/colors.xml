@@ -1,0 +1,10 @@
+<resources>
+    <color name="military_black">#070A08</color>
+    <color name="military_panel">#111914</color>
+    <color name="military_panel_2">#18221B</color>
+    <color name="military_green">#80C342</color>
+    <color name="military_green_dim">#476B30</color>
+    <color name="military_text">#EAF3E1</color>
+    <color name="military_warn">#FFB74D</color>
+    <color name="military_danger">#EF5350</color>
+</resources>
