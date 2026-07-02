@@ -306,6 +306,15 @@ class RosBridge(Node):
             callback_group=self.control_callback_group,
         )
 
+        # 돌발 대응 자문(sudden_advisor_node) 결정을 MFD 패널에 노출.
+        self.sub_decision_status = self.create_subscription(
+            String,
+            "/tank/decision/status",
+            self.on_decision_status,
+            10,
+            callback_group=self.control_callback_group,
+        )
+
         # ----------------------------------------------------
         # 내부 공유 상태
         # ----------------------------------------------------
@@ -371,6 +380,8 @@ class RosBridge(Node):
             "ai_log": None,
             "llm_log": None,
             "decision": None,
+            # latest['sudden_decision'] 초기값. sudden_advisor_node(/tank/decision/status)가 들어오기 전 None.
+            "sudden_decision": None,
         }
 
         # ROS2 timer를 등록한다. 현재는 0.1초마다 latest state를 publish하므로 10Hz 주기다.
@@ -522,6 +533,15 @@ class RosBridge(Node):
     ########################################################
     # 5. ROS2 -> 시뮬레이터 명령 callback들
     ########################################################
+    def on_decision_status(self, msg: String) -> None:
+        """sudden_advisor_node 돌발 결정(/tank/decision/status)을 MFD 패널용으로 저장."""
+        try:
+            payload = json.loads(msg.data)
+        except (ValueError, TypeError):
+            return
+        if isinstance(payload, dict):
+            self.update_latest("sudden_decision", payload)
+
     def on_route_risk_report(self, msg: String) -> None:
         """Store risk_analysis LLM output for the browser dashboard."""
         timestamp_wall = now_wall()

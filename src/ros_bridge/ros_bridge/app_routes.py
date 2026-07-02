@@ -2180,6 +2180,7 @@ def _build_dashboard_payload() -> Dict[str, Any]:
         "riskComparison": None,
         "riskFeatures": None,
         "missionPlan": None,
+        "suddenDecision": None,
         "rosGraph": None,
     }
 
@@ -2326,6 +2327,8 @@ def _build_dashboard_payload() -> Dict[str, Any]:
     payload["riskFeatures"] = _load_json_dict_safe(_resolve_risk_features_path())
     # 미션 계획(사격 위치·루트·순서·LLM 서술) — build_mission_plan.py 산출, 파일→폴링(RISK 패널에 표시).
     payload["missionPlan"] = _load_json_dict_safe(_resolve_mission_plan_path())
+    # 돌발 결정(sudden_advisor_node) — 라이브 토픽 /tank/decision/status → bridge latest → 패널.
+    payload["suddenDecision"] = latest.get("sudden_decision") if isinstance(latest, dict) else None
 
     # ROS 계산 그래프(노드↔토픽 + Hz) — ② 패널 ROS 탭(Cytoscape) 실시간 렌더용.
     try:

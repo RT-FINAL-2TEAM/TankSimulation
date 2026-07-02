@@ -1868,6 +1868,26 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 html += '</div>';
                 return html;
             }
+            function renderSuddenDecision(state) {
+                // 돌발 대응(sudden_advisor_node, 라이브) — 미션 주행 중 신규 위협 결정(advise-only).
+                const sd = state?.suddenDecision;
+                if (!sd) return '';
+                const act = sd.action || 'NONE';
+                if (act === 'NONE' && !(sd.n_new > 0)) {
+                    return '<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px;font-size:11px;color:#7a8aa0;">돌발 대응 대기 (신규 위협 없음)</div>';
+                }
+                const col = act === 'RETURN' ? '#f39' : act === 'ENGAGE' ? '#e8c37a' : act === 'BYPASS' ? '#9ec5f0' : '#7a8aa0';
+                let html = '<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px;">';
+                html += '<div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">돌발 대응 (라이브)</div>';
+                html += `<div style="font-size:13px;margin-bottom:2px;">결정 <b style="color:${col}">${escapeHtml(act)}</b> · 신규 ${safe(sd.n_new, 0)} · 교전가능 ${safe(sd.n_engageable, 0)} · 최대위험 ${safe(sd.max_risk, 0)}</div>`;
+                html += `<div style="font-size:11px;margin:2px 0;">${escapeHtml(safe(sd.reason))}</div>`;
+                const g = sd.llm || {};
+                if (g.available) {
+                    html += `<div style="font-size:11px;margin-top:3px;"><b>LLM</b> [${escapeHtml(safe(g.action))}]: ${escapeHtml(safe(g.reason))}</div>`;
+                }
+                html += '</div>';
+                return html;
+            }
             function renderTank3d(pitch, roll, yaw, tYaw, tPitch) {
                 const hull = `<div class="t3d-grp">${t3dCube(60, 15, 38, "")}</div>`;
                 const barrel = `<div class="t3d-grp" style="transform:translateZ(11px) rotateX(${-tPitch}deg)">`
@@ -1923,7 +1943,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
             function updateLeftPanel(state) {
                 // C2 4분할: 패널 ③(전차상태+시스템)·④(LLM/위험도) 렌더. 아래 legacy 5탭 코드는 unreachable.
                 byId("tankSystemContent").innerHTML = renderTankState(state) + renderSystem(state);
-                byId("riskContent").innerHTML = renderRiskPanel(state) + renderMissionPlan(state);
+                byId("riskContent").innerHTML = renderRiskPanel(state) + renderMissionPlan(state) + renderSuddenDecision(state);
                 return;
                 const latest = latestBridge(state);
                 const yolo = state?.yolo || {};
