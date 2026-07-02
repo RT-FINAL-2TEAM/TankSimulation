@@ -496,6 +496,10 @@ def main() -> int:
         },
     }
 
+    # ballistic_turret_node engagements 형식(자동 연결용) — 사격가능 표적만, 교전순서대로.
+    # tank_scenario2.launch.py가 TANK_USE_MISSION_PLAN=true일 때 이 필드를 읽어 사격 시퀀스로 쓴다.
+    plan["engagements"] = json.loads(build_engagements_json(plan))
+
     # 검증
     problems = verify_plan(plan, bboxes)
     if rr["late_statics"]:

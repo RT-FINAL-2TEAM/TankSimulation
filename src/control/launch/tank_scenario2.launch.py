@@ -53,9 +53,61 @@ def _clear_stale_scenario2_completion_files(project_root: str) -> None:
             print(f"[scenario2] stale report cleanup failed for {filename}: {exc}")
 
 
+# 기본 사격 시퀀스 — cheol가 라이브 튜닝·검증한 값(안전 기본).
+# mission_plan opt-in이 아니면 이걸 쓴다. reposition은 경사 pitch 한계 시 A* 재배치 fallback.
+_DEFAULT_ENGAGEMENTS_JSON = (
+    '[{'
+    '"id":"enemy_mid",'
+    '"checkpoint":{"x":48.0,"y":224.0,"radius_m":10.0},'
+    '"checkpoint_settle_sec":0.8,'
+    '"target":{"x":50.0,"y":285.0,"z":8.5},'
+    '"target_from_enemy_pose":false,'
+    '"target_height_offset_m":0.0,'
+    '"reposition":{"enabled":true,"fallback_goals":[{"x":55.0,"y":230.0}],"arrival_radius_m":3.0,"min_travel_m":2.0,"timeout_sec":45.0,"max_attempts":1}'
+    '},{'
+    '"id":"enemy_final",'
+    '"checkpoint":{"x":50.0,"y":260.0,"radius_m":10.0},'
+    '"checkpoint_settle_sec":0.8,'
+    '"target":{"x":135.46,"y":276.87,"z":0.0},'
+    '"target_from_enemy_pose":true,'
+    '"target_height_offset_m":0.0,'
+    '"reposition":{"enabled":true,"heading_deg":0.0,"goal_offset_m":16.0,"min_travel_m":3.0,"arrival_radius_m":10.5,"max_attempts":2}'
+    '}]'
+)
+
+
+def _scenario2_engagements(project_root: str) -> str:
+    """사격 시퀀스(engagements_json) 결정.
+
+    TANK_USE_MISSION_PLAN=true 이고 mission_plan.json에 engagements가 있으면 **정찰→자동 도출** 사격
+    시퀀스를 쓴다(build_mission_plan.py 산출). 아니면 cheol 검증 하드코딩값(_DEFAULT)을 쓴다(안전 기본).
+    실패(파일 없음/파싱 오류)해도 항상 기본값으로 폴백해 시나리오2가 깨지지 않게 한다.
+    """
+    use_mp = os.environ.get("TANK_USE_MISSION_PLAN", "false").strip().lower() in ("1", "true", "yes", "y")
+    if not use_mp:
+        return _DEFAULT_ENGAGEMENTS_JSON
+    import json
+    mp_file = os.environ.get(
+        "TANK_MISSION_PLAN_FILE", os.path.join(project_root, "recon_reports", "mission_plan.json")
+    )
+    try:
+        with open(mp_file, "r", encoding="utf-8") as f:
+            engs = json.load(f).get("engagements")
+        if isinstance(engs, list) and engs:
+            print(f"[scenario2] mission_plan 사격 시퀀스 사용: {mp_file} (표적 {len(engs)}개)")
+            return json.dumps(engs, ensure_ascii=False)
+        print(f"[scenario2] mission_plan에 engagements 없음 → 기본 사격 시퀀스 사용: {mp_file}")
+    except FileNotFoundError:
+        print(f"[scenario2] mission_plan 파일 없음 → 기본 사격 시퀀스 사용: {mp_file}")
+    except Exception as exc:  # noqa: BLE001 - 어떤 오류든 기본값 폴백
+        print(f"[scenario2] mission_plan 로드 실패({exc}) → 기본 사격 시퀀스 사용")
+    return _DEFAULT_ENGAGEMENTS_JSON
+
+
 def generate_launch_description():
     project_root = _project_root()
     _clear_stale_scenario2_completion_files(project_root)
+    engagements_json = _scenario2_engagements(project_root)
 
     control_share = get_package_share_directory("control")
     autonomous_launch = os.path.join(control_share, "launch", "tank_autonomous_control.launch.py")
@@ -120,25 +172,8 @@ def generate_launch_description():
             package="control", executable="ballistic_turret_node", name="tank_ballistic_turret_node",
             output="screen",
             parameters=[{
-                "engagements_json": (
-                    '[{'
-                    '"id":"enemy_mid",'
-                    '"checkpoint":{"x":48.0,"y":224.0,"radius_m":10.0},'
-                    '"checkpoint_settle_sec":0.8,'
-                    '"target":{"x":50.0,"y":285.0,"z":8.5},'
-                    '"target_from_enemy_pose":false,'
-                    '"target_height_offset_m":0.0,'
-                    '"reposition":{"enabled":true,"fallback_goals":[{"x":55.0,"y":230.0}],"arrival_radius_m":3.0,"min_travel_m":2.0,"timeout_sec":45.0,"max_attempts":1}'
-                    '},{'
-                    '"id":"enemy_final",'
-                    '"checkpoint":{"x":50.0,"y":260.0,"radius_m":10.0},'
-                    '"checkpoint_settle_sec":0.8,'
-                    '"target":{"x":135.46,"y":276.87,"z":0.0},'
-                    '"target_from_enemy_pose":true,'
-                    '"target_height_offset_m":0.0,'
-                    '"reposition":{"enabled":true,"heading_deg":0.0,"goal_offset_m":16.0,"min_travel_m":3.0,"arrival_radius_m":10.5,"max_attempts":2}'
-                    '}]'
-                ),
+                # 기본=cheol 검증 하드코딩값. TANK_USE_MISSION_PLAN=true면 정찰→자동도출(mission_plan.json)로 교체.
+                "engagements_json": engagements_json,
                 # SCENARIO2_FIXED_FALLBACK_55_230: enemy_mid fixed fallback is (55, 230); no north-offset fallback.
         # Dataset-based ballistic and turret-feedback convention.
                 "ballistic_k": 0.001520,
