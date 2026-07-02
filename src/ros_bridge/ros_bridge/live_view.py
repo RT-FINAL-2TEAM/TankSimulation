@@ -2407,7 +2407,8 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 drawFeedOverlay(latestState || {});
             });
             updateMapLegend();
-            if (new URLSearchParams(window.location.search).get("map") === "ros") setMapTab("ros");
+            // 기본으로 웹 3D(RVIZ 3D 탭)를 자동 표시한다. ?map=terrain / ?map=ros 로 되돌릴 수 있다.
+            { const mp = new URLSearchParams(window.location.search).get("map"); setMapTab(["terrain", "ros", "rviz"].includes(mp) ? mp : "rviz"); }
             fetchStaticMap();
             function toggleMax(panel) {
                 if (!panel) return;

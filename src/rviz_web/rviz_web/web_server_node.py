@@ -32,8 +32,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "rosbridgeHost": os.environ.get("TANK_RVIZ_WEB_ROSBRIDGE_HOST", ""),
     "rosbridgePort": int(os.environ.get("TANK_RVIZ_WEB_ROSBRIDGE_PORT", "9090")),
     "defaultCloud": os.environ.get("TANK_RVIZ_WEB_DEFAULT_CLOUD", "detected"),
-    "defaultRays": os.environ.get("TANK_RVIZ_WEB_DEFAULT_RAYS", "true").lower() in ("1", "true", "yes", "y"),
+    "defaultRays": os.environ.get("TANK_RVIZ_WEB_DEFAULT_RAYS", "false").lower() in ("1", "true", "yes", "y"),
     "defaultVectors": os.environ.get("TANK_RVIZ_WEB_DEFAULT_VECTORS", "true").lower() in ("1", "true", "yes", "y"),
+    "defaultGrids": os.environ.get("TANK_RVIZ_WEB_DEFAULT_GRIDS", "false").lower() in ("1", "true", "yes", "y"),
+    "defaultCam": os.environ.get("TANK_RVIZ_WEB_DEFAULT_CAM", "false").lower() in ("1", "true", "yes", "y"),
     "limits": {
         "maxCloudPoints": int(os.environ.get("TANK_RVIZ_WEB_MAX_CLOUD_POINTS", "14000")),
         "maxRayLines": int(os.environ.get("TANK_RVIZ_WEB_MAX_RAYS", "90")),
@@ -42,6 +44,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "topics": {
         "paths": [],
+        "occupancyGrids": [
+            "/tank/map/recon/occupancy_grid",
+            "/tank/map/recon/risk_grid",
+        ],
         "markerArrays": [
             "/tank/rviz/object_markers",
             "/tank/rviz/obstacle_markers",
@@ -50,6 +56,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "/tank/rviz/potential_markers",
             "/tank/rviz/potential_field_markers",
             "/tank/rviz/lidar_cluster_markers",
+            "/tank/rviz/dynamic_avoidance_markers",
+            "/tank/rviz/static_avoidance_markers",
             "/tank/rviz/fused_object_markers",
             "/tank/rviz/discovered_object_markers",
             "/tank/rviz/recon_map_markers",
@@ -81,6 +89,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "result": "/tank/potential/result_vector",
         },
         "lidarOrigin": "/tank/sensor/lidar/origin",
+        "cameraImage": "/tank/camera/lidar_projection/image",
     },
 }
 
@@ -129,6 +138,9 @@ HTML_PAGE = r"""
     button{border:1px solid rgba(77,255,145,.44);background:rgba(24,72,43,.72);color:var(--text);border-radius:8px;padding:7px 9px;margin:4px 4px 0 0;cursor:pointer;font-family:inherit;font-size:11px} button:hover{border-color:var(--ok)}
     .topic{display:grid;grid-template-columns:10px 1fr auto;gap:6px;align-items:center;margin:4px 0;font-size:10px}.dot{width:7px;height:7px;border-radius:50%;background:#47524b}.dot.on{background:var(--ok);box-shadow:0 0 8px rgba(77,255,145,.7)}.dot.off{background:var(--bad)}.count{color:var(--muted);text-align:right}
     #log{font-size:10px;line-height:1.45;color:var(--muted);white-space:pre-wrap;max-height:155px;overflow:auto}.badge{color:var(--ok)}
+    #cam{position:absolute;right:14px;bottom:14px;z-index:12;width:360px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px;box-shadow:0 12px 32px rgba(0,0,0,.42);display:none}
+    #cam .caphdr{font-size:11px;color:var(--ok);letter-spacing:1px;margin-bottom:6px}
+    #camCanvas{width:100%;height:auto;display:block;border:1px solid rgba(81,255,150,.25);border-radius:6px;background:#000}
   </style>
   <script src="https://cdn.jsdelivr.net/npm/eventemitter2@6.4.9/lib/eventemitter2.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
@@ -138,19 +150,22 @@ HTML_PAGE = r"""
 <body>
   <div id="topbar"><div id="brand">TANK-CV <span>RViz Web 3D</span></div><div id="status" class="bad">LOADING</div></div>
   <div id="viewer"></div>
+  <div id="cam"><div class="caphdr">CAMERA · LiDAR PROJECTION</div><canvas id="camCanvas"></canvas></div>
   <div id="side">
     <h2>RVIZ_WEB TERRAIN MESH COORD v4</h2>
     <div class="hint">좌표: Unity raw(x,y,z) → ROS tank_map(x, z, y) → Web(x, z, -y)<br>LiDAR ray는 all_detected_points_map 기준, cloud 표시는 선택 모드 기준.</div>
     <div class="row"><div class="key">ROSBRIDGE</div><div id="rosbridgeInfo" class="value">-</div></div>
     <div class="row"><div class="key">FIXED FRAME</div><div id="frameInfo" class="value">-</div></div>
-    <div class="row"><div class="key">CLOUD MODE</div><div id="cloudInfo" class="value">-</div></div>
+    <div class="row"><div class="key">CLOUDS</div><div id="cloudInfo" class="value">-</div></div>
     <div class="row"><div class="key">RAYS</div><div id="rayInfo" class="value">-</div></div>
     <div class="row"><div class="key">VECTORS</div><div id="vectorInfo" class="value">-</div></div>
+    <div class="row"><div class="key">GRIDS</div><div id="gridInfo" class="value">-</div></div>
+    <div class="row"><div class="key">CAM</div><div id="camInfo" class="value">-</div></div>
     <div class="row"><div class="key">BOUNDS</div><div id="boundsInfo" class="value">waiting</div></div>
     <div class="section">
-      <button onclick="setCloud('off')">Cloud OFF</button><button onclick="setCloud('detected')">Detected</button><button onclick="setCloud('all')">All</button><button onclick="setCloud('terrain')">Terrain</button>
-      <button onclick="setCloud('final')">Final cloud</button><button onclick="setCloud('ground')">Ground pts</button><button onclick="setCloud('nonground')">Non-ground</button>
-      <button onclick="toggleRays()">Ray ON/OFF</button><button onclick="toggleVectors()">Vector ON/OFF</button><button onclick="fitData()">Fit data</button><button onclick="resetCamera()">Reset</button><button onclick="clearDynamic()">Clear</button>
+      <button onclick="cloudOff()">Cloud OFF</button><button onclick="toggleCloud('detected')">Detected</button><button onclick="toggleCloud('all')">All</button><button onclick="toggleCloud('terrain')">Terrain</button>
+      <button onclick="toggleCloud('final')">Final cloud</button><button onclick="toggleCloud('ground')">Ground pts</button><button onclick="toggleCloud('nonground')">Non-ground</button>
+      <button onclick="toggleRays()">Ray ON/OFF</button><button onclick="toggleVectors()">Vector ON/OFF</button><button onclick="toggleGrids()">Grid ON/OFF</button><button onclick="toggleCam()">Cam ON/OFF</button><button onclick="fitData()">Fit data</button><button onclick="resetCamera()">Reset</button><button onclick="clearDynamic()">Clear</button>
     </div>
     <div class="section"><h2>TOPICS</h2><div id="topics"></div></div>
     <div class="section"><h2>LOG</h2><div id="log"></div></div>
@@ -159,13 +174,15 @@ HTML_PAGE = r"""
 <script>
 let cfg=null, ros=null, scene=null, camera=null, renderer=null, controls=null, rootGroup=null;
 let fixedFrame=new URLSearchParams(location.search).get('frame') || 'tank_map';
-let cloudMode=new URLSearchParams(location.search).get('cloud') || 'detected';
 let raysOn=(new URLSearchParams(location.search).get('rays') || '1') === '1';
 let vectorsOn=(new URLSearchParams(location.search).get('vectors') || '1') === '1';
-let cloudSub=null, rayCloudSub=null, currentCloudTopic=null;
-let markerObjects=new Map(), pathObjects=new Map(), poseObjects=new Map(), vectorObjects=new Map();
-let cloudObject=null, rayObject=null;
-let latestOriginMap=null, latestRayCloudPoints=[], latestSelectedCloudPoints=[], latestPlayerPoseMap=null;
+let gridsOn=(new URLSearchParams(location.search).get('grids') || '1') === '1';
+let camOn=(new URLSearchParams(location.search).get('cam') || '0') === '1';
+let rayCloudSub=null, camImageSub=null;
+let cloudSubs=new Map(), cloudObjects=new Map(), cloudModesOn=new Set(), initCloudModes=[];
+let markerObjects=new Map(), pathObjects=new Map(), poseObjects=new Map(), vectorObjects=new Map(), gridObjects=new Map();
+let rayObject=null;
+let latestOriginMap=null, latestRayCloudPoints=[], latestPlayerPoseMap=null;
 let dataBox=new THREE.Box3(), hasDataBounds=false;
 let topicRows={};
 let MAX_CLOUD_POINTS=14000, MAX_RAYS=90, POTENTIAL_VECTOR_SCALE=12.0, POTENTIAL_VECTOR_Z_OFFSET=4.0;
@@ -174,9 +191,11 @@ function log(msg){ const t=new Date().toLocaleTimeString(); const el=document.ge
 function setStatus(text, cls){ const e=document.getElementById('status'); e.textContent=text; e.className=cls||'warn'; }
 function updateInfo(){
   document.getElementById('frameInfo').textContent=fixedFrame;
-  document.getElementById('cloudInfo').textContent=String(cloudMode).toUpperCase();
+  document.getElementById('cloudInfo').textContent=cloudModesOn.size?Array.from(cloudModesOn).join(',').toUpperCase():'OFF';
   document.getElementById('rayInfo').textContent=raysOn?'ON':'OFF';
   document.getElementById('vectorInfo').textContent=vectorsOn?'ON':'OFF';
+  document.getElementById('gridInfo').textContent=gridsOn?'ON':'OFF';
+  document.getElementById('camInfo').textContent=camOn?'ON':'OFF';
 }
 function topicId(topic){ return 'topic_'+String(topic||'').replace(/[^a-zA-Z0-9_]/g,'_'); }
 function ensureTopic(topic){
@@ -222,13 +241,23 @@ function fitData(){
   controls.target.copy(c); camera.position.set(c.x+maxDim*0.75, c.y+maxDim*0.9+70, c.z+maxDim*1.2);
   camera.near=0.1; camera.far=Math.max(5000,maxDim*20); camera.updateProjectionMatrix(); controls.update(); updateBoundsLabel();
 }
-function removeObject(obj){ if(obj){ rootGroup.remove(obj); } }
+function disposeNode(n){
+  if(!n) return;
+  if(n.geometry && n.geometry.dispose){ n.geometry.dispose(); }
+  const m=n.material;
+  if(m){ (Array.isArray(m)?m:[m]).forEach(function(mm){ if(mm){ if(mm.map && mm.map.dispose){ mm.map.dispose(); } if(mm.dispose){ mm.dispose(); } } }); }
+}
+// 씬에서 제거할 때 GPU/JS 메모리를 반드시 해제한다. dispose를 빼먹으면 cloud(300ms)·marker(250ms)·
+// grid·sprite가 매 업데이트마다 누수되어 몇 분 뒤 브라우저 탭이 OOM(Aw Snap)으로 죽는다.
+function removeObject(obj){ if(obj){ rootGroup.remove(obj); if(obj.traverse){ obj.traverse(disposeNode); } else { disposeNode(obj); } } }
 function clearDynamic(){
   for(const [,o] of markerObjects) removeObject(o); markerObjects.clear();
   for(const [,o] of pathObjects) removeObject(o); pathObjects.clear();
   for(const [,o] of poseObjects) removeObject(o); poseObjects.clear();
   for(const [,o] of vectorObjects) removeObject(o); vectorObjects.clear();
-  removeObject(cloudObject); cloudObject=null; removeObject(rayObject); rayObject=null;
+  for(const [,o] of gridObjects) removeObject(o); gridObjects.clear();
+  for(const [,o] of cloudObjects) removeObject(o); cloudObjects.clear();
+  removeObject(rayObject); rayObject=null;
   dataBox=new THREE.Box3(); hasDataBounds=false; updateBoundsLabel(); log('cleared dynamic objects');
 }
 
@@ -274,6 +303,21 @@ function makeArrow(points, color, opacity=1.0){
   const a=points[points.length-2], b=points[points.length-1]; const dir=new THREE.Vector3().subVectors(b,a); const len=dir.length();
   if(len>0.01){ const cone=new THREE.Mesh(new THREE.ConeGeometry(Math.max(0.35,len*0.045),Math.max(0.9,len*0.13),12),new THREE.MeshBasicMaterial({color,transparent:opacity<1,opacity})); cone.position.copy(b); cone.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir.clone().normalize()); group.add(cone); }
   points.forEach(addBounds); return group;
+}
+function makeTextSprite(text, colorHex, opacity){
+  text=String(text==null?'':text).trim(); if(!text) return null;
+  const font=48, pad=10;
+  const cvs=document.createElement('canvas'); const ctx=cvs.getContext('2d');
+  ctx.font=`bold ${font}px Consolas,monospace`;
+  const tw=Math.ceil(ctx.measureText(text).width);
+  cvs.width=Math.max(2,tw+pad*2); cvs.height=font+pad*2;
+  ctx.font=`bold ${font}px Consolas,monospace`; ctx.textBaseline='middle';
+  ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,0,cvs.width,cvs.height);
+  const r=(colorHex>>16)&255, g=(colorHex>>8)&255, b=colorHex&255;
+  ctx.fillStyle=`rgb(${r},${g},${b})`; ctx.fillText(text,pad,cvs.height/2);
+  const tex=new THREE.CanvasTexture(cvs); tex.needsUpdate=true;
+  const mat=new THREE.SpriteMaterial({map:tex, transparent:true, opacity:(opacity==null?1:opacity), depthTest:false});
+  const sp=new THREE.Sprite(mat); sp.__aspect=cvs.width/cvs.height; return sp;
 }
 
 function markerKey(topic,m){ return `${topic}|${m.ns||''}|${m.id}`; }
@@ -344,8 +388,11 @@ function renderMarker(topic,m){
     const pts=(m.points||[]).map(p=>markerPointToWeb(m,p)); obj=makeLine(pts,color,opacity,true);
   } else if(type===6 || type===7 || type===8){ // CUBE_LIST / SPHERE_LIST / POINTS
     const pts=(m.points||[]).map(p=>markerPointToWeb(m,p)); obj=makePoints(pts,Math.max(sx,0.35),color,opacity);
-  } else if(type===9){ // TEXT_VIEW_FACING, approximate as small sphere anchor
-    obj=new THREE.Mesh(new THREE.SphereGeometry(Math.max(0.6,sz*0.25),8,6),new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.75})); applyMarkerPose(obj,m.pose);
+  } else if(type===9){ // TEXT_VIEW_FACING -> camera-facing text sprite (RViz parity)
+    const sp=makeTextSprite(m.text, color, opacity);
+    if(sp){ const p=rosToWebPoint(m.pose?.position||{}); sp.position.copy(p); const hM=Math.max(sz,1.5); sp.scale.set(hM*sp.__aspect, hM, 1); addBounds(p); obj=sp; }
+  } else if(type===10){ // MESH_RESOURCE (no loader in web) -> wireframe box placeholder at pose
+    obj=new THREE.Mesh(new THREE.BoxGeometry(Math.max(sx,1),Math.max(sz,1),Math.max(sy,1)),new THREE.MeshBasicMaterial({color,wireframe:true,transparent:true,opacity:Math.min(opacity,0.6)})); applyMarkerPose(obj,m.pose);
   } else if(type===11){ // TRIANGLE_LIST: final terrain elevation mesh. Preserve per-vertex marker.colors like RViz.
     obj=makeTriangleList(m);
   }
@@ -367,6 +414,45 @@ function renderPath(topic,msg){
   markTopic(topic,pts.length); updateBoundsLabel();
 }
 
+// nav_msgs/OccupancyGrid -> textured plane (RViz Map display parity). value: -1 unknown, 0..100.
+function occGridRGBA(topic,val){
+  if(val<0) return [0,0,0,0];                       // unknown -> transparent
+  const t=Math.max(0,Math.min(1,val/100));
+  if(topic.indexOf('risk')>=0){                     // risk heat: green -> yellow -> red
+    let r,g; if(t<0.5){ r=Math.round(2*t*255); g=200; } else { r=230; g=Math.round((1-(t-0.5)*2)*200); }
+    return [r,g,40, val<=0?0:Math.round(70+t*160)];
+  }
+  const c=Math.round(45+t*210);                     // occupancy grayscale
+  return [c,c,c, val<=0?28:Math.round(70+t*170)];
+}
+function renderOccupancyGrid(topic,msg){
+  if(!gridsOn){ if(gridObjects.has(topic)){ removeObject(gridObjects.get(topic)); gridObjects.delete(topic); } markTopic(topic,0,false); return; }
+  const info=msg.info||{}; const W=info.width|0, H=info.height|0; const res=Number(info.resolution)||0;
+  let cells=msg.data;
+  if(typeof cells==='string'){ const bin=atob(cells); const a=new Int8Array(bin.length); for(let i=0;i<bin.length;i++) a[i]=bin.charCodeAt(i); cells=a; }
+  if(W<=0||H<=0||!res||!cells||cells.length<W*H){ markTopic(topic,0,false); return; }
+  const pos=(info.origin&&info.origin.position)||{}; const ox=Number(pos.x||0), oy=Number(pos.y||0);
+  const rgba=new Uint8Array(W*H*4); let nz=0;
+  for(let row=0;row<H;row++){ for(let col=0;col<W;col++){ const idx=row*W+col; const v=cells[idx]; const rc=occGridRGBA(topic,v); const di=idx*4; rgba[di]=rc[0]; rgba[di+1]=rc[1]; rgba[di+2]=rc[2]; rgba[di+3]=rc[3]; if(v>0) nz++; } }
+  const tex=new THREE.DataTexture(rgba,W,H,THREE.RGBAFormat); tex.magFilter=THREE.NearestFilter; tex.minFilter=THREE.NearestFilter; tex.needsUpdate=true;
+  const lift=(topic.indexOf('risk')>=0)?0.09:0.05;
+  const w00=rosToWebPoint({x:ox,y:oy,z:0}); const w10=rosToWebPoint({x:ox+W*res,y:oy,z:0});
+  const w01=rosToWebPoint({x:ox,y:oy+H*res,z:0}); const w11=rosToWebPoint({x:ox+W*res,y:oy+H*res,z:0});
+  w00.y=lift; w10.y=lift; w01.y=lift; w11.y=lift;
+  const verts=[w00.x,w00.y,w00.z, w10.x,w10.y,w10.z, w11.x,w11.y,w11.z,  w00.x,w00.y,w00.z, w11.x,w11.y,w11.z, w01.x,w01.y,w01.z];
+  const uvs=[0,0, 1,0, 1,1,  0,0, 1,1, 0,1];
+  const geom=new THREE.BufferGeometry();
+  geom.addAttribute('position',new THREE.Float32BufferAttribute(verts,3));
+  geom.addAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));
+  geom.computeBoundingSphere();
+  const mat=new THREE.MeshBasicMaterial({map:tex, side:THREE.DoubleSide, transparent:true, depthWrite:false});
+  const mesh=new THREE.Mesh(geom,mat);
+  if(gridObjects.has(topic)) removeObject(gridObjects.get(topic));
+  gridObjects.set(topic,mesh); rootGroup.add(mesh);
+  [w00,w10,w01,w11].forEach(addBounds);
+  markTopic(topic,nz); updateBoundsLabel();
+}
+
 function bytesFromRosData(data){ if(typeof data==='string'){ const bin=atob(data); const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i); return bytes; } if(Array.isArray(data)) return new Uint8Array(data); if(data && data.buffer) return new Uint8Array(data); return new Uint8Array(0); }
 function fieldOffset(msg,name){ const f=(msg.fields||[]).find(x=>x.name===name); return f?f.offset:-1; }
 function decodePointCloud2(msg, limit){
@@ -376,10 +462,11 @@ function decodePointCloud2(msg, limit){
   for(let i=0;i<n;i+=stride){ const off=i*step; if(off+Math.max(ox,oy,oz)+4>bytes.length) break; const x=dv.getFloat32(off+ox,little), y=dv.getFloat32(off+oy,little), z=dv.getFloat32(off+oz,little); if(Number.isFinite(x)&&Number.isFinite(y)&&Number.isFinite(z)) pts.push(rosToWebPoint({x,y,z})); }
   return pts;
 }
-function renderCloud(topic,msg){
-  const pts=decodePointCloud2(msg,MAX_CLOUD_POINTS); latestSelectedCloudPoints=pts;
-  removeObject(cloudObject); cloudObject=null;
-  if(pts.length){ cloudObject=makePoints(pts,0.55,0xff9a22,0.88); rootGroup.add(cloudObject); }
+const CLOUD_COLORS={detected:0xff9a22, all:0x33ccff, terrain:0x9a6b3f, final:0x3388ff, ground:0x33ff66, nonground:0xff5555};
+function renderCloud(mode,topic,msg){
+  const pts=decodePointCloud2(msg,MAX_CLOUD_POINTS);
+  if(cloudObjects.has(mode)){ removeObject(cloudObjects.get(mode)); cloudObjects.delete(mode); }
+  if(pts.length){ const o=makePoints(pts,0.55,CLOUD_COLORS[mode]||0xff9a22,0.88); cloudObjects.set(mode,o); rootGroup.add(o); }
   markTopic(topic,pts.length); updateBoundsLabel();
 }
 function renderRayCloud(topic,msg){ latestRayCloudPoints=decodePointCloud2(msg,MAX_CLOUD_POINTS); markTopic(topic,latestRayCloudPoints.length); updateRays(); }
@@ -408,7 +495,8 @@ function renderPose(topic,msg){
   const color=isEnemy?0xff3333:(isTarget?0xffff33:0x33aaff);
   const sphere=new THREE.Mesh(new THREE.SphereGeometry(isTarget?1.2:1.5,12,8),new THREE.MeshBasicMaterial({color}));
   sphere.position.copy(pos); group.add(sphere);
-  const yaw=yawFromQuat(pose.orientation||{}); const dir=new THREE.Vector3(Math.cos(yaw),0,-Math.sin(yaw)); const arrow=makeArrow([pos,pos.clone().add(dir.multiplyScalar(7.0))],color,0.85); if(false && arrow) group.add(arrow);
+  const yaw=yawFromQuat(pose.orientation||{}); const dir=new THREE.Vector3(Math.cos(yaw),0,-Math.sin(yaw)); const arrow=makeArrow([pos,pos.clone().add(dir.multiplyScalar(7.0))],color,0.85); if(arrow) group.add(arrow);
+  poseObjects.set(topic,group); rootGroup.add(group); addBounds(pos); markTopic(topic,1); updateBoundsLabel();
 }
 
 function vectorStartMap(){
@@ -436,24 +524,58 @@ function subscribeTopic(topic,type,cb,throttle=250){
 function subscribeAll(){
   (cfg.topics.paths||[]).forEach(t=>subscribeTopic(t,'nav_msgs/Path',renderPath,500));
   (cfg.topics.markerArrays||[]).forEach(t=>subscribeTopic(t,'visualization_msgs/MarkerArray',renderMarkerArray,250));
+  (cfg.topics.occupancyGrids||[]).forEach(t=>subscribeTopic(t,'nav_msgs/OccupancyGrid',renderOccupancyGrid,1000));
   (cfg.topics.poses||[]).forEach(t=>subscribeTopic(t,'geometry_msgs/PoseStamped',renderPose,250));
   const vectors=cfg.topics.vectors||{}; Object.keys(vectors).forEach(name=>subscribeTopic(vectors[name],'geometry_msgs/Vector3Stamped',(topic,msg)=>renderVector(name,topic,msg),250));
   subscribeTopic(cfg.topics.lidarOrigin,'geometry_msgs/PointStamped',renderOrigin,250);
   if(raysOn && cfg.topics.rayCloud){ rayCloudSub=subscribeTopic(cfg.topics.rayCloud,'sensor_msgs/PointCloud2',renderRayCloud,400); }
-  setCloud(cloudMode);
+  initCloudModes.forEach(m=>setCloudMode(m,true));
+  if(camOn && cfg.topics.cameraImage){ camImageSub=subscribeTopic(cfg.topics.cameraImage,'sensor_msgs/Image',renderCameraImage,500); document.getElementById('cam').style.display='block'; }
 }
-function setCloud(mode){
-  cloudMode=mode||'off'; if(cloudSub){ cloudSub.unsubscribe(); cloudSub=null; } removeObject(cloudObject); cloudObject=null; latestSelectedCloudPoints=[];
-  const maps=cfg?.topics?.pointCloud2||{}; const topic=maps[cloudMode]; currentCloudTopic=topic||null;
-  if(topic) cloudSub=subscribeTopic(topic,'sensor_msgs/PointCloud2',renderCloud,300);
+function setCloudMode(mode, on){
+  const maps=cfg?.topics?.pointCloud2||{}; const topic=maps[mode]; if(!topic){ return; }
+  if(on){
+    if(cloudModesOn.has(mode)){ updateInfo(); return; }
+    cloudModesOn.add(mode);
+    cloudSubs.set(mode, subscribeTopic(topic,'sensor_msgs/PointCloud2',(t,m)=>renderCloud(mode,t,m),300));
+  } else {
+    cloudModesOn.delete(mode);
+    const s=cloudSubs.get(mode); if(s){ s.unsubscribe(); cloudSubs.delete(mode); }
+    if(cloudObjects.has(mode)){ removeObject(cloudObjects.get(mode)); cloudObjects.delete(mode); }
+    markTopic(topic,0,false);
+  }
   updateInfo();
 }
+function toggleCloud(mode){ setCloudMode(mode, !cloudModesOn.has(mode)); }
+function cloudOff(){ for(const mode of Array.from(cloudModesOn)) setCloudMode(mode,false); }
 function toggleRays(){
   raysOn=!raysOn; updateInfo();
   if(raysOn && !rayCloudSub && cfg?.topics?.rayCloud){ rayCloudSub=subscribeTopic(cfg.topics.rayCloud,'sensor_msgs/PointCloud2',renderRayCloud,400); }
   updateRays();
 }
 function toggleVectors(){ vectorsOn=!vectorsOn; updateInfo(); if(!vectorsOn){ for(const [,o] of vectorObjects) removeObject(o); vectorObjects.clear(); } }
+function toggleGrids(){ gridsOn=!gridsOn; updateInfo(); if(!gridsOn){ for(const [,o] of gridObjects) removeObject(o); gridObjects.clear(); } }
+function b64ToBytes(d){ if(typeof d==='string'){ const bin=atob(d); const u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i); return u; } if(Array.isArray(d)) return new Uint8Array(d); if(d&&d.buffer) return new Uint8Array(d); return new Uint8Array(0); }
+function renderCameraImage(topic,msg){
+  const W=msg.width|0, H=msg.height|0; if(W<=0||H<=0){ markTopic(topic,0,false); return; }
+  const enc=String(msg.encoding||'rgb8').toLowerCase();
+  const chan=(enc.indexOf('rgba')>=0||enc.indexOf('bgra')>=0)?4:(enc==='mono8'?1:3);
+  const step=(msg.step|0)||(W*chan);
+  const bytes=b64ToBytes(msg.data); if(bytes.length<H*step){ markTopic(topic,'partial',false); return; }
+  const bgr=enc.indexOf('bgr')===0;
+  const cvs=document.getElementById('camCanvas'); cvs.width=W; cvs.height=H;
+  const ctx=cvs.getContext('2d'); const img=ctx.createImageData(W,H); const out=img.data;
+  for(let y=0;y<H;y++){ const rowoff=y*step; for(let x=0;x<W;x++){ const si=rowoff+x*chan; const di=(y*W+x)*4;
+    if(chan===1){ const v=bytes[si]; out[di]=v; out[di+1]=v; out[di+2]=v; out[di+3]=255; }
+    else { let r=bytes[si],g=bytes[si+1],b=bytes[si+2]; if(bgr){ const t=r; r=b; b=t; } out[di]=r; out[di+1]=g; out[di+2]=b; out[di+3]=(chan===4?bytes[si+3]:255); } } }
+  ctx.putImageData(img,0,0); markTopic(topic,`${W}x${H}`);
+}
+function toggleCam(){
+  camOn=!camOn; document.getElementById('cam').style.display=camOn?'block':'none'; updateInfo();
+  const t=(cfg&&cfg.topics)?cfg.topics.cameraImage:null;
+  if(camOn && !camImageSub && t){ camImageSub=subscribeTopic(t,'sensor_msgs/Image',renderCameraImage,500); }
+  else if(!camOn && camImageSub){ camImageSub.unsubscribe(); camImageSub=null; }
+}
 
 async function main(){
   initThree(); updateInfo();
@@ -461,9 +583,13 @@ async function main(){
   const resp=await fetch('/api/config?frame='+encodeURIComponent(fixedFrame)+'&v='+Date.now(),{cache:'no-store'});
   cfg=await resp.json(); fixedFrame=cfg.fixedFrame||fixedFrame;
   MAX_CLOUD_POINTS=cfg.limits?.maxCloudPoints||MAX_CLOUD_POINTS; MAX_RAYS=cfg.limits?.maxRayLines||MAX_RAYS; POTENTIAL_VECTOR_SCALE=cfg.limits?.potentialVectorScale||POTENTIAL_VECTOR_SCALE; POTENTIAL_VECTOR_Z_OFFSET=cfg.limits?.potentialVectorZOffset||POTENTIAL_VECTOR_Z_OFFSET;
-  if(!urlParams.has('cloud')) cloudMode=cfg.defaultCloud||cloudMode;
+  const cloudParam=urlParams.get('cloud');
+  if(cloudParam!==null){ initCloudModes = cloudParam==='off'?[]:cloudParam.split(',').map(s=>s.trim()).filter(Boolean); }
+  else { const d=cfg.defaultCloud||'detected'; initCloudModes = (d && d!=='off')?[d]:[]; }
   if(!urlParams.has('rays')) raysOn=!!cfg.defaultRays;
   if(!urlParams.has('vectors')) vectorsOn=!!cfg.defaultVectors;
+  if(!urlParams.has('grids')) gridsOn=(cfg.defaultGrids!==false);
+  if(!urlParams.has('cam')) camOn=!!cfg.defaultCam;
   updateInfo(); log('viewer='+cfg.viewer); log('coord='+cfg.coordinatePolicy);
   const host=cfg.rosbridgeHost || window.location.hostname; const url='ws://'+host+':'+cfg.rosbridgePort; document.getElementById('rosbridgeInfo').textContent=url;
   ros=new ROSLIB.Ros();

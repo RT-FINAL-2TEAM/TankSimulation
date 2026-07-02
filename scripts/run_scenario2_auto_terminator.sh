@@ -17,9 +17,9 @@ set -Eeuo pipefail
 #   좌하: T3 scenario2 자동 manager
 #   우하: T4 debug monitor
 #
-# 사용:
-#   cd ~/tankcc
+# 사용(어느 경로/PC든): 워크스페이스 루트에서 실행
 #   ./scripts/run_scenario2_auto_terminator.sh
+#   (스크립트가 자기 위치로 워크스페이스를 자동 감지. 필요시 TANK_WS로 강제 지정)
 #
 # 옵션:
 #   --no-rviz        RViz 실행 안 함
@@ -31,7 +31,10 @@ set -Eeuo pipefail
 #   scripts/run_scenario2_scenario.py가 scenario2 자율/교전 스택을 내부에서 실행한다.
 #   따라서 이 스크립트는 tank_scenario2.launch.py를 별도로 실행하지 않는다.
 
-WORKSPACE="${TANK_WS:-$HOME/tankcc}"
+# 워크스페이스 루트를 스크립트 위치에서 자동 감지(scripts/의 부모). 어느 PC/경로에서든 동작.
+# TANK_WS 를 지정하면 그 값을 우선 사용한다.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE="${TANK_WS:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 LOG_ROOT="${LOG_ROOT:-$WORKSPACE/logs}"
 RUN_ID="scenario2_terminator_$(date +%Y%m%d_%H%M%S)"
 LOG_DIR="$LOG_ROOT/$RUN_ID"
@@ -56,8 +59,8 @@ Options:
   -h, --help      도움말 출력
 
 Environment:
-  TANK_WS             ROS2 workspace 경로(default: ~/tankcc)
-  LOG_ROOT            로그 저장 상위 경로(default: ~/tankcc/logs)
+  TANK_WS             ROS2 workspace 경로(default: 스크립트 위치 기준 자동 감지)
+  LOG_ROOT            로그 저장 상위 경로(default: <workspace>/logs)
   MAP_WAIT_SEC        RViz pane의 scenario2_map.map 대기 시간(default: 180)
   BRIDGE_HEALTH_URL   bridge health URL(default: http://127.0.0.1:5000/health)
 USAGE
@@ -252,16 +255,35 @@ else
   cat > "$RVIZ_SCRIPT" <<EOF
 #!/usr/bin/env bash
 set -Eeuo pipefail
-printf '\\033]0;S2-T2 No RViz\\007'
+printf '\\033]0;S2-T2 Markers (no RViz window)\\007'
 source "$COMMON_ENV"
+
+MAP_FILE="$WORKSPACE/$SCENARIO2_MAP_REL"
+
 echo "============================================================"
-echo "[T2] Scenario2 RViz disabled"
+echo "[T2] 데스크톱 RViz2 창 생략 (--no-rviz) — 마커 발행 노드만 실행"
 echo "============================================================"
-echo "--no-rviz 옵션으로 RViz 실행을 생략했습니다."
+echo "웹 RViz 3D(/view의 RVIZ 3D 탭)가 scenario2 맵/지형 마커를 그대로 받는다."
+echo "대기 파일: \$MAP_FILE"
 echo
-echo "수동 실행:"
-echo "  ros2 launch rviz_visualization tank_scenario2_map_view.launch.py"
+
+for i in \$(seq 1 "$MAP_WAIT_SEC"); do
+  if [[ -f "\$MAP_FILE" ]]; then
+    echo "[OK] scenario2 map found:"; ls -lh "\$MAP_FILE"; break
+  fi
+  if [[ "\$i" -eq "$MAP_WAIT_SEC" ]]; then
+    echo "[ERROR] scenario2 map wait timeout: \$MAP_FILE"; exec bash
+  fi
+  echo "[WAIT] scenario2_map.map 대기 중... \$i/$MAP_WAIT_SEC"; sleep 1
+done
+
 echo
+echo "Command:"
+echo "  ros2 launch rviz_visualization tank_scenario2_map_view.launch.py use_rviz:=false"
+echo
+ros2 launch rviz_visualization tank_scenario2_map_view.launch.py use_rviz:=false 2>&1 | tee "$LOG_DIR/rviz_scenario2.log"
+echo
+echo "[EXIT] 마커 노드 종료됨. 창을 닫거나 Enter를 누르세요."
 exec bash
 EOF
 fi
@@ -534,4 +556,13 @@ echo "  좌하: 자동 순차 실행 manager"
 echo "  우하: debug monitor"
 echo
 
-terminator -g "$CONFIG_FILE" -l scenario2_auto
+# 웹 3D(/view의 RVIZ 3D 탭, /rviz3d)용 데이터 소켓 rosbridge :9090.
+# 이미 떠 있지 않으면 백그라운드로 기동(로그는 디스크 절약 위해 /dev/null로 버림).
+if ! pgrep -f rosbridge_websocket >/dev/null 2>&1; then
+  echo "[WEB] rosbridge_websocket :9090 백그라운드 기동 (웹 3D 데이터 소켓)"
+  ros2 run rosbridge_server rosbridge_websocket >/dev/null 2>&1 &
+fi
+
+# -u/--no-dbus: 이미 떠 있는 terminator 인스턴스에 DBus로 붙어 커스텀 -g 설정/레이아웃이
+# 무시되는 문제(빈 터미널 하나만 뜸)를 막고, 항상 독립 인스턴스로 이 레이아웃을 로드한다.
+terminator -u -g "$CONFIG_FILE" -l scenario2_auto

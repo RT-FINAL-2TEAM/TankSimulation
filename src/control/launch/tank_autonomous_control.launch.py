@@ -15,6 +15,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import SetEnvironmentVariable, DeclareLaunchArgument
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -109,6 +110,20 @@ def generate_launch_description():
         'require_turret_completion_for_reached', default_value='false',
         description='Gate route report completion on /tank/turret/status terminal phase.'
     )
+    # RL 컨트롤러 스왑: true면 PD tank_controller_node 대신 tank_rl_inference_node를 띄운다
+    # (둘 다 /tank/control/command 발행 → 반드시 하나만). 정책은 2D 선학습 산출물(.ts/.zip).
+    use_rl_controller_arg = DeclareLaunchArgument(
+        'use_rl_controller', default_value='false',
+        description='Replace PD controller with tank_rl_inference_node (RL policy drives).'
+    )
+    rl_policy_path_arg = DeclareLaunchArgument(
+        'rl_policy_path', default_value='',
+        description='TorchScript(.ts) or SB3(.zip) policy path for the RL controller.'
+    )
+    rl_mode_arg = DeclareLaunchArgument(
+        'rl_mode', default_value='m1',
+        description='RL obs mode: m1/v1(path-follow) or m2/v2(+lidar avoidance).'
+    )
 
     return LaunchDescription([
         mission_type_arg,
@@ -127,6 +142,9 @@ def generate_launch_description():
         terrain_weight_arg,
         recon_report_dir_arg,
         require_turret_completion_for_reached_arg,
+        use_rl_controller_arg,
+        rl_policy_path_arg,
+        rl_mode_arg,
         SetEnvironmentVariable("TANK_START_CONTROL", "start"),
         SetEnvironmentVariable("TANK_APF_PASSTHROUGH_WHEN_CLEAR", "true"),
 
@@ -237,14 +255,18 @@ def generate_launch_description():
                 "lidar_block_min_distance": 0.5,
                 "lidar_block_max_distance": 80.0,
                 "emergency_cluster_replan_enabled": True,
-                "emergency_replan_cooldown_sec": 0.8,
+                # GPU-less 안정화: 0.8s는 emergency replan을 ~1.25/s로 폭주시켜 A* 재계산이 코어를
+                # 점유(제어/브릿지 지연) + 경로 멈칫. 안정값 2.0s로 복원(통합 전 9c95605 값).
+                "emergency_replan_cooldown_sec": 2.0,
                 "emergency_replan_front_distance": 24.0,
                 "emergency_replan_min_distance": 0.0,
                 "emergency_replan_margin": 10.0,
                 # Conditional dynamic A*: 현재 보이는 LiDAR cluster가 실제 경로를 막을 때만 재계획한다.
                 "dynamic_replan_max_count": 0,
-                "dynamic_replan_min_progress_m": 0.0,
-                "dynamic_replan_progress_guard_sec": 0.0,
+                # 진행 가드 복원: 전차가 2m 전진하거나 4s 지나기 전엔 재계획 금지 → 한 프레임 노이즈로
+                # 경로가 좌우로 뒤집히는 churn 차단(emergency 체크 전에 먼저 게이팅).
+                "dynamic_replan_min_progress_m": 2.0,
+                "dynamic_replan_progress_guard_sec": 4.0,
                 "lidar_cluster_eps": 2.0,
                 "lidar_cluster_min_samples": 3,
                 "lidar_history_resolution": 0.5,
@@ -376,6 +398,7 @@ def generate_launch_description():
             executable="tank_controller_node",
             name="tank_team_path_controller_node",
             output="screen",
+            condition=UnlessCondition(LaunchConfiguration("use_rl_controller")),
             parameters=[{
                 "tank_param_file": tank_param_file,
                 "controller_hz": 10.0,
@@ -472,6 +495,22 @@ def generate_launch_description():
                 # S 후진 대신 기존 경로의 W를 저속으로 이어간다.
                 "post_fire_reverse_inhibit_sec": 8.0,
                 "post_fire_forward_resume_weight": 0.35,
+            }],
+        ),
+        # RL 컨트롤러(스왑). use_rl_controller:=true 일 때만. PD 컨트롤러와 배타적(발행자 1개).
+        Node(
+            package="tank_rl",
+            executable="tank_rl_inference_node",
+            name="tank_rl_inference_node",
+            output="screen",
+            condition=IfCondition(LaunchConfiguration("use_rl_controller")),
+            parameters=[{
+                "mode": LaunchConfiguration("rl_mode"),
+                "policy_path": LaunchConfiguration("rl_policy_path"),
+                "controller_hz": 10.0,
+                "goal_tolerance": 10.0,
+                "enable_safety_wrapper": True,
+                "hard_stop_distance": 3.8,
             }],
         ),
     ])

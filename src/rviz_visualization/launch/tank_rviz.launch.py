@@ -22,7 +22,9 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -34,6 +36,10 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            # use_rviz:=false 면 데스크톱 RViz2 창은 생략하고 마커 발행 노드만 실행한다.
+            # → 웹 RViz 3D(/rviz3d)가 동일한 마커(정적맵/객체/지형)를 그대로 받는다.
+            #   GPU-less에서 무거운 소프트웨어 렌더링 RViz2 창을 끄고도 웹 시각화는 유지된다.
+            DeclareLaunchArgument("use_rviz", default_value="true"),
             # A. finalmap 정적맵 로더 — /tank/rviz/recon_map_markers + occupancy/risk grid 발행
             Node(
                 package="rviz_visualization",
@@ -88,10 +94,11 @@ def generate_launch_description():
                     }
                 ],
             ),
-            # D. RViz2 실행 (finalmap 정적맵 + 라이브 인지 표시)
+            # D. RViz2 실행 (finalmap 정적맵 + 라이브 인지 표시) — use_rviz:=false 면 생략(마커 노드만).
             ExecuteProcess(
                 cmd=["rviz2", "-d", rviz_config],
                 output="screen",
+                condition=IfCondition(LaunchConfiguration("use_rviz")),
             ),
         ]
     )
