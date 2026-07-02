@@ -1834,6 +1834,40 @@ def render_view_page(poll_ms: int = 1000) -> str:
                      + f(w, d, `rotateX(90deg) translateZ(${h / 2}px)`)
                      + f(w, d, `rotateX(-90deg) translateZ(${h / 2}px)`);
             }
+            function renderMissionPlan(state) {
+                // 미션 계획(build_mission_plan.py 산출) — 루트·사격위치·교전순서·LLM 서술. RISK 패널 하단에 표시.
+                const mp = state?.missionPlan;
+                if (!mp || !mp.plan) return '';
+                const plan = mp.plan;
+                let html = '<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px;">';
+                html += '<div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">미션 계획 (사격)</div>';
+                const order = (plan.engage_order || []).join(" → ") || "—";
+                html += `<div style="font-size:12px;margin-bottom:4px;">추천 루트 <b>${safe(mp.route_recommended)}</b> · 교전순서 ${escapeHtml(order)}</div>`;
+                for (const e of (plan.targets || [])) {
+                    const cp = e.firing_checkpoint;
+                    if (cp) {
+                        const band = (cp.exposure_band || "—").toUpperCase();
+                        html += `<div style="font-size:11px;margin:2px 0;"><b>${escapeHtml(safe(e.id))}</b> → 사격(${numberText(cp.x, 0)}, ${numberText(cp.y, 0)}) ${numberText(cp.distance_m, 0)}m [${band}]</div>`;
+                    } else {
+                        html += `<div style="font-size:11px;margin:2px 0;color:#f39;"><b>${escapeHtml(safe(e.id))}</b> → 교전불가</div>`;
+                    }
+                }
+                const v = mp.verification || {};
+                if (Array.isArray(v.problems) && v.problems.length) {
+                    html += `<div style="font-size:11px;color:#f39;margin-top:4px;">⚠ ${escapeHtml(v.problems.join("; "))}</div>`;
+                }
+                const g = mp.llm_guidance || {};
+                if (g.available) {
+                    html += `<div style="font-size:11px;margin-top:4px;"><b>LLM</b>: ${escapeHtml(safe(g.summary))}</div>`;
+                    for (const c of (g.cautions || [])) {
+                        html += `<div style="font-size:11px;color:#e8c37a;">⚠ ${escapeHtml(c)}</div>`;
+                    }
+                } else if (g.error) {
+                    html += '<div style="font-size:11px;color:#889;">LLM 서술 미사용</div>';
+                }
+                html += '</div>';
+                return html;
+            }
             function renderTank3d(pitch, roll, yaw, tYaw, tPitch) {
                 const hull = `<div class="t3d-grp">${t3dCube(60, 15, 38, "")}</div>`;
                 const barrel = `<div class="t3d-grp" style="transform:translateZ(11px) rotateX(${-tPitch}deg)">`
@@ -1889,7 +1923,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
             function updateLeftPanel(state) {
                 // C2 4분할: 패널 ③(전차상태+시스템)·④(LLM/위험도) 렌더. 아래 legacy 5탭 코드는 unreachable.
                 byId("tankSystemContent").innerHTML = renderTankState(state) + renderSystem(state);
-                byId("riskContent").innerHTML = renderRiskPanel(state);
+                byId("riskContent").innerHTML = renderRiskPanel(state) + renderMissionPlan(state);
                 return;
                 const latest = latestBridge(state);
                 const yolo = state?.yolo || {};

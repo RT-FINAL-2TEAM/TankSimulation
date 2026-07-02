@@ -1155,6 +1155,10 @@ def _resolve_risk_features_path() -> Path:
     return _resolve_recon_report_dir() / "risk_features.json"
 
 
+def _resolve_mission_plan_path() -> Path:
+    return _resolve_recon_report_dir() / "mission_plan.json"
+
+
 def _load_json_dict_safe(path: Path) -> Optional[Dict[str, Any]]:
     """예외를 흡수하는 _load_json_dict — 대시보드 페이로드 빌드용."""
     try:
@@ -2175,6 +2179,7 @@ def _build_dashboard_payload() -> Dict[str, Any]:
         "windowsRecon": {},
         "riskComparison": None,
         "riskFeatures": None,
+        "missionPlan": None,
         "rosGraph": None,
     }
 
@@ -2319,6 +2324,8 @@ def _build_dashboard_payload() -> Dict[str, Any]:
     # 수식 vs LLM 비교(RECON RISK 패널) — 파일→폴링. 신규 토픽 없음.
     payload["riskComparison"] = _load_json_dict_safe(_resolve_risk_comparison_path())
     payload["riskFeatures"] = _load_json_dict_safe(_resolve_risk_features_path())
+    # 미션 계획(사격 위치·루트·순서·LLM 서술) — build_mission_plan.py 산출, 파일→폴링(RISK 패널에 표시).
+    payload["missionPlan"] = _load_json_dict_safe(_resolve_mission_plan_path())
 
     # ROS 계산 그래프(노드↔토픽 + Hz) — ② 패널 ROS 탭(Cytoscape) 실시간 렌더용.
     try:
