@@ -320,6 +320,29 @@ def check_bridge_auto() -> None:
         print("[경고] /health 확인 실패 — 브릿지가 떠 있는지(auto), 포트(5000)를 확인하세요.")
 
 
+def clear_stale_reports() -> None:
+    """이전 정찰의 파생·패널 산출물을 제거 — 새 정찰 시작 시 MFD 패널이 '대기'로 비도록.
+    (route_A/B.json은 아래 루프에서 루트별로 별도 제거한다.)"""
+    stale = [
+        "comparison.json", "route_comparison.json", "risk_features.json",
+        "risk_comparison.json", "risk_comparison.md", "route_risk_result.json",
+        "route_analysis_report.txt", "mission_plan.json",
+        os.path.join("analysis", "recon_report.md"),
+        os.path.join("analysis", "mission_plan.md"),
+    ]
+    removed = 0
+    for name in stale:
+        try:
+            os.remove(os.path.join(REPORT_DIR, name))
+            removed += 1
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            print(f"  [정리] {name} 제거 실패: {exc}")
+    if removed:
+        print(f"이전 정찰 산출물 {removed}개 정리 — MFD 패널 초기화.")
+
+
 def main() -> int:
     rclpy.init()
     watcher = PoseWatcher()
@@ -332,6 +355,7 @@ def main() -> int:
     check_bridge_auto()
     print("기존 자율 스택(orphan) 노드 정리 중...")
     cleanup_stack()
+    clear_stale_reports()
 
     try:
         for idx, (route_id, side) in enumerate(ROUTES):
@@ -486,6 +510,21 @@ def main() -> int:
                     print(f"  ⚖️  수식 vs LLM 비교: {os.path.join(REPORT_DIR, 'risk_comparison.md')}")
                 except Exception as e:
                     print(f"  [CMP] 수식·LLM 비교 생성 실패: {e}")
+
+            # 정찰 발견객체+지형 → scenario2 합본맵 → 미션계획(사격위치·루트·교전순서·LLM 서술) 자동 생성.
+            # (build_mission_plan은 LLM(ollama) graceful — 미가동이어도 기하 계획은 나온다.)
+            try:
+                subprocess.run(
+                    ["python3", os.path.join(scripts_dir, "build_scenario2_map.py")],
+                    cwd=PROJECT_ROOT, check=True, timeout=120,
+                )
+                subprocess.run(
+                    ["python3", os.path.join(scripts_dir, "build_mission_plan.py")],
+                    cwd=PROJECT_ROOT, check=False, timeout=180,
+                )
+                print(f"  🎯 미션계획: {os.path.join(REPORT_DIR, 'mission_plan.json')} (+ MFD 패널)")
+            except Exception as e:
+                print(f"  [PLAN] 미션계획 자동 생성 실패: {e}")
         else:
             print("\n[경고] route_A.json / route_B.json 일부 누락 — comparison 생략")
         return 0
