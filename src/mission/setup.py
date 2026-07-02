@@ -21,6 +21,7 @@ setup(
         'console_scripts': [
             'decision_node = mission.decision_node:main',
             'mock_turret_node = mission.mock_turret_node:main',
+            'sudden_advisor_node = mission.sudden_advisor_node:main',
         ],
     },
 )

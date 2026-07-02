@@ -227,4 +227,17 @@ def generate_launch_description():
                 "return_goal_topic": "/tank/mission/goal_pose",
             }],
         ),
+        # 돌발 대응 자문(advise-only) — perception→sudden_decision→/tank/decision/status(+MFD 패널).
+        # goal/engage를 발행하지 않아 ballistic 체크포인트 시퀀스와 충돌 없음(decision_node와 달리 안전).
+        # use_llm=false로 LLM 자문만 끄고 수식 판단만 쓸 수 있음.
+        Node(
+            package="mission", executable="sudden_advisor_node", name="tank_sudden_advisor_node",
+            output="screen",
+            parameters=[{
+                "scenario2_map": LaunchConfiguration("scenario2_map"),
+                "tick_hz": 2.0,
+                "hysteresis_ticks": 2,
+                "use_llm": True,
+            }],
+        ),
     ])
