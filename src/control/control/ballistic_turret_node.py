@@ -115,6 +115,22 @@ class BallisticTurretNode(Node):
         self.declare_parameter("turret_feedback_ttl_sec", 0.75)
         self.declare_parameter("on_target_cycles", 1)
         self.declare_parameter("yaw_weight_max", 0.55)
+        # HYBRID_YAW_DELAY_COMPENSATION_V1
+        # Coarse yaw acquisition remains closed-loop.  When delayed
+        # feedback shows a target crossing, release Q/E first and then
+        # use a bounded time-based correction pulse plus observation.
+        self.declare_parameter("hybrid_yaw_enabled", True)
+        self.declare_parameter("yaw_overshoot_brake_sec", 0.18)
+        self.declare_parameter("yaw_pulse_weight", 0.14)
+        self.declare_parameter("yaw_pulse_rate_q_deg_s", 4.3)
+        self.declare_parameter("yaw_pulse_rate_e_deg_s", 5.1)
+        self.declare_parameter("yaw_pulse_gain", 0.55)
+        self.declare_parameter("yaw_pulse_min_sec", 0.12)
+        self.declare_parameter("yaw_pulse_max_sec", 0.30)
+        self.declare_parameter("yaw_observe_sec", 0.16)
+        self.declare_parameter("yaw_settle_rate_deg_s", 0.65)
+        self.declare_parameter("yaw_overshoot_min_prev_error_deg", 1.20)
+        self.declare_parameter("yaw_overshoot_min_current_error_deg", 0.35)
         self.declare_parameter("pitch_weight_max", 0.45)
         self.declare_parameter("fire_pulse_sec", 0.35)
         self.declare_parameter("post_fire_hold_sec", 1.5)
@@ -221,6 +237,40 @@ class BallisticTurretNode(Node):
         )
         self.on_target_cycles_required = max(1, int(self.get_parameter("on_target_cycles").value))
         self.yaw_weight_max = clamp(float(self.get_parameter("yaw_weight_max").value), 0.10, 1.0)
+        self.hybrid_yaw_enabled = bool(self.get_parameter("hybrid_yaw_enabled").value)
+        self.yaw_overshoot_brake_sec = max(0.0, float(
+            self.get_parameter("yaw_overshoot_brake_sec").value
+        ))
+        self.yaw_pulse_weight = clamp(float(
+            self.get_parameter("yaw_pulse_weight").value
+        ), 0.10, self.yaw_weight_max)
+        self.yaw_pulse_rate_q_deg_s = max(0.10, float(
+            self.get_parameter("yaw_pulse_rate_q_deg_s").value
+        ))
+        self.yaw_pulse_rate_e_deg_s = max(0.10, float(
+            self.get_parameter("yaw_pulse_rate_e_deg_s").value
+        ))
+        self.yaw_pulse_gain = clamp(float(
+            self.get_parameter("yaw_pulse_gain").value
+        ), 0.05, 1.0)
+        self.yaw_pulse_min_sec = max(0.01, float(
+            self.get_parameter("yaw_pulse_min_sec").value
+        ))
+        self.yaw_pulse_max_sec = max(self.yaw_pulse_min_sec, float(
+            self.get_parameter("yaw_pulse_max_sec").value
+        ))
+        self.yaw_observe_sec = max(0.0, float(
+            self.get_parameter("yaw_observe_sec").value
+        ))
+        self.yaw_settle_rate_deg_s = max(0.01, float(
+            self.get_parameter("yaw_settle_rate_deg_s").value
+        ))
+        self.yaw_overshoot_min_prev_error_deg = max(0.0, float(
+            self.get_parameter("yaw_overshoot_min_prev_error_deg").value
+        ))
+        self.yaw_overshoot_min_current_error_deg = max(0.0, float(
+            self.get_parameter("yaw_overshoot_min_current_error_deg").value
+        ))
         self.pitch_weight_max = clamp(float(self.get_parameter("pitch_weight_max").value), 0.20, 1.0)
         self.fire_pulse_sec = max(0.05, float(self.get_parameter("fire_pulse_sec").value))
         self.post_fire_hold_sec = max(0.0, float(self.get_parameter("post_fire_hold_sec").value))
@@ -303,6 +353,12 @@ class BallisticTurretNode(Node):
         self.turret_feedback_wall = -1e9
         self.dedicated_turret_feedback_wall = -1e9
         self.turret_feedback_source = "none"
+        # Feedback sequence/rate are based on receipt time.  They are used
+        # only to require an observation after Q/E is released; fire still
+        # relies on the received measured angle, never a prediction.
+        self._turret_feedback_seq = 0
+        self._turret_last_yaw_sample_wall: Optional[float] = None
+        self.turret_yaw_rate_deg_s = 0.0
 
         # Latest hull attitude from /tank/player/state.  These values use the
         # map/body convention established by the bridge: X=yaw, Y=pitch,
@@ -342,6 +398,7 @@ class BallisticTurretNode(Node):
         self.return_goal_sent = False
         self.return_started_wall: Optional[float] = None
         self._last_status_wall = -1e9
+        self._reset_hybrid_yaw_control()
 
         self.override_pub = self.create_publisher(String, TOPIC_TURRET_OVERRIDE, 10)
         self.status_pub = self.create_publisher(String, TOPIC_TURRET_STATUS, 10)
@@ -468,6 +525,44 @@ class BallisticTurretNode(Node):
         )
         self.enemy_pose_wall = time.monotonic()
 
+    def _record_turret_feedback(
+        self,
+        *,
+        yaw: Optional[float],
+        raw_pitch: Optional[float],
+        source: str,
+        now: float,
+    ) -> None:
+        """Record a received turret sample and estimate measured yaw rate.
+
+        The rate is deliberately derived from *received* samples only.  It is
+        not used to predict a fire angle; it only prevents a shot while the
+        delayed stream still reports appreciable turret motion.
+        """
+        received = False
+        if yaw is not None:
+            normalized_yaw = normalize_180(yaw)
+            previous_yaw = self.turret_yaw_deg
+            previous_wall = self._turret_last_yaw_sample_wall
+            if previous_yaw is not None and previous_wall is not None:
+                dt = now - previous_wall
+                if dt > 1e-3:
+                    self.turret_yaw_rate_deg_s = normalize_180(
+                        normalized_yaw - previous_yaw
+                    ) / dt
+            else:
+                self.turret_yaw_rate_deg_s = 0.0
+            self.turret_yaw_deg = normalized_yaw
+            self._turret_last_yaw_sample_wall = now
+            received = True
+        if raw_pitch is not None:
+            self.turret_elevation_deg = self.pitch_feedback_sign * raw_pitch
+            received = True
+        if received:
+            self.turret_feedback_wall = now
+            self.turret_feedback_source = source
+            self._turret_feedback_seq += 1
+
     def _player_state_cb(self, msg: String) -> None:
         try:
             payload = json.loads(msg.data)
@@ -497,21 +592,22 @@ class BallisticTurretNode(Node):
         # Dedicated feedback wins while fresh; do not alternate old/new samples.
         if now - self.dedicated_turret_feedback_wall <= 0.45:
             return
-        if yaw is not None:
-            self.turret_yaw_deg = normalize_180(yaw)
-        if raw_pitch is not None:
-            self.turret_elevation_deg = self.pitch_feedback_sign * raw_pitch
-        if yaw is not None or raw_pitch is not None:
-            self.turret_feedback_wall = now
-            self.turret_feedback_source = "player_state"
+        self._record_turret_feedback(
+            yaw=yaw,
+            raw_pitch=raw_pitch,
+            source="player_state",
+            now=now,
+        )
 
     def _turret_feedback_cb(self, msg: Vector3Stamped) -> None:
-        self.turret_yaw_deg = normalize_180(float(msg.vector.x))
-        self.turret_elevation_deg = self.pitch_feedback_sign * float(msg.vector.y)
         now = time.monotonic()
-        self.turret_feedback_wall = now
+        self._record_turret_feedback(
+            yaw=float(msg.vector.x),
+            raw_pitch=float(msg.vector.y),
+            source="get_action_turret",
+            now=now,
+        )
         self.dedicated_turret_feedback_wall = now
-        self.turret_feedback_source = "get_action_turret"
 
     def _bullet_cb(self, msg: String) -> None:
         if self.fire_started_wall is None or self.phase not in {"firing", "wait_impact"}:
@@ -554,6 +650,7 @@ class BallisticTurretNode(Node):
         elif self.shot_count < self.max_shots:
             self.phase = "aim"
             self._reset_aim_dwell()
+            self._reset_hybrid_yaw_control()
             self.fire_started_wall = None
             self.fire_until_wall = None
             self.post_fire_until_wall = None
@@ -586,6 +683,7 @@ class BallisticTurretNode(Node):
     def _lock_engagement_target(self) -> None:
         if self.engagement_target is None:
             self.engagement_target = self._selected_target()
+            self._reset_hybrid_yaw_control()
             self.get_logger().info(
                 f"Locked target stage={self.stage_index + 1}/{len(self.engagements)} "
                 f"id={self.stage['id']}: "
@@ -652,6 +750,7 @@ class BallisticTurretNode(Node):
         self.shot_target = None
         self.shot_count = 0
         self._reset_aim_dwell()
+        self._reset_hybrid_yaw_control()
         self.fire_started_wall = None
         self.fire_until_wall = None
         self.post_fire_until_wall = None
@@ -1006,6 +1105,7 @@ class BallisticTurretNode(Node):
         self.last_reposition_solution = dict(solution)
         self.phase = "reposition_for_shot"
         self._reset_aim_dwell()
+        self._reset_hybrid_yaw_control()
         self.reposition_goal_pub.publish(self._make_goal_pose(goal))
         self.get_logger().warn(
             f"Pitch limit at stage={self.stage_index + 1}/{len(self.engagements)} "
@@ -1140,6 +1240,183 @@ class BallisticTurretNode(Node):
             solution["theoretical_relative_pitch_limit"] = "above_max"
         return solution, None
 
+
+
+    # HYBRID_YAW_DELAY_COMPENSATION_V1
+    def _reset_hybrid_yaw_control(self) -> None:
+        """Clear per-engagement delayed-feedback yaw-control state."""
+        self._aim_yaw_mode = "track"
+        self._aim_yaw_reason = "reset"
+        self._aim_yaw_prev_error_deg: Optional[float] = None
+        self._aim_yaw_last_processed_feedback_seq = -1
+        self._aim_yaw_brake_until = 0.0
+        self._aim_yaw_wait_feedback_seq = -1
+        self._aim_yaw_pulse_command = ""
+        self._aim_yaw_pulse_until = 0.0
+        self._aim_yaw_pulse_sec = 0.0
+        self._aim_yaw_observe_until = 0.0
+
+    def _start_yaw_brake(self, now: float, reason: str) -> None:
+        """Release Q/E and wait for a post-release feedback sample."""
+        self._aim_yaw_mode = "brake"
+        self._aim_yaw_reason = reason
+        self._aim_yaw_brake_until = now + self.yaw_overshoot_brake_sec
+        self._aim_yaw_wait_feedback_seq = self._turret_feedback_seq
+        self._aim_yaw_pulse_command = ""
+        self._aim_yaw_pulse_until = 0.0
+
+    def _enter_yaw_observe(self, now: float, reason: str) -> None:
+        """Keep Q/E neutral until a new sample confirms the result."""
+        self._aim_yaw_mode = "observe"
+        self._aim_yaw_reason = reason
+        self._aim_yaw_observe_until = now + self.yaw_observe_sec
+        self._aim_yaw_wait_feedback_seq = self._turret_feedback_seq
+        self._aim_yaw_pulse_command = ""
+        self._aim_yaw_pulse_until = 0.0
+
+    def _start_yaw_pulse(self, yaw_error_deg: float, now: float, reason: str) -> None:
+        """Schedule a bounded low-speed correction pulse from measured error."""
+        command = "E" if yaw_error_deg > 0.0 else "Q"
+        calibrated_rate = (
+            self.yaw_pulse_rate_e_deg_s if command == "E"
+            else self.yaw_pulse_rate_q_deg_s
+        )
+        pulse_sec = self.yaw_pulse_gain * abs(yaw_error_deg) / calibrated_rate
+        pulse_sec = clamp(pulse_sec, self.yaw_pulse_min_sec, self.yaw_pulse_max_sec)
+        self._aim_yaw_mode = "pulse"
+        self._aim_yaw_reason = reason
+        self._aim_yaw_pulse_command = command
+        self._aim_yaw_pulse_sec = pulse_sec
+        self._aim_yaw_pulse_until = now + pulse_sec
+
+    def _hybrid_aim_yaw_control(
+        self,
+        yaw_error_deg: float,
+        now: float,
+    ) -> Tuple[str, float, Dict[str, Any], bool]:
+        """Return Q/E command and whether yaw is measured stable for firing.
+
+        ``track`` is ordinary real-time closed-loop control for a large yaw
+        error.  A target crossing, or even merely entering the fire tolerance,
+        switches to neutral/brake.  Any remaining error is corrected by a
+        short Q/E pulse computed from calibrated degrees-per-second, then the
+        controller waits for fresh feedback before another decision.
+        """
+        feedback_seq = self._turret_feedback_seq
+        new_feedback = feedback_seq != self._aim_yaw_last_processed_feedback_seq
+        previous_error = self._aim_yaw_prev_error_deg
+        if new_feedback:
+            self._aim_yaw_prev_error_deg = yaw_error_deg
+            self._aim_yaw_last_processed_feedback_seq = feedback_seq
+
+        overshoot = (
+            new_feedback
+            and previous_error is not None
+            and previous_error * yaw_error_deg < 0.0
+            and abs(previous_error) >= self.yaw_overshoot_min_prev_error_deg
+            and abs(yaw_error_deg) >= self.yaw_overshoot_min_current_error_deg
+        )
+        in_tolerance = abs(yaw_error_deg) <= self.yaw_tolerance_deg
+
+        def debug(extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            payload: Dict[str, Any] = {
+                "mode": self._aim_yaw_mode,
+                "reason": self._aim_yaw_reason,
+                "ready": self._aim_yaw_mode == "settled",
+                "new_feedback": new_feedback,
+                "feedback_seq": feedback_seq,
+                "yaw_rate_deg_s": round(self.turret_yaw_rate_deg_s, 3),
+                "in_tolerance": in_tolerance,
+                "overshoot_detected": overshoot,
+                "brake_remaining_sec": round(max(0.0, self._aim_yaw_brake_until - now), 3),
+                "pulse_remaining_sec": round(max(0.0, self._aim_yaw_pulse_until - now), 3),
+                "pulse_sec": round(self._aim_yaw_pulse_sec, 3),
+                "observe_remaining_sec": round(max(0.0, self._aim_yaw_observe_until - now), 3),
+                "wait_feedback_after_seq": self._aim_yaw_wait_feedback_seq,
+                "settle_rate_limit_deg_s": self.yaw_settle_rate_deg_s,
+            }
+            if extra:
+                payload.update(extra)
+            return payload
+
+        if self._aim_yaw_mode == "track":
+            if overshoot:
+                self._start_yaw_brake(now, "overshoot_sign_change")
+                return "", 0.0, debug(), False
+            if in_tolerance:
+                # Do not advance to pitch while the last Q/E command may still
+                # be acting in the simulator.  Release and observe first.
+                self._start_yaw_brake(now, "entered_yaw_tolerance")
+                return "", 0.0, debug(), False
+            weight = (
+                0.0 if abs(yaw_error_deg) <= self.yaw_control_deadband_deg
+                else self._yaw_weight(yaw_error_deg, self.yaw_weight_max)
+            )
+            command = "" if weight <= 0.0 else ("E" if yaw_error_deg > 0.0 else "Q")
+            return command, weight, debug({"command_source": "closed_loop_track"}), False
+
+        if self._aim_yaw_mode == "brake":
+            post_release_feedback = feedback_seq > self._aim_yaw_wait_feedback_seq
+            if now < self._aim_yaw_brake_until or not post_release_feedback:
+                return "", 0.0, debug({"command_source": "neutral_brake"}), False
+            if in_tolerance:
+                self._enter_yaw_observe(now, "brake_complete_in_tolerance")
+                return "", 0.0, debug({"command_source": "neutral_observe"}), False
+            self._start_yaw_pulse(yaw_error_deg, now, "post_brake_correction")
+            return (
+                self._aim_yaw_pulse_command,
+                self.yaw_pulse_weight,
+                debug({"command_source": "time_based_pulse"}),
+                False,
+            )
+
+        if self._aim_yaw_mode == "pulse":
+            if now < self._aim_yaw_pulse_until:
+                return (
+                    self._aim_yaw_pulse_command,
+                    self.yaw_pulse_weight,
+                    debug({"command_source": "time_based_pulse"}),
+                    False,
+                )
+            self._enter_yaw_observe(now, "pulse_complete")
+            return "", 0.0, debug({"command_source": "neutral_observe"}), False
+
+        if self._aim_yaw_mode == "observe":
+            post_pulse_feedback = feedback_seq > self._aim_yaw_wait_feedback_seq
+            if now < self._aim_yaw_observe_until or not post_pulse_feedback:
+                return "", 0.0, debug({"command_source": "neutral_observe"}), False
+            if in_tolerance:
+                if abs(self.turret_yaw_rate_deg_s) <= self.yaw_settle_rate_deg_s:
+                    self._aim_yaw_mode = "settled"
+                    self._aim_yaw_reason = "measured_angle_and_rate_settled"
+                    return "", 0.0, debug({"command_source": "neutral_settled"}), True
+                # The received angle is close but still moving.  Keep Q/E
+                # released and require one more fresh sample instead of firing.
+                self._enter_yaw_observe(now, "in_tolerance_waiting_for_low_rate")
+                return "", 0.0, debug({"command_source": "neutral_observe"}), False
+            self._start_yaw_pulse(yaw_error_deg, now, "observe_error_correction")
+            return (
+                self._aim_yaw_pulse_command,
+                self.yaw_pulse_weight,
+                debug({"command_source": "time_based_pulse"}),
+                False,
+            )
+
+        # settled
+        if in_tolerance and abs(self.turret_yaw_rate_deg_s) <= self.yaw_settle_rate_deg_s:
+            return "", 0.0, debug({"command_source": "neutral_settled"}), True
+        if in_tolerance:
+            self._enter_yaw_observe(now, "settled_but_rate_increased")
+            return "", 0.0, debug({"command_source": "neutral_observe"}), False
+        # A late sample can reveal residual error after settling.  Correct that
+        # residual with a bounded pulse, never by returning to high-speed track.
+        self._start_yaw_pulse(yaw_error_deg, now, "late_residual_correction")
+        return (
+            self._aim_yaw_pulse_command,
+            self.yaw_pulse_weight,
+            debug({"command_source": "time_based_pulse"}),
+            False,
+        )
 
     @staticmethod
     def _yaw_weight(error_deg: float, max_weight: float) -> float:
@@ -1411,6 +1688,7 @@ class BallisticTurretNode(Node):
                 )
                 return
             self.phase = "aim"
+            self._reset_hybrid_yaw_control()
             self._lock_engagement_target()
 
         # Re-acquire only when entering aim for the first time in this stage.
@@ -1681,6 +1959,7 @@ class BallisticTurretNode(Node):
             or feedback_age > self.turret_feedback_ttl_sec
         ):
             self._reset_physical_pitch_watch()
+            self._reset_hybrid_yaw_control()
             status = self._stage_status_base(active=True)
             status.update(solution)
             status.update({
@@ -1705,47 +1984,51 @@ class BallisticTurretNode(Node):
 
         yaw_error = normalize_180(solution["target_yaw_deg"] - self.turret_yaw_deg)
         pitch_error = solution["target_pitch_deg"] - self.turret_elevation_deg
-        yaw_aligned = abs(yaw_error) <= self.yaw_tolerance_deg
+        yaw_in_tolerance = abs(yaw_error) <= self.yaw_tolerance_deg
         pitch_aligned = abs(pitch_error) <= self.pitch_tolerance_deg
 
         yaw_cmd = ""
         yaw_weight = 0.0
         pitch_cmd = ""
         pitch_weight = 0.0
-        yaw_control_debug: Dict[str, Any] = {"mode": "yaw_aligned"}
+        yaw_control_debug: Dict[str, Any]
+        if self.hybrid_yaw_enabled:
+            yaw_cmd, yaw_weight, yaw_control_debug, yaw_aligned = self._hybrid_aim_yaw_control(
+                yaw_error, now
+            )
+        else:
+            yaw_aligned = yaw_in_tolerance
+            yaw_control_debug = {
+                "mode": "standard_track" if not yaw_aligned else "yaw_aligned",
+                "reason": "hybrid_yaw_disabled",
+                "ready": yaw_aligned,
+                "yaw_rate_deg_s": round(self.turret_yaw_rate_deg_s, 3),
+            }
+
         physical_pitch_limit: Dict[str, Any]
         aim_axis = "on_target"
 
         if not yaw_aligned:
-            # Never mix Q/E and R/F during acquisition.  It gives a stable,
-            # reproducible bearing before checking real pitch travel.
+            # Never mix Q/E and R/F during acquisition or while a delayed
+            # feedback correction is braking/observing.  This prevents pitch
+            # movement while yaw is still passing through the target.
             self._reset_physical_pitch_watch()
-            if hasattr(self, "_damped_aim_yaw_control"):
-                yaw_cmd, yaw_weight, yaw_control_debug = self._damped_aim_yaw_control(yaw_error, now)
-            else:
+            if not self.hybrid_yaw_enabled:
                 yaw_weight = (
                     0.0 if abs(yaw_error) <= self.yaw_control_deadband_deg
                     else self._yaw_weight(yaw_error, self.yaw_weight_max)
                 )
                 yaw_cmd = ("E" if yaw_error > 0.0 else "Q") if yaw_weight > 0.0 else ""
-                yaw_control_debug = {
-                    "mode": "standard_track",
-                    "reverse_hold_active": False,
-                }
             physical_pitch_limit = {
                 "active": False,
                 "stalled": False,
-                "reason": "waiting_for_yaw_alignment",
+                "reason": "waiting_for_yaw_stable_alignment",
             }
             aim_axis = "yaw"
         elif not pitch_aligned:
             # Actual R/F travel test: stay on the yaw target and watch the
             # simulator feedback.  Only a proven no-motion endstop can move
             # the vehicle to a fallback firing position.
-            if hasattr(self, "_aim_yaw_last_cmd"):
-                self._aim_yaw_last_cmd = ""
-            if hasattr(self, "_aim_yaw_reverse_hold_until"):
-                self._aim_yaw_reverse_hold_until = 0.0
             pitch_cmd = "R" if pitch_error > 0.0 else "F"
             pitch_weight = self._pitch_weight(pitch_error, self.pitch_weight_max)
             physical_pitch_limit = self._observe_physical_pitch_watch(
@@ -1804,6 +2087,8 @@ class BallisticTurretNode(Node):
                 "reason": "target_pitch_reached",
             }
 
+        # ``yaw_aligned`` here means measured angle *and* post-release
+        # settling observation, not merely instantaneous angle error.
         on_target = yaw_aligned and pitch_aligned
         if on_target:
             if self.on_target_since_wall is None:
@@ -1825,6 +2110,9 @@ class BallisticTurretNode(Node):
             "pitch_feedback_sign": self.pitch_feedback_sign,
             "body_attitude": self._body_attitude_debug(now),
             "yaw_error_deg": yaw_error,
+            "yaw_in_tolerance": yaw_in_tolerance,
+            "yaw_ready": yaw_aligned,
+            "yaw_rate_deg_s": round(self.turret_yaw_rate_deg_s, 3),
             "pitch_error_deg": pitch_error,
             "on_target": on_target,
             "on_target_cycles": self.on_target_cycles,

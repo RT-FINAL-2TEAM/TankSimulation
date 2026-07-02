@@ -202,6 +202,23 @@ def generate_launch_description():
                 "yaw_control_deadband_deg": 1.0,
                 "pitch_control_deadband_deg": 0.75,
                 "yaw_weight_max": 0.42,
+                # Delayed-feedback hybrid yaw control: coarse closed-loop
+                # tracking, then neutral/brake + bounded time pulse +
+                # fresh-feedback observation around the target.
+                "hybrid_yaw_enabled": True,
+                "yaw_overshoot_brake_sec": 0.18,
+                "yaw_pulse_weight": 0.14,
+                "yaw_pulse_rate_q_deg_s": 4.3,
+                "yaw_pulse_rate_e_deg_s": 5.1,
+                "yaw_pulse_gain": 0.55,
+                # tank_controller_node is normally 10 Hz, so use a
+                # pulse no shorter than one actual command cycle.
+                "yaw_pulse_min_sec": 0.12,
+                "yaw_pulse_max_sec": 0.30,
+                "yaw_observe_sec": 0.16,
+                "yaw_settle_rate_deg_s": 0.65,
+                "yaw_overshoot_min_prev_error_deg": 1.20,
+                "yaw_overshoot_min_current_error_deg": 0.35,
                 "aim_stable_sec": 0.60,
                 "turret_feedback_ttl_sec": 0.75,
                 "on_target_cycles": 1,

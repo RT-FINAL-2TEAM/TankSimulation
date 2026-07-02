@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Use merged real LiDAR + phone_sim2real synthetic clusters for planner.
+export TANK_TOPIC_LIDAR_CLUSTERS=/tank/phone_sim2real/muxed_lidar_clusters
+
 # run_scenario1_auto_terminator_v2.sh
 #
 # 목적:
