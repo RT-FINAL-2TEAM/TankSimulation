@@ -338,3 +338,31 @@ UNITY_FRAME = "tank_unity_raw"
 # - map.y = raw.z
 # - map.z = raw.y
 MAP_FRAME = "tank_map"
+
+
+############################################################
+# 9. LiDAR PointCloud2 ingress / metadata topics
+############################################################
+# /info 안의 대용량 lidarPoints JSON은 ROS String으로 재전송하지 않는다.
+# bridge가 isDetected hit만 Unity raw frame PointCloud2로 만들고,
+# lidar_processor_node가 이 토픽을 구독해 map-frame 분류 결과를 만든다.
+TOPIC_LIDAR_RAW_DETECTED = os.environ.get(
+    "TANK_TOPIC_LIDAR_RAW_DETECTED",
+    "/tank/sensor/lidar/raw_detected_points",
+)
+TOPIC_LIDAR_POINTS_COUNT = os.environ.get(
+    "TANK_TOPIC_LIDAR_POINTS_COUNT",
+    "/tank/sensor/lidar/points_count",
+)
+TOPIC_LIDAR_ORIGIN = os.environ.get(
+    "TANK_TOPIC_LIDAR_ORIGIN",
+    "/tank/sensor/lidar/origin",
+)
+TOPIC_LIDAR_ORIGIN_RAW = os.environ.get(
+    "TANK_TOPIC_LIDAR_ORIGIN_RAW",
+    "/tank/sensor/lidar/origin_raw",
+)
+TOPIC_LIDAR_ROTATION = os.environ.get(
+    "TANK_TOPIC_LIDAR_ROTATION",
+    "/tank/sensor/lidar/rotation",
+)

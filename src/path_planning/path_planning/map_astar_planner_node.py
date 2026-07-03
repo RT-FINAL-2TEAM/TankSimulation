@@ -1040,25 +1040,11 @@ class TeamDynamicAStarPlannerNode(Node):
     def lidar_cb(self, msg: PointCloud2) -> None:
         try:
             points = pointcloud2_to_xyz_array(msg)
-            # 계획 쪽 메모리/클러스터링 로직은 여전히 LidarObstacleMemory가 담당한다.
-            # LiDAR JSON String을 파싱하는 대신 최소한의 in-memory payload를 넘겨준다.
-            point_items = [
-                {
-                    "isDetected": True,
-                    "position_map": {"x": float(x), "y": float(y), "z": float(z)},
-                }
-                for x, y, z in points
-            ]
-            payload = {
-                "route": "/info",
-                "source": "pointcloud2/detected_points_map",
-                "timestamp_ros_sec": msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9,
-                "frame_id": msg.header.frame_id or MAP_FRAME,
-                "count": len(point_items),
-                "points": point_items,
-            }
-            self.lidar_obstacles.update_from_payload(
-                payload,
+            # detected_points_map is already in tank_map coordinates. Keep the
+            # tuple form required by history/DBSCAN/path blocking, but avoid the
+            # old PC2 -> dict list -> JSON-shaped payload -> reparsing path.
+            self.lidar_obstacles.update_from_xy_points(
+                points[:, :2],
                 history_enabled=self.enable_dynamic_replan,
                 history_resolution=self.lidar_history_resolution,
                 max_history_points=self.max_lidar_history_points,

@@ -271,7 +271,6 @@ TOPIC_OBSTACLES = "/tank/map/obstacles"
 #   가능하면 ros_bridge에서 이미 tank_map 기준으로 변환해서 publish하는 것이 좋다.
 #
 # 이 topic은 RViz2에서 POINTS marker로 표시한다.
-TOPIC_LIDAR_POINTS = "/tank/sensor/lidar/points"
 
 # LiDAR point 개수.
 # 메시지 타입:
@@ -279,7 +278,6 @@ TOPIC_LIDAR_POINTS = "/tank/sensor/lidar/points"
 #
 # 현재 visualizer node에서는 필수로 사용하지 않는다.
 # 추후 디버깅 text marker 또는 상태 패널에 표시할 수 있다.
-TOPIC_LIDAR_POINTS_COUNT = "/tank/sensor/lidar/points_count"
 
 
 ############################################################

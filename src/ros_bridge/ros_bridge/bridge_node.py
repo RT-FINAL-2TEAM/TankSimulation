@@ -28,6 +28,8 @@ import json
 # heading degree를 RViz/APF용 2D 방향 벡터로 변환하기 위해 사용한다.
 import math
 import os
+
+import numpy as np
 # Flask thread와 ROS2 executor thread가 공유 상태를 동시에 만지므로 Lock을 쓰기 위해 import한다.
 import threading
 # 최신 상태 dict를 저장/publish할 때 원본 변경 부작용을 막기 위해 깊은 복사를 사용한다.
@@ -37,7 +39,7 @@ from typing import Any, Dict, Optional, Tuple
 
 # RViz/경로계획에서 바로 쓸 수 있는 ROS2 geometry 메시지 타입을 가져온다.
 from geometry_msgs.msg import PointStamped, PoseStamped, Vector3Stamped
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CompressedImage, PointCloud2, PointField
 # ROS2 Python 클라이언트 라이브러리 rclpy를 사용한다.
 import rclpy
 # RosBridge가 ROS2 Node를 상속받기 위해 Node 클래스를 가져온다.
@@ -49,7 +51,20 @@ from std_msgs.msg import Empty, Int32, String
 # /get_action 제어 명령 생성/검증 함수들을 가져온다.
 from .commands import fallback_command, neutral_command, validate_action_command
 # 실행 모드, 명령 유효시간, 좌표 frame 이름 같은 전역 설정값을 가져온다.
-from .config import AUTO_FALLBACK, COMMAND_TTL_SEC, EPISODE_CONTROL_ENABLED, MAP_FRAME, SAVE_FULL_INFO, TANK_MODE, UNITY_FRAME
+from .config import (
+    AUTO_FALLBACK,
+    COMMAND_TTL_SEC,
+    EPISODE_CONTROL_ENABLED,
+    MAP_FRAME,
+    SAVE_FULL_INFO,
+    TANK_MODE,
+    TOPIC_LIDAR_ORIGIN,
+    TOPIC_LIDAR_ORIGIN_RAW,
+    TOPIC_LIDAR_POINTS_COUNT,
+    TOPIC_LIDAR_RAW_DETECTED,
+    TOPIC_LIDAR_ROTATION,
+    UNITY_FRAME,
+)
 # 시간, JSON 변환, 좌표 변환, 로그 저장 유틸리티를 가져온다.
 from .utils import (
     # SAVE_JSONL 옵션이 켜져 있으면 이 endpoint 데이터를 JSONL 파일에 저장한다.
@@ -139,7 +154,24 @@ class RosBridge(Node):
         self.pub_info_enemy_pose_map = self.create_publisher(PoseStamped, "/tank/api/info/enemy/pose_map", 10)
         # Publisher 생성: '/tank/api/info/enemy/state' topic으로 String 메시지를 publish한다.
         self.pub_info_enemy_state = self.create_publisher(String, "/tank/api/info/enemy/state", 10)
-        # LiDAR 전용 parsing/publishing은 lidar 패키지가 담당한다.
+
+        # /info의 대용량 lidarPoints는 여기서 바로 PointCloud2로 변환한다.
+        # lidar_processor_node는 이 raw cloud를 후처리/분류만 한다.
+        self.pub_lidar_raw_detected = self.create_publisher(
+            PointCloud2, TOPIC_LIDAR_RAW_DETECTED, 10
+        )
+        self.pub_lidar_points_count = self.create_publisher(
+            Int32, TOPIC_LIDAR_POINTS_COUNT, 10
+        )
+        self.pub_lidar_origin = self.create_publisher(
+            PointStamped, TOPIC_LIDAR_ORIGIN, 10
+        )
+        self.pub_lidar_origin_raw = self.create_publisher(
+            PointStamped, TOPIC_LIDAR_ORIGIN_RAW, 10
+        )
+        self.pub_lidar_rotation = self.create_publisher(
+            Vector3Stamped, TOPIC_LIDAR_ROTATION, 10
+        )
 
         # Publisher 생성: '/tank/api/get_action/raw' topic으로 String 메시지를 publish한다.
         self.pub_get_action_raw = self.create_publisher(String, "/tank/api/get_action/raw", 10)
@@ -209,8 +241,8 @@ class RosBridge(Node):
         # ----------------------------------------------------
         # RViz / APF / planner 노드용 안정 파생 topic들
         # ----------------------------------------------------
-        # LiDAR 전용 high-level topic(/tank/sensor/lidar/*)은 lidar 패키지가 담당한다.
-        # ros_bridge는 /tank/api/info/raw와 pose/state처럼 HTTP 원본과 기본 상태만 publish한다.
+        # bridge는 raw PointCloud2·origin·rotation을 publish하고, lidar 패키지는
+        # map 변환/terrain·obstacle 후처리 결과만 publish한다.
         self.pub_sim_status = self.create_publisher(String, "/tank/sim/status", 10)
         self.pub_player_heading = self.create_publisher(Vector3Stamped, "/tank/player/heading", 10)
         self.pub_enemy_heading = self.create_publisher(Vector3Stamped, "/tank/enemy/heading", 10)
@@ -486,6 +518,80 @@ class RosBridge(Node):
         publisher.publish(msg)
 
     # heading degree를 RViz/APF에서 쓰기 쉬운 2D map-frame 단위 벡터로 변환한다.
+    @staticmethod
+    def _extract_detected_lidar_xyz(data: Dict[str, Any]) -> Tuple[int, np.ndarray]:
+        """/info lidarPoints에서 isDetected hit만 Nx3 float32 raw 배열로 꺼낸다.
+
+        이 단계에서 JSON 객체를 PointCloud2 binary buffer로 바꾸므로 이후 노드는
+        lidarPoints 전체 JSON을 직렬화·재파싱하지 않는다.
+        """
+        raw_points = data.get("lidarPoints") if isinstance(data, dict) else None
+        if not isinstance(raw_points, list):
+            return 0, np.empty((0, 3), dtype=np.float32)
+
+        xyz = np.empty((len(raw_points), 3), dtype=np.float32)
+        count = 0
+        for point in raw_points:
+            if not isinstance(point, dict) or not bool(point.get("isDetected", False)):
+                continue
+            position = point.get("position")
+            if not isinstance(position, dict):
+                # 일부 시뮬레이터 버전의 flat xyz payload도 안전하게 수용한다.
+                position = point
+            try:
+                x = float(position["x"])
+                y = float(position["y"])
+                z = float(position["z"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not (np.isfinite(x) and np.isfinite(y) and np.isfinite(z)):
+                continue
+            xyz[count] = (x, y, z)
+            count += 1
+        return len(raw_points), np.ascontiguousarray(xyz[:count], dtype=np.float32)
+
+    @staticmethod
+    def _make_xyz32_cloud(xyz: np.ndarray, stamp: Any, frame_id: str) -> PointCloud2:
+        """Nx3 float32를 point-list 생성 없이 binary PointCloud2로 만든다."""
+        xyz = np.ascontiguousarray(np.asarray(xyz, dtype="<f4").reshape(-1, 3))
+        msg = PointCloud2()
+        msg.header.stamp = stamp
+        msg.header.frame_id = frame_id
+        msg.height = 1
+        msg.width = int(xyz.shape[0])
+        msg.fields = [
+            PointField(name="x", offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name="y", offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name="z", offset=8, datatype=PointField.FLOAT32, count=1),
+        ]
+        msg.is_bigendian = False
+        msg.point_step = 12
+        msg.row_step = 12 * int(xyz.shape[0])
+        msg.is_dense = True
+        msg.data = xyz.tobytes()
+        return msg
+
+    def publish_lidar_from_info(self, data: Dict[str, Any]) -> Tuple[int, int]:
+        """bridge hot path: /info LiDAR를 raw PointCloud2와 메타 topic으로 발행한다."""
+        total_count, detected_xyz = self._extract_detected_lidar_xyz(data)
+        stamp = self.get_clock().now().to_msg()
+        self.pub_lidar_raw_detected.publish(
+            self._make_xyz32_cloud(detected_xyz, stamp, UNITY_FRAME)
+        )
+        self.publish_int(self.pub_lidar_points_count, total_count)
+
+        origin = data.get("lidarOrigin") if isinstance(data, dict) else None
+        if isinstance(origin, dict):
+            origin_raw, origin_map = raw_and_map_pose(origin, "/info/lidarOrigin")
+            self.publish_point(self.pub_lidar_origin_raw, origin_raw)
+            self.publish_point(self.pub_lidar_origin, origin_map)
+
+        rotation = data.get("lidarRotation") if isinstance(data, dict) else None
+        if isinstance(rotation, dict):
+            self.publish_vector3(self.pub_lidar_rotation, as_xyz(rotation), UNITY_FRAME)
+
+        return total_count, int(detected_xyz.shape[0])
+
     def heading_vector_from_degree(self, degree: Any) -> Dict[str, float]:
         # Tank Challenge 좌표 기준: body.x=0이면 +raw.z, 즉 RViz map의 +y 방향이다.
         rad = math.radians(to_float(degree))
@@ -789,8 +895,18 @@ class RosBridge(Node):
     def handle_info(self, data: Dict[str, Any]) -> Dict[str, Any]:
         # 이 이벤트가 bridge에 들어온 wall-clock timestamp를 기록한다.
         ts = now_wall()
+
+        # LiDAR는 bridge에서 binary PC2로 한 번만 변환한다.
+        # 이후 /tank/api/info/raw·compact에는 대용량 lidarPoints 배열을 넣지 않는다.
+        lidar_points_count, lidar_detected_count = self.publish_lidar_from_info(data)
+        info_without_lidar = dict(data)
+        info_without_lidar.pop("lidarPoints", None)
+
         # /info 원본에서 핵심 필드만 추린 compact JSON을 만든다.
-        compact = compact_info(data)
+        compact = compact_info(info_without_lidar)
+        compact["lidarPoints_count"] = lidar_points_count
+        compact["lidarDetectedPoints_count"] = lidar_detected_count
+        compact["lidarRawPc2Topic"] = TOPIC_LIDAR_RAW_DETECTED
 
         # playerPos가 없을 수도 있으므로 raw/map pose 변수를 None으로 초기화한다.
         player_raw = player_map = None
@@ -831,8 +947,16 @@ class RosBridge(Node):
             "distance": data.get("distance"),
         }
 
-        # 원본 endpoint 데이터를 그대로 보존하는 payload를 만든다. (불필요한 deepcopy 제거)
-        raw_payload = {"route": "/info", "timestamp_wall": ts, "data": data}
+        # LiDAR 배열을 제외한 endpoint 원본 payload를 유지한다.
+        # lidarPoints는 TOPIC_LIDAR_RAW_DETECTED PointCloud2로만 전달된다.
+        raw_payload = {
+            "route": "/info",
+            "timestamp_wall": ts,
+            "data": info_without_lidar,
+            "lidarPoints_count": lidar_points_count,
+            "lidarDetectedPoints_count": lidar_detected_count,
+            "lidarRawPc2Topic": TOPIC_LIDAR_RAW_DETECTED,
+        }
         # /info compact topic과 Flask 반환 로그에 사용할 payload를 만든다.
         compact_payload = {"route": "/info", "timestamp_wall": ts, "data": compact}
         # /info에서 자주 쓰는 경량 상태를 별도 stable topic으로 만든다.
@@ -910,7 +1034,8 @@ class RosBridge(Node):
         append_jsonl("info.jsonl", {
             "timestamp_wall": ts,
             "route": "/info",
-            "data": data if SAVE_FULL_INFO else compact,
+            # LiDAR 원본 배열은 PC2 토픽으로 이미 전달했으므로 JSONL 중복 저장을 피한다.
+            "data": info_without_lidar if SAVE_FULL_INFO else compact,
             "player_state": player_state,
             "enemy_state": enemy_state,
         })

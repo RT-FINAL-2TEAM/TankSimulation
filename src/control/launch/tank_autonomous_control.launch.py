@@ -153,10 +153,9 @@ def generate_launch_description():
             executable="lidar_processor_node",
             name="tank_lidar_processor_node",
             output="screen",
-            parameters=[{"publish_legacy_lidar_json": False}],
         ),
         # Team visual perception integration:
-        # - /detect image from ros_bridge + /info LiDAR raw -> camera LiDAR projection overlay
+        # - /detect image from ros_bridge + map-frame LiDAR PointCloud2 -> camera LiDAR projection overlay
         # - /tank/sensor/lidar/detected_points_map -> DBSCAN cluster markers/status
         Node(
             package="tank_visual_perception",

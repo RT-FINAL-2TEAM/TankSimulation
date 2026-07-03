@@ -16,7 +16,8 @@
     - /tank/enemy/pose
     - /tank/goal/pose
     - /tank/map/obstacles
-    - /tank/sensor/lidar/points
+    - /tank/sensor/lidar/detected_points_map (PointCloud2)
+    - /tank/sensor/lidar/all_detected_points_map (PointCloud2)
 
 핵심 출력:
     - /tank/rviz/object_markers
@@ -199,7 +200,6 @@ from .config import (
     ############################################################
     TOPIC_ENEMY_POSE,
     TOPIC_GOAL_POSE,
-    TOPIC_LIDAR_POINTS,
     TOPIC_OBSTACLES,
     TOPIC_PLAYER_POSE,
 
@@ -361,7 +361,7 @@ class RvizVisualizerNode(Node):
         # 실시간 스캔 ray는 all_detected_points_map을 별도로 사용한다.
         self.lidar_ray_points: List[Tuple[float, float, float]] = []
 
-        # LiDAR ray 시작점. lidar_processor_node가 publish하는 map-frame PointStamped.
+        # LiDAR ray 시작점. ros_bridge가 publish하는 map-frame PointStamped.
         self.lidar_origin: Optional[PointStamped] = None
 
         # 아군/적 전차 상태 dict.

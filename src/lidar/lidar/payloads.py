@@ -1,27 +1,18 @@
 # -*- coding: utf-8 -*-
-"""LiDAR 페이로드 파싱과 장애물 전처리.
+"""LiDAR 장애물 메모리용 파싱·클러스터링 유틸리티.
 
-다른 패키지(path_planning, potential 등)는 LiDAR JSON schema를 직접 파싱하지 않고
-여기 함수만 import해서 사용한다. 이렇게 해야 LiDAR schema가 바뀌어도 수정 지점이
-lidar 패키지로 제한된다.
+PointCloud2가 실시간 LiDAR 전송의 기본 경로다. 이 모듈은 경로계획·potential 등에서
+필요한 경량 JSON 포인트 페이로드 파싱과, LiDAR XY 점의 클러스터링·history 관리만 둔다.
 """
 
 from __future__ import annotations
 
-import math
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
 from sklearn.cluster import DBSCAN
 
-from .config import (
-    BBOX_MIN_THICKNESS,
-    TERRAIN_CLIMB_LIMIT,
-    TERRAIN_GRID_RESOLUTION,
-    TERRAIN_OBSTACLE_MIN_HEIGHT,
-)
-from .coordinate_utils import lidar_point_with_map_position, to_float
-from .terrain_utils import split_terrain_obstacle_points
+from .config import BBOX_MIN_THICKNESS
 from .path_blocking import distance
 
 Point2D = Tuple[float, float]
@@ -42,167 +33,6 @@ def extract_payload_list(data: Any, key: str = "points") -> List[Any]:
         return inner[key]
     return []
 
-
-def iter_detected_points(raw_points: Any) -> Iterable[Dict[str, Any]]:
-    if not isinstance(raw_points, list):
-        return []
-    return (p for p in raw_points if isinstance(p, dict) and bool(p.get("isDetected", False)))
-
-
-def _converted_points(source_points: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    points: List[Dict[str, Any]] = []
-    for point in source_points:
-        converted = lidar_point_with_map_position(point)
-        if converted is not None:
-            points.append(converted)
-    return points
-
-
-def _base_payload(
-    points: Sequence[Dict[str, Any]],
-    *,
-    timestamp_wall: float,
-    map_frame: str,
-    source: str,
-    lidar_origin_map_for_correction: Optional[Dict[str, Any]] = None,
-    lidar_rotation_deg: Optional[Dict[str, Any]] = None,
-    player_body_deg: Optional[Dict[str, Any]] = None,
-    terrain_filter: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {
-        "route": "/info",
-        "timestamp_wall": timestamp_wall,
-        "source": source,
-        "frame_id": map_frame,
-        "coordinate_policy": "position_map: x=raw.x, y=raw.z, z=raw.y",
-        "count": len(points),
-        "points": list(points),
-    }
-    if lidar_origin_map_for_correction is not None:
-        payload["lidar_origin_map_for_correction"] = lidar_origin_map_for_correction
-    if lidar_rotation_deg is not None:
-        payload["lidar_rotation_deg"] = lidar_rotation_deg
-    if player_body_deg is not None:
-        payload["player_body_deg"] = player_body_deg
-    if terrain_filter is not None:
-        payload["terrain_filter"] = terrain_filter
-    return payload
-
-
-def build_classified_lidar_payloads(
-    lidar_points: Any,
-    *,
-    timestamp_wall: float,
-    map_frame: str,
-    ground_filter_enabled: bool = True,
-    lidar_origin_map_for_correction: Optional[Dict[str, Any]] = None,
-    lidar_rotation_deg: Optional[Dict[str, Any]] = None,
-    player_body_deg: Optional[Dict[str, Any]] = None,
-    grid_resolution: float = TERRAIN_GRID_RESOLUTION,
-    climb_limit: float = TERRAIN_CLIMB_LIMIT,
-    obstacle_min_height: float = TERRAIN_OBSTACLE_MIN_HEIGHT,
-) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
-    """시뮬레이터 raw lidarPoints에서 map 프레임 페이로드 4개를 만든다.
-
-    Returns:
-        detected_obstacle_payload, terrain_payload, all_detected_payload, terrain_info_payload
-    """
-    source_points = list(iter_detected_points(lidar_points))
-
-    if ground_filter_enabled and source_points:
-        obstacle_raw, terrain_raw, stats = split_terrain_obstacle_points(
-            source_points,
-            grid_resolution=grid_resolution,
-            climb_limit=climb_limit,
-            obstacle_min_height=obstacle_min_height,
-        )
-        filter_stats = stats.to_dict()
-        filter_method = "grid_local_ground_steep_cell"
-    else:
-        obstacle_raw = source_points
-        terrain_raw = []
-        filter_stats = {
-            "input_points": len(source_points),
-            "obstacle_points": len(source_points),
-            "terrain_points": 0,
-            "grid_resolution": grid_resolution,
-            "climb_limit": climb_limit,
-            "obstacle_min_height": obstacle_min_height,
-        }
-        filter_method = "disabled"
-
-    obstacle_points = _converted_points(obstacle_raw)
-    terrain_points = _converted_points(terrain_raw)
-    all_points = _converted_points(source_points)
-
-    common_meta = {
-        "enabled": bool(ground_filter_enabled),
-        "method": filter_method,
-        **filter_stats,
-    }
-    detected_payload = _base_payload(
-        obstacle_points,
-        timestamp_wall=timestamp_wall,
-        map_frame=map_frame,
-        source="lidarPoints/obstacle_only",
-        lidar_origin_map_for_correction=lidar_origin_map_for_correction,
-        lidar_rotation_deg=lidar_rotation_deg,
-        player_body_deg=player_body_deg,
-        terrain_filter=common_meta,
-    )
-    terrain_payload = _base_payload(
-        terrain_points,
-        timestamp_wall=timestamp_wall,
-        map_frame=map_frame,
-        source="lidarPoints/terrain_only",
-        lidar_origin_map_for_correction=lidar_origin_map_for_correction,
-        lidar_rotation_deg=lidar_rotation_deg,
-        player_body_deg=player_body_deg,
-        terrain_filter=common_meta,
-    )
-    all_payload = _base_payload(
-        all_points,
-        timestamp_wall=timestamp_wall,
-        map_frame=map_frame,
-        source="lidarPoints/all_detected",
-        lidar_origin_map_for_correction=lidar_origin_map_for_correction,
-        lidar_rotation_deg=lidar_rotation_deg,
-        player_body_deg=player_body_deg,
-        terrain_filter=common_meta,
-    )
-    terrain_info_payload = {
-        "route": "/info",
-        "timestamp_wall": timestamp_wall,
-        "frame_id": map_frame,
-        "source": "lidar_terrain_separation",
-        "terrain_filter": common_meta,
-        "counts": {
-            "all_detected": len(all_points),
-            "obstacle": len(obstacle_points),
-            "terrain": len(terrain_points),
-        },
-    }
-    return detected_payload, terrain_payload, all_payload, terrain_info_payload
-
-
-def build_detected_map_payload(
-    lidar_points: Any,
-    timestamp_wall: float,
-    map_frame: str,
-    ground_filter_enabled: bool = False,
-    origin_y: float = 8.0,
-) -> Dict[str, Any]:
-    """과거 호출부가 쓰는 하위호환 헬퍼.
-
-    이제 ground_filter_enabled=True일 때 obstacle-only 페이로드를 반환한다.
-    """
-    detected_payload, _, _, _ = build_classified_lidar_payloads(
-        lidar_points,
-        timestamp_wall=timestamp_wall,
-        map_frame=map_frame,
-        ground_filter_enabled=ground_filter_enabled,
-    )
-    return detected_payload
 
 
 def parse_lidar_points_payload(payload: Any) -> List[Point2D]:
