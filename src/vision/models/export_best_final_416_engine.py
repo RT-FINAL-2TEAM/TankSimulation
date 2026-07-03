@@ -8,9 +8,8 @@ Input:
 Output:
   ./best_final.engine
 
-Expected class names:
+Required runtime class names:
   0: car
-  1: person
   2: tank
   3: rock
   4: house
@@ -18,12 +17,10 @@ Expected class names:
 
 from pathlib import Path
 import os
-import sys
 
 
-EXPECTED_NAMES = {
+REQUIRED_NAMES = {
     0: "car",
-    1: "person",
     2: "tank",
     3: "rock",
     4: "house",
@@ -79,17 +76,22 @@ def main() -> int:
     model_names = normalize_names(model.names)
     print(f"[INFO] Model names: {model_names}")
 
-    if model_names != EXPECTED_NAMES:
-        print("[ERROR] best_final.pt class names do not match 0615 final model.")
-        print(f"        expected: {EXPECTED_NAMES}")
+    missing_or_changed = {
+        class_id: name
+        for class_id, name in REQUIRED_NAMES.items()
+        if model_names.get(class_id) != name
+    }
+    if missing_or_changed:
+        print("[ERROR] best_final.pt is missing required runtime classes.")
+        print(f"        required: {REQUIRED_NAMES}")
         print(f"        actual  : {model_names}")
         print("[ERROR] Wrong .pt file may be in this directory. Export aborted.")
         return 1
 
-    print("[OK] Class names match 0615 final model.")
+    print("[OK] Required runtime class names are present.")
     print("[INFO] 0615 final model metrics expected:")
     print("       Precision 0.980 / Recall 0.954 / mAP50 0.976 / mAP50-95 0.883")
-    print("       classes: car, person, tank, rock, house")
+    print("       runtime classes: car, tank, rock, house")
 
     if engine_path.exists():
         print(f"[INFO] Remove existing engine: {engine_path}")

@@ -1,5 +1,5 @@
 # YOLO detection configuration for Tank Challenge /detect endpoint.
-# 0615 final model: car, person, tank, rock, house.
+# 0615 final model is filtered to runtime classes: car, tank, rock, house.
 model:
   default_filename: best_final.engine
   imgsz: 416
@@ -7,8 +7,6 @@ model:
   max_det: 20
   max_return: 5
   model_confidence: 0.10
-  fallback_model_confidence: 0.05
-  enable_low_conf_fallback: false
   enable_cache: true
   min_interval_sec: 0.12
   half_if_cuda: true
@@ -27,52 +25,30 @@ classes:
     - tank
     - rock
     - house
-    - tent
   fixed_ids:
     car: 0
     tank: 2
     rock: 3
     house: 4
-    tent: 5
   aliases:
     Tank: tank
     tank: tank
     rock: rock
     house: house
     car: car
-    tent: tent
-    wall: wall
-  ignored:
-    - wall
-    - person
   default_box_color: '#00FF00'
   colors:
     rock: '#FFA500'
     tank: '#FF0000'
     car: '#FF66CC'
     house: '#AA66FF'
-    wall: '#00FF00'
-    tent: '#FFFF00'
   default_confidence: 0.20
   confidence_thresholds:
     tank: 0.25
-  close_wall:
-    confidence: 0.12
-    area_ratio: 0.08
-    min_height_ratio: 0.35
 
 bbox_distance:
   enabled: false
   publish_metadata: false
-
-preprocess:
-  shadow_filter_enabled: false
-  shadow_sigma: 35.0
-  shadow_strength: 0.75
-  shadow_work_scale: 0.35
-  shadow_max_side: 960
-  clahe_enabled: false
-  clahe_clip: 1.5
 
 runtime:
   recognition_log: false

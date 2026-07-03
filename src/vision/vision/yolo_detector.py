@@ -10,10 +10,10 @@ Tank Challenge용 YOLO detector 래퍼.
 detector는 공식 Tank Challenge /detect 응답 포맷을 반환한다:
 [
   {
-    "className": "person",
+    "className": "tank",
     "bbox": [x1, y1, x2, y2],
     "confidence": 0.85,
-    "color": "#00FFFF",
+    "color": "#FF0000",
     "filled": false,
     "updateBoxWhileMoving": false
   }
@@ -40,6 +40,10 @@ except Exception:  # pragma: no cover - ROS2 런타임 밖에서만 사용 불�
     get_package_share_directory = None
 
 from vision.config import DEFAULT_CLASS_COLORS, DEFAULT_CONFIG_FILENAME, DEFAULT_MODEL_FILENAME
+
+TARGET_CLASSES = {"car", "tank", "rock", "house"}
+DEFAULT_ALIASES = {"Tank": "tank", "tank": "tank", "rock": "rock", "house": "house", "car": "car"}
+DEFAULT_FIXED_IDS = {"car": 0, "tank": 2, "rock": 3, "house": 4}
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -124,33 +128,19 @@ class YoloRuntimeConfig:
     max_det: int = 20
     max_return: int = 5
     model_conf: float = 0.10
-    fallback_model_conf: float = 0.05
-    low_conf_fallback: bool = False
-    return_fallback_detections: bool = True
     tracking_enabled: bool = True
     tracker: str = "bytetrack.yaml"
     track_persist: bool = True
     enable_cache: bool = True
     min_interval_sec: float = 0.12
     warmup_runs: int = 2
-    aliases: Dict[str, str] = field(default_factory=lambda: {"blue": "person", "red": "person", "tank": "tank", "Tank": "tank"})
-    canonical_classes: set = field(default_factory=lambda: {"car", "person", "tank", "rock", "house", "tent"})
-    ignored_classes: set = field(default_factory=lambda: {"wall"})
-    class_fixed_ids: Dict[str, int] = field(default_factory=lambda: {"car": 0, "person": 1, "tank": 2, "rock": 3, "house": 4, "tent": 5})
+    aliases: Dict[str, str] = field(default_factory=lambda: dict(DEFAULT_ALIASES))
+    canonical_classes: set = field(default_factory=lambda: set(TARGET_CLASSES))
+    class_fixed_ids: Dict[str, int] = field(default_factory=lambda: dict(DEFAULT_FIXED_IDS))
     class_colors: Dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CLASS_COLORS))
     default_box_color: str = "#00FF00"
     default_confidence: float = 0.20
-    class_confidence_thresholds: Dict[str, float] = field(default_factory=lambda: {"wall": 0.15})
-    close_wall_confidence: float = 0.12
-    close_wall_area_ratio: float = 0.08
-    close_wall_min_height_ratio: float = 0.35
-    shadow_filter_enabled: bool = False
-    shadow_sigma: float = 35.0
-    shadow_strength: float = 0.75
-    shadow_work_scale: float = 0.35
-    shadow_max_side: int = 960
-    clahe_enabled: bool = False
-    clahe_clip: float = 1.5
+    class_confidence_thresholds: Dict[str, float] = field(default_factory=dict)
     timing_log: bool = False
     recognition_log: bool = True
     recognition_log_cache: bool = False
@@ -170,15 +160,23 @@ class YoloRuntimeConfig:
 
         colors = dict(DEFAULT_CLASS_COLORS)
         colors.update(dict(_deep_get(raw, ["classes", "colors"], {}) or {}))
-        aliases = dict(_deep_get(raw, ["classes", "aliases"], {}) or {"blue": "person", "red": "person", "tank": "tank", "Tank": "tank"})
-        canonical = set(str(x).strip().lower() for x in (_deep_get(raw, ["classes", "canonical"], ["car", "person", "tank", "rock", "house", "tent"]) or []))
-        ignored = set(str(x).strip().lower() for x in (_deep_get(raw, ["classes", "ignored"], ["wall"]) or []))
-        fixed_ids_raw = dict(_deep_get(raw, ["classes", "fixed_ids"], {}) or {"car": 0, "person": 1, "tank": 2, "rock": 3, "house": 4, "tent": 5})
-        fixed_ids = {str(k).strip().lower(): int(v) for k, v in fixed_ids_raw.items()}
+        colors = {str(k).strip().lower(): str(v) for k, v in colors.items() if str(k).strip().lower() in TARGET_CLASSES}
+        aliases = dict(DEFAULT_ALIASES)
+        aliases.update(dict(_deep_get(raw, ["classes", "aliases"], {}) or {}))
+        canonical_raw = _deep_get(raw, ["classes", "canonical"], sorted(TARGET_CLASSES)) or []
+        canonical = {str(x).strip().lower() for x in canonical_raw} & TARGET_CLASSES
+        if not canonical:
+            canonical = set(TARGET_CLASSES)
+        fixed_ids_raw = dict(DEFAULT_FIXED_IDS)
+        fixed_ids_raw.update(dict(_deep_get(raw, ["classes", "fixed_ids"], {}) or {}))
+        fixed_ids = {
+            str(k).strip().lower(): int(v)
+            for k, v in fixed_ids_raw.items()
+            if str(k).strip().lower() in TARGET_CLASSES
+        }
 
         thresholds = dict(_deep_get(raw, ["classes", "confidence_thresholds"], {}) or {})
-        if "wall" not in thresholds:
-            thresholds["wall"] = 0.15
+        thresholds = {str(k).strip().lower(): float(v) for k, v in thresholds.items() if str(k).strip().lower() in TARGET_CLASSES}
 
         return cls(
             model_path=model_path,
@@ -191,9 +189,6 @@ class YoloRuntimeConfig:
             max_det=int(os.getenv("YOLO_MAX_DET", _deep_get(raw, ["model", "max_det"], 20))),
             max_return=int(os.getenv("YOLO_MAX_RETURN", _deep_get(raw, ["model", "max_return"], 5))),
             model_conf=float(os.getenv("YOLO_MODEL_CONF", _deep_get(raw, ["model", "model_confidence"], 0.10))),
-            fallback_model_conf=float(os.getenv("YOLO_FALLBACK_MODEL_CONF", _deep_get(raw, ["model", "fallback_model_confidence"], 0.05))),
-            low_conf_fallback=_env_flag("YOLO_LOW_CONF_FALLBACK", bool(_deep_get(raw, ["model", "enable_low_conf_fallback"], False))),
-            return_fallback_detections=_env_flag("YOLO_RETURN_FALLBACK_DETECTIONS", True),
             tracking_enabled=_env_flag("YOLO_TRACKING", bool(_deep_get(raw, ["tracking", "enabled"], True))),
             tracker=str(os.getenv("YOLO_TRACKER", _deep_get(raw, ["tracking", "tracker"], "bytetrack.yaml"))),
             track_persist=_env_flag("YOLO_TRACK_PERSIST", bool(_deep_get(raw, ["tracking", "persist"], True))),
@@ -202,22 +197,11 @@ class YoloRuntimeConfig:
             warmup_runs=int(os.getenv("YOLO_WARMUP_RUNS", _deep_get(raw, ["model", "warmup_runs"], 2))),
             aliases=aliases,
             canonical_classes=canonical,
-            ignored_classes=ignored,
             class_fixed_ids=fixed_ids,
             class_colors=colors,
             default_box_color=str(_deep_get(raw, ["classes", "default_box_color"], "#00FF00")),
             default_confidence=float(os.getenv("YOLO_DEFAULT_CONF", _deep_get(raw, ["classes", "default_confidence"], 0.20))),
-            class_confidence_thresholds={k: float(v) for k, v in thresholds.items()},
-            close_wall_confidence=float(os.getenv("YOLO_CLOSE_WALL_CONF", _deep_get(raw, ["classes", "close_wall", "confidence"], 0.12))),
-            close_wall_area_ratio=float(os.getenv("YOLO_CLOSE_WALL_AREA_RATIO", _deep_get(raw, ["classes", "close_wall", "area_ratio"], 0.08))),
-            close_wall_min_height_ratio=float(os.getenv("YOLO_CLOSE_WALL_MIN_HEIGHT_RATIO", _deep_get(raw, ["classes", "close_wall", "min_height_ratio"], 0.35))),
-            shadow_filter_enabled=_env_flag("YOLO_SHADOW_FILTER", bool(_deep_get(raw, ["preprocess", "shadow_filter_enabled"], False))),
-            shadow_sigma=float(os.getenv("YOLO_SHADOW_SIGMA", _deep_get(raw, ["preprocess", "shadow_sigma"], 35.0))),
-            shadow_strength=float(os.getenv("YOLO_SHADOW_STRENGTH", _deep_get(raw, ["preprocess", "shadow_strength"], 0.75))),
-            shadow_work_scale=float(os.getenv("YOLO_SHADOW_WORK_SCALE", _deep_get(raw, ["preprocess", "shadow_work_scale"], 0.35))),
-            shadow_max_side=int(os.getenv("YOLO_SHADOW_MAX_SIDE", _deep_get(raw, ["preprocess", "shadow_max_side"], 960))),
-            clahe_enabled=_env_flag("YOLO_SHADOW_CLAHE", bool(_deep_get(raw, ["preprocess", "clahe_enabled"], False))),
-            clahe_clip=float(os.getenv("YOLO_SHADOW_CLAHE_CLIP", _deep_get(raw, ["preprocess", "clahe_clip"], 1.5))),
+            class_confidence_thresholds=thresholds,
             timing_log=_env_flag("YOLO_TIMING", bool(_deep_get(raw, ["runtime", "timing_log"], False))),
             recognition_log=_env_flag("YOLO_RECOGNITION_LOG", bool(_deep_get(raw, ["runtime", "recognition_log"], True))),
             recognition_log_cache=_env_flag("YOLO_RECOGNITION_LOG_CACHE", bool(_deep_get(raw, ["runtime", "recognition_log_cache"], False))),
@@ -236,6 +220,7 @@ class TankYoloDetector:
         self._model = None
         self._model_names: Dict[int, str] = {}
         self._public_names: Dict[int, str] = {}
+        self._target_class_ids: List[int] = []
         self._state: Dict[str, Any] = {
             "loaded": False,
             "load_error": None,
@@ -245,7 +230,6 @@ class TankYoloDetector:
             "latest_cache_reason": None,
             "latest_detect_ms": 0.0,
             "latest_decode_ms": 0.0,
-            "latest_preprocess_ms": 0.0,
             "latest_yolo_ms": 0.0,
             "latest_postprocess_ms": 0.0,
             "latest_raw_detection_count": 0,
@@ -254,7 +238,6 @@ class TankYoloDetector:
             "latest_rejected_detections": [],
             "latest_frame_shape": None,
             "latest_model_conf_used": self.config.model_conf,
-            "latest_fallback_used": False,
         }
         self._load_model()
 
@@ -290,10 +273,14 @@ class TankYoloDetector:
                     class_id: self.normalize_public_class_name(name)
                     for class_id, name in self._model_names.items()
                 }
+                self._target_class_ids = sorted(
+                    class_id
+                    for class_id, class_name in self._public_names.items()
+                    if class_name in self.config.canonical_classes
+                )
                 if self.config.use_cuda:
                     torch.backends.cudnn.benchmark = _env_flag("YOLO_CUDNN_BENCHMARK", False)
                     warmup_image = np.zeros((max(32, self.config.imgsz), max(32, self.config.imgsz), 3), dtype=np.uint8)
-                    warmup_image, _, _ = self.preprocess_frame(warmup_image)
                     for _ in range(max(1, self.config.warmup_runs)):
                         with torch.inference_mode():
                             self._model.predict(
@@ -304,6 +291,7 @@ class TankYoloDetector:
                                 half=self.config.half,
                                 iou=self.config.iou,
                                 max_det=self.config.max_det,
+                                classes=self._target_class_ids or None,
                                 verbose=False,
                             )
                     torch.cuda.synchronize()
@@ -314,7 +302,8 @@ class TankYoloDetector:
                     "[vision] YOLO loaded: "
                     f"model={self.config.model_path}, labels={self._model_names}, public={self._public_names}, "
                     f"device={self.config.device}, half={self.config.half}, imgsz={self.config.imgsz}, "
-                    f"tracking={self.config.tracking_enabled}, tracker={self.config.tracker}, persist={self.config.track_persist}"
+                    f"classes={self._target_class_ids}, tracking={self.config.tracking_enabled}, "
+                    f"tracker={self.config.tracker}, persist={self.config.track_persist}"
                 )
                 return
             except Exception as exc:
@@ -350,100 +339,19 @@ class TankYoloDetector:
         image_buffer = np.frombuffer(image_bytes, dtype=np.uint8)
         return cv2.imdecode(image_buffer, cv2.IMREAD_COLOR)
 
-    def _clamp_float(self, value: float, lower: float, upper: float) -> float:
-        return max(lower, min(upper, value))
-
-    def remove_shadow_with_gaussian(self, frame: np.ndarray) -> np.ndarray:
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        hue, saturation, value = cv2.split(hsv)
-        value_float = value.astype(np.float32)
-        frame_height, frame_width = value.shape[:2]
-        work_scale = self._clamp_float(self.config.shadow_work_scale, 0.1, 1.0)
-        sigma = max(self.config.shadow_sigma * work_scale, 1.0)
-
-        if work_scale < 1.0:
-            work_width = max(16, int(frame_width * work_scale))
-            work_height = max(16, int(frame_height * work_scale))
-            value_for_blur = cv2.resize(value_float, (work_width, work_height), interpolation=cv2.INTER_AREA)
-        else:
-            value_for_blur = value_float
-
-        illumination = cv2.GaussianBlur(value_for_blur, (0, 0), sigmaX=sigma, sigmaY=sigma)
-        if work_scale < 1.0:
-            illumination = cv2.resize(illumination, (frame_width, frame_height), interpolation=cv2.INTER_LINEAR)
-
-        illumination = np.maximum(illumination, 1.0)
-        scale = max(float(np.mean(illumination)), 1.0)
-        normalized_value = cv2.divide(value_float, illumination, scale=scale)
-        normalized_value = np.clip(normalized_value, 0, 255).astype(np.uint8)
-
-        if self.config.clahe_enabled:
-            clahe = cv2.createCLAHE(clipLimit=self.config.clahe_clip, tileGridSize=(8, 8))
-            normalized_value = clahe.apply(normalized_value)
-
-        strength = self._clamp_float(self.config.shadow_strength, 0.0, 1.0)
-        corrected_value = cv2.addWeighted(value, 1.0 - strength, normalized_value, strength, 0)
-        corrected_hsv = cv2.merge((hue, saturation, corrected_value))
-        return cv2.cvtColor(corrected_hsv, cv2.COLOR_HSV2BGR)
-
-    def resize_for_shadow_filter(self, frame: np.ndarray) -> Tuple[np.ndarray, float, float]:
-        frame_height, frame_width = frame.shape[:2]
-        max_side = max(frame_height, frame_width)
-        if self.config.shadow_max_side <= 0 or max_side <= self.config.shadow_max_side:
-            return frame, 1.0, 1.0
-        resize_scale = self.config.shadow_max_side / float(max_side)
-        resized_width = max(16, int(frame_width * resize_scale))
-        resized_height = max(16, int(frame_height * resize_scale))
-        resized_frame = cv2.resize(frame, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
-        return resized_frame, frame_width / float(resized_width), frame_height / float(resized_height)
-
-    def preprocess_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, float, float]:
-        if not self.config.shadow_filter_enabled:
-            return frame, 1.0, 1.0
-        resized_frame, scale_x, scale_y = self.resize_for_shadow_filter(frame)
-        return self.remove_shadow_with_gaussian(resized_frame), scale_x, scale_y
-
-    def scale_box_to_original_frame(self, box: np.ndarray, scale_x: float, scale_y: float) -> np.ndarray:
-        scaled_box = box.copy()
-        scaled_box[0] *= scale_x
-        scaled_box[2] *= scale_x
-        scaled_box[1] *= scale_y
-        scaled_box[3] *= scale_y
-        return scaled_box
-
     def is_valid_box(self, box: Any) -> bool:
         if len(box) < 4:
             return False
         x1, y1, x2, y2 = (float(value) for value in box[:4])
         return x2 > x1 and y2 > y1
 
-    def get_box_size_ratios(self, box: Any, frame_shape: Tuple[int, ...]) -> Tuple[float, float]:
-        frame_height, frame_width = frame_shape[:2]
-        x1, y1, x2, y2 = box[:4]
-        box_width = max(0.0, float(x2 - x1))
-        box_height = max(0.0, float(y2 - y1))
-        frame_area = max(1.0, float(frame_width * frame_height))
-        return (box_width * box_height) / frame_area, box_height / max(1.0, float(frame_height))
-
-    def is_close_wall_candidate(self, class_name: str, confidence: float, box: Any, frame_shape: Tuple[int, ...]) -> bool:
-        if class_name != "wall" or confidence < self.config.close_wall_confidence:
-            return False
-        area_ratio, height_ratio = self.get_box_size_ratios(box, frame_shape)
-        return area_ratio >= self.config.close_wall_area_ratio or height_ratio >= self.config.close_wall_min_height_ratio
-
-    def evaluate_detection_for_return(self, class_name: Optional[str], confidence: float, box: Any, frame_shape: Tuple[int, ...], bypass: bool) -> Tuple[bool, Optional[str], Optional[float]]:
+    def evaluate_detection_for_return(self, class_name: Optional[str], confidence: float, box: Any) -> Tuple[bool, Optional[str], Optional[float]]:
         if class_name is None:
             return False, "class_name_none", None
         if not self.is_valid_box(box):
             return False, "invalid_box", None
-        if class_name in self.config.ignored_classes:
-            return False, "ignored_class", None
         if self.config.canonical_classes and class_name not in self.config.canonical_classes:
             return False, "non_canonical_class", None
-        if bypass:
-            return True, None, None
-        if self.is_close_wall_candidate(class_name, confidence, box, frame_shape):
-            return True, None, self.config.close_wall_confidence
         threshold = self.config.class_confidence_thresholds.get(class_name, self.config.default_confidence)
         if confidence >= threshold:
             return True, None, threshold
@@ -475,14 +383,6 @@ class TankYoloDetector:
             "updateBoxWhileMoving": False,
         }
 
-    def _result_box_count(self, results: Any) -> int:
-        if not results:
-            return 0
-        boxes = results[0].boxes
-        if boxes is None:
-            return 0
-        return len(boxes)
-
     def _get_cached(self, now_seconds: float) -> Optional[Tuple[List[Dict[str, Any]], float]]:
         if not self.config.enable_cache:
             return None
@@ -510,6 +410,7 @@ class TankYoloDetector:
                 half=self.config.half,
                 iou=self.config.iou,
                 max_det=self.config.max_det,
+                classes=self._target_class_ids or None,
                 tracker=self.config.tracker,
                 persist=self.config.track_persist,
                 verbose=False,
@@ -522,6 +423,7 @@ class TankYoloDetector:
             half=self.config.half,
             iou=self.config.iou,
             max_det=self.config.max_det,
+            classes=self._target_class_ids or None,
             verbose=False,
         )
 
@@ -607,23 +509,10 @@ class TankYoloDetector:
             original_shape = frame.shape
             frame_shape_list = [int(value) for value in original_shape]
 
-            preprocess_started = time.perf_counter()
-            processed_frame, scale_x, scale_y = self.preprocess_frame(frame)
-            preprocess_ms = (time.perf_counter() - preprocess_started) * 1000.0
-
             yolo_started = time.perf_counter()
             model_conf_used = self.config.model_conf
-            fallback_used = False
             with torch.inference_mode():
-                results = self._run_model(processed_frame, self.config.model_conf)
-                if (
-                    self.config.low_conf_fallback
-                    and self.config.fallback_model_conf < self.config.model_conf
-                    and self._result_box_count(results) == 0
-                ):
-                    fallback_used = True
-                    model_conf_used = self.config.fallback_model_conf
-                    results = self._run_model(processed_frame, self.config.fallback_model_conf)
+                results = self._run_model(frame, self.config.model_conf)
             yolo_ms = (time.perf_counter() - yolo_started) * 1000.0
         finally:
             self._predict_lock.release()
@@ -631,36 +520,37 @@ class TankYoloDetector:
         post_started = time.perf_counter()
         result_items = self._iter_result_boxes(results)
         filtered: List[Dict[str, Any]] = []
+        collect_debug = self.config.debug_detections
         raw_debug: List[Dict[str, Any]] = []
         rejected: List[Dict[str, Any]] = []
 
         for item in result_items:
             class_id = int(item["class_id"])
-            model_class_name = self._model_names.get(class_id)
             class_name = self._public_names.get(class_id)
             confidence = float(item["confidence"])
             track_id = item.get("track_id")
-            scaled_box = self.scale_box_to_original_frame(np.asarray(item["bbox"], dtype=float), scale_x, scale_y)
-            bypass = fallback_used and self.config.return_fallback_detections
-            returned, reason, threshold = self.evaluate_detection_for_return(class_name, confidence, scaled_box, original_shape, bypass)
-            debug_item = {
-                "modelClassName": model_class_name,
-                "className": class_name,
-                "classId": class_id,
-                "classFixedId": self.get_class_fixed_id(class_name) if class_name else None,
-                "trackId": track_id,
-                "bbox": [float(coord) for coord in scaled_box[:4]],
-                "center": [float(0.5 * (scaled_box[0] + scaled_box[2])), float(0.5 * (scaled_box[1] + scaled_box[3]))],
-                "confidence": confidence,
-                "returned": returned,
-                "rejectReason": reason,
-                "threshold": threshold,
-            }
-            raw_debug.append(debug_item)
+            box = np.asarray(item["bbox"], dtype=float)
+            returned, reason, threshold = self.evaluate_detection_for_return(class_name, confidence, box)
+            if collect_debug:
+                debug_item = {
+                    "modelClassName": self._model_names.get(class_id),
+                    "className": class_name,
+                    "classId": class_id,
+                    "classFixedId": self.get_class_fixed_id(class_name) if class_name else None,
+                    "trackId": track_id,
+                    "bbox": [float(coord) for coord in box[:4]],
+                    "center": [float(0.5 * (box[0] + box[2])), float(0.5 * (box[1] + box[3]))],
+                    "confidence": confidence,
+                    "returned": returned,
+                    "rejectReason": reason,
+                    "threshold": threshold,
+                }
+                raw_debug.append(debug_item)
             if not returned:
-                rejected.append(debug_item)
+                if collect_debug:
+                    rejected.append(debug_item)
                 continue
-            filtered.append(self.make_detection_response(class_name, scaled_box, confidence, class_id=class_id, track_id=track_id))
+            filtered.append(self.make_detection_response(class_name, box, confidence, class_id=class_id, track_id=track_id))
 
         filtered.sort(key=lambda item: item["confidence"], reverse=True)
         filtered = filtered[: self.config.max_return]
@@ -674,24 +564,22 @@ class TankYoloDetector:
             latest_cache_reason=None,
             latest_detect_ms=elapsed_ms,
             latest_decode_ms=decode_ms,
-            latest_preprocess_ms=preprocess_ms,
             latest_yolo_ms=yolo_ms,
             latest_postprocess_ms=post_ms,
-            latest_raw_detection_count=len(raw_debug),
+            latest_raw_detection_count=len(result_items),
             latest_returned_detection_count=len(filtered),
             latest_raw_detections=raw_debug[:10],
             latest_rejected_detections=rejected[:10],
             latest_frame_shape=frame_shape_list,
             latest_model_conf_used=model_conf_used,
-            latest_fallback_used=fallback_used,
         )
 
         if self.config.timing_log:
             print(
                 "[perf:/detect] "
-                f"decode={decode_ms:.1f}ms preprocess={preprocess_ms:.1f}ms "
+                f"decode={decode_ms:.1f}ms "
                 f"yolo={yolo_ms:.1f}ms post={post_ms:.1f}ms total={elapsed_ms:.1f}ms "
-                f"raw={len(raw_debug)} returned={len(filtered)}"
+                f"raw={len(result_items)} returned={len(filtered)}"
             )
         if self.config.debug_detections:
             print("[detect] raw:", raw_debug)
@@ -711,9 +599,9 @@ class TankYoloDetector:
             "configPath": str(self.config.config_path) if self.config.config_path else None,
             "modelNames": self._model_names,
             "publicNames": self._public_names,
+            "targetClassIds": self._target_class_ids,
             "classColors": self.config.class_colors,
             "canonicalClasses": sorted(self.config.canonical_classes),
-            "ignoredClasses": sorted(self.config.ignored_classes),
             "classFixedIds": self.config.class_fixed_ids,
             "trackingEnabled": self.config.tracking_enabled,
             "tracker": self.config.tracker,
@@ -731,7 +619,6 @@ class TankYoloDetector:
             "minIntervalSec": self.config.min_interval_sec,
             "latestDetectMs": state.get("latest_detect_ms"),
             "latestDecodeMs": state.get("latest_decode_ms"),
-            "latestPreprocessMs": state.get("latest_preprocess_ms"),
             "latestYoloMs": state.get("latest_yolo_ms"),
             "latestPostprocessMs": state.get("latest_postprocess_ms"),
             "latestRawDetectionCount": state.get("latest_raw_detection_count"),
