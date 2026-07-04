@@ -71,7 +71,7 @@ _DEFAULT_ENGAGEMENTS_JSON = (
     '"target":{"x":135.46,"y":276.87,"z":0.0},'
     '"target_from_enemy_pose":true,'
     '"target_height_offset_m":0.0,'
-    '"reposition":{"enabled":true,"heading_deg":0.0,"goal_offset_m":16.0,"min_travel_m":3.0,"arrival_radius_m":10.5,"max_attempts":2}'
+    '"reposition":{"enabled":false,"heading_deg":0.0,"goal_offset_m":16.0,"min_travel_m":3.0,"arrival_radius_m":10.5,"max_attempts":2}'
     '}]'
 )
 
@@ -201,7 +201,7 @@ def generate_launch_description():
                 "pitch_tolerance_deg": 0.75,
                 "yaw_control_deadband_deg": 1.0,
                 "pitch_control_deadband_deg": 0.75,
-                "yaw_weight_max": 0.42,
+                "yaw_weight_max": 0.38,
                 # Delayed-feedback hybrid yaw control: coarse closed-loop
                 # tracking, then neutral/brake + bounded time pulse +
                 # fresh-feedback observation around the target.
@@ -219,7 +219,7 @@ def generate_launch_description():
                 "yaw_settle_rate_deg_s": 0.65,
                 "yaw_overshoot_min_prev_error_deg": 1.20,
                 "yaw_overshoot_min_current_error_deg": 0.35,
-                "aim_stable_sec": 0.60,
+                "aim_stable_sec": 0.22,
                 "turret_feedback_ttl_sec": 0.75,
                 "on_target_cycles": 1,
                 # F is held down after *each* target so the next drive leg has

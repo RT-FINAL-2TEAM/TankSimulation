@@ -2005,39 +2005,52 @@ class BallisticTurretNode(Node):
                 "yaw_rate_deg_s": round(self.turret_yaw_rate_deg_s, 3),
             }
 
+        # SCENARIO2_CONCURRENT_QE_RF_AIM_OMEN_COMPAT
+        #
+        # The simulator accepts Q/E and R/F together.  Keep both axes in the
+        # same feedback loop so an unresolved yaw error never prevents the gun
+        # from physically testing / reaching its required elevation.
+        #
+        # Safety rule: R/F can move at all yaw errors, but the physical-endstop
+        # watchdog is armed only when yaw is close to the target.  Therefore a
+        # fixed elevation reading during a large lateral sweep cannot trigger a
+        # firing-position fallback prematurely.
         physical_pitch_limit: Dict[str, Any]
         aim_axis = "on_target"
 
-        if not yaw_aligned:
-            # Never mix Q/E and R/F during acquisition or while a delayed
-            # feedback correction is braking/observing.  This prevents pitch
-            # movement while yaw is still passing through the target.
-            self._reset_physical_pitch_watch()
-            if not self.hybrid_yaw_enabled:
-                yaw_weight = (
-                    0.0 if abs(yaw_error) <= self.yaw_control_deadband_deg
-                    else self._yaw_weight(yaw_error, self.yaw_weight_max)
-                )
-                yaw_cmd = ("E" if yaw_error > 0.0 else "Q") if yaw_weight > 0.0 else ""
-            physical_pitch_limit = {
-                "active": False,
-                "stalled": False,
-                "reason": "waiting_for_yaw_stable_alignment",
-            }
-            aim_axis = "yaw"
-        elif not pitch_aligned:
-            # Actual R/F travel test: stay on the yaw target and watch the
-            # simulator feedback.  Only a proven no-motion endstop can move
-            # the vehicle to a fallback firing position.
+        if not self.hybrid_yaw_enabled and not yaw_aligned:
+            yaw_weight = (
+                0.0 if abs(yaw_error) <= self.yaw_control_deadband_deg
+                else self._yaw_weight(yaw_error, self.yaw_weight_max)
+            )
+            yaw_cmd = ("E" if yaw_error > 0.0 else "Q") if yaw_weight > 0.0 else ""
+
+        if not pitch_aligned:
             pitch_cmd = "R" if pitch_error > 0.0 else "F"
             pitch_weight = self._pitch_weight(pitch_error, self.pitch_weight_max)
-            physical_pitch_limit = self._observe_physical_pitch_watch(
-                now=now,
-                command=pitch_cmd if pitch_weight > 0.0 else "",
-                current_pitch_deg=self.turret_elevation_deg,
-                target_pitch_deg=solution["target_pitch_deg"],
-            )
-            aim_axis = "pitch"
+
+            # The watchdog decides whether a real mechanical R/F endstop has
+            # been reached.  Do not arm it while yaw is far away from the
+            # target; pitch may be changing or temporarily appear stationary
+            # during a large horizontal sweep.
+            endstop_yaw_gate_deg = max(4.0, self.yaw_tolerance_deg * 2.0)
+            endstop_gate_open = abs(yaw_error) <= endstop_yaw_gate_deg
+            if endstop_gate_open:
+                physical_pitch_limit = self._observe_physical_pitch_watch(
+                    now=now,
+                    command=pitch_cmd if pitch_weight > 0.0 else "",
+                    current_pitch_deg=self.turret_elevation_deg,
+                    target_pitch_deg=solution["target_pitch_deg"],
+                )
+            else:
+                self._reset_physical_pitch_watch()
+                physical_pitch_limit = {
+                    "active": False,
+                    "stalled": False,
+                    "reason": "waiting_for_yaw_endstop_gate",
+                    "yaw_error_deg": round(yaw_error, 3),
+                    "yaw_gate_deg": round(endstop_yaw_gate_deg, 3),
+                }
 
             if physical_pitch_limit.get("stalled", False):
                 stall_reason = (
@@ -2086,6 +2099,13 @@ class BallisticTurretNode(Node):
                 "stalled": False,
                 "reason": "target_pitch_reached",
             }
+
+        if not yaw_aligned and not pitch_aligned:
+            aim_axis = "yaw_pitch_concurrent"
+        elif not yaw_aligned:
+            aim_axis = "yaw"
+        elif not pitch_aligned:
+            aim_axis = "pitch"
 
         # ``yaw_aligned`` here means measured angle *and* post-release
         # settling observation, not merely instantaneous angle error.
@@ -2164,6 +2184,90 @@ class BallisticTurretNode(Node):
             fire=False, status=status,
         )
 
+
+
+    # SCENARIO2_FINAL_NO_FORWARD_DAMPED_YAW
+    def _damped_aim_yaw_control(
+        self,
+        yaw_error_deg: float,
+        now: float,
+    ) -> Tuple[str, float, Dict[str, Any]]:
+        """Feedback-driven Q/E with near-target braking and reversal settling.
+
+        This method is called only by the ballistic aiming state.  It uses the
+        latest turret-yaw feedback every timer tick; no Q/E command duration is
+        precomputed.  The short neutral interval is used only after a genuine
+        near-target sign reversal, so a far-away new target can still turn fast.
+        """
+        brake_deg = 16.0
+        near_weight_scale = 0.35
+        reverse_hold_sec = 0.14
+        min_near_weight = 0.035
+
+        error_abs = abs(float(yaw_error_deg))
+        deadband = float(self.yaw_control_deadband_deg)
+        if error_abs <= deadband:
+            return "", 0.0, {
+                "mode": "inside_deadband",
+                "raw_error_deg": round(float(yaw_error_deg), 3),
+                "brake_deg": brake_deg,
+                "reverse_hold_active": False,
+                "weight": 0.0,
+            }
+
+        command = "E" if yaw_error_deg > 0.0 else "Q"
+        last_command = str(getattr(self, "_aim_yaw_last_cmd", "") or "")
+        hold_until = float(getattr(self, "_aim_yaw_reverse_hold_until", 0.0) or 0.0)
+
+        # An overshoot is a command-direction reversal while already near the
+        # target.  Stop briefly instead of immediately applying full opposite
+        # Q/E; that lets simulator latency/inertia settle before re-acquiring.
+        if (
+            last_command in {"Q", "E"}
+            and command != last_command
+            and error_abs <= brake_deg
+            and now >= hold_until
+        ):
+            hold_until = now + reverse_hold_sec
+            self._aim_yaw_reverse_hold_until = hold_until
+
+        if now < hold_until:
+            return "", 0.0, {
+                "mode": "reverse_hold",
+                "raw_error_deg": round(float(yaw_error_deg), 3),
+                "last_command": last_command,
+                "next_command": command,
+                "brake_deg": brake_deg,
+                "reverse_hold_active": True,
+                "reverse_hold_remaining_sec": round(max(0.0, hold_until - now), 3),
+                "weight": 0.0,
+            }
+
+        base_weight = self._yaw_weight(yaw_error_deg, self.yaw_weight_max)
+        if error_abs < brake_deg:
+            # Quadratic ramp: significantly slower near target, while retaining
+            # enough authority to recover from small persistent error.
+            span = max(0.001, brake_deg - deadband)
+            normalized = max(0.0, min(1.0, (error_abs - deadband) / span))
+            scale = near_weight_scale + (1.0 - near_weight_scale) * (normalized * normalized)
+            weight = max(min_near_weight, base_weight * scale)
+            mode = "braked_track"
+        else:
+            weight = base_weight
+            mode = "fast_track"
+
+        weight = max(0.0, min(float(self.yaw_weight_max), float(weight)))
+        self._aim_yaw_last_cmd = command if weight > 0.0 else ""
+        self._aim_yaw_reverse_hold_until = 0.0
+        return command if weight > 0.0 else "", weight, {
+            "mode": mode,
+            "raw_error_deg": round(float(yaw_error_deg), 3),
+            "brake_deg": brake_deg,
+            "near_weight_scale": near_weight_scale,
+            "reverse_hold_active": False,
+            "base_weight": round(float(base_weight), 4),
+            "weight": round(float(weight), 4),
+        }
 
 
 def main(args=None) -> None:
