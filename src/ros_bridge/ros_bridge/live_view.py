@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 import os
 from copy import deepcopy
-from threading import Lock
+from threading import Condition, Lock
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -22,7 +22,9 @@ except Exception:  # pragma: no cover - runtime optional guard
     cv2 = None
 
 _state_lock = Lock()
+_frame_condition = Condition(_state_lock)
 _latest_frame: Optional[np.ndarray] = None
+_latest_raw_jpeg: Optional[bytes] = None
 _latest_frame_seq = 0
 _latest_frame_timestamp = 0.0
 _latest_frame_shape: Optional[List[int]] = None
@@ -30,14 +32,29 @@ _latest_source_frame_shape: Optional[List[int]] = None
 _latest_detections: List[Dict[str, Any]] = []
 _latest_detection_metadata: Dict[str, Any] = {}
 _latest_detection_timestamp = 0.0
+# Exact newest frame whose synchronous YOLO result has completed. WebRTC can use
+# this pair to keep the video image and detection metadata on the same frame.
+_latest_ready_raw_jpeg: Optional[bytes] = None
+_latest_ready_frame_seq = 0
+_latest_ready_timestamp = 0.0
+_latest_ready_source_shape: Optional[List[int]] = None
 _latest_error: Optional[str] = None
 _latest_live_decode_ms = 0.0
 _skipped_live_decode_count = 0
+_stream_client_count = 0
+_stream_sent_count = 0
+_LIVE_OVERLAY_POLL_MS = max(80, int(os.getenv("TANK_LIVE_OVERLAY_POLL_MS", "100")))
 
 _LIVE_VIEW_DECODE_FPS = float(os.getenv("TANK_LIVE_VIEW_DECODE_FPS", "6"))
 _LIVE_VIEW_DECODE_INTERVAL = 1.0 / max(0.1, _LIVE_VIEW_DECODE_FPS)
 _LIVE_VIEW_MAX_SIDE = int(os.getenv("TANK_LIVE_VIEW_MAX_SIDE", "960"))
 _LIVE_VIEW_BROWSER_OVERLAY = os.getenv("TANK_LIVE_VIEW_BROWSER_OVERLAY", "true").strip().lower() in ("1", "true", "yes", "y")
+# 원본 JPEG를 그대로 전달해 웹용 재인코딩 연산을 없앤다. ROS 큐와 YOLO 방식에는 영향이 없다.
+_LIVE_VIEW_RAW_JPEG = os.getenv("TANK_LIVE_VIEW_RAW_JPEG", "false").strip().lower() in ("1", "true", "yes", "y")
+_WEBRTC_ENABLED = os.getenv("TANK_WEBRTC_ENABLED", "false").strip().lower() in ("1", "true", "yes", "y", "on")
+_WEB_STREAM_MODE = os.getenv("TANK_WEB_STREAM_MODE", "mjpeg").strip().lower()
+if _WEB_STREAM_MODE not in ("mjpeg", "webrtc", "auto"):
+    _WEB_STREAM_MODE = "mjpeg"
 
 _CLASS_COLORS_BGR = {
     "tank": (0, 0, 255),
@@ -77,27 +94,56 @@ def _resize_for_live_view(frame: np.ndarray) -> np.ndarray:
 
 
 def update_frame(image_bytes: bytes) -> Optional[List[int]]:
-    """Store a throttled display frame. Returns source frame shape [h, w, c] if known."""
-    global _latest_frame, _latest_frame_seq, _latest_frame_timestamp, _latest_frame_shape, _latest_source_frame_shape, _latest_error, _latest_live_decode_ms, _skipped_live_decode_count
+    """최신 웹 프레임 한 장만 보관한다.
+
+    ROS publisher/subscriber depth=10과는 별개의 웹 표시용 버퍼다.
+    raw JPEG + browser canvas overlay 모드에서는 서버가 JPEG를 다시 디코딩하지 않는다.
+    """
+    global _latest_frame, _latest_raw_jpeg, _latest_frame_seq, _latest_frame_timestamp
+    global _latest_frame_shape, _latest_source_frame_shape, _latest_error
+    global _latest_live_decode_ms, _skipped_live_decode_count
+
     now = time.time()
-    with _state_lock:
-        if _latest_frame_timestamp and now - _latest_frame_timestamp < _LIVE_VIEW_DECODE_INTERVAL:
+    raw_jpeg = bytes(image_bytes) if image_bytes else None
+
+    with _frame_condition:
+        _latest_raw_jpeg = raw_jpeg
+        _latest_frame_seq += 1
+        _latest_frame_timestamp = now
+        known_shape = deepcopy(_latest_source_frame_shape or _latest_frame_shape)
+
+        # 브라우저가 원본 JPEG를 직접 표시하고 Canvas로 박스를 그릴 때는
+        # 웹 표시용 OpenCV decode/resize가 전혀 필요하지 않다.
+        if _LIVE_VIEW_RAW_JPEG and _LIVE_VIEW_BROWSER_OVERLAY:
             _skipped_live_decode_count += 1
-            return deepcopy(_latest_source_frame_shape or _latest_frame_shape)
+            _latest_error = None
+            _frame_condition.notify_all()
+            return known_shape
+
+        last_decode_at = getattr(update_frame, "_last_decode_at", 0.0)
+        if (
+            _latest_frame is not None
+            and now - last_decode_at < _LIVE_VIEW_DECODE_INTERVAL
+        ):
+            _skipped_live_decode_count += 1
+            _frame_condition.notify_all()
+            return known_shape
+        update_frame._last_decode_at = now
+        _frame_condition.notify_all()
+
     decode_started = time.perf_counter()
     frame = _decode_jpeg(image_bytes)
     decode_ms = (time.perf_counter() - decode_started) * 1000.0
     if frame is None:
         with _state_lock:
             _latest_error = "live_view: failed to decode frame or cv2 unavailable"
-        return None
+        return known_shape
+
     source_shape = [int(v) for v in frame.shape]
     display_frame = _resize_for_live_view(frame)
     display_shape = [int(v) for v in display_frame.shape]
     with _state_lock:
         _latest_frame = display_frame
-        _latest_frame_seq += 1
-        _latest_frame_timestamp = time.time()
         _latest_frame_shape = display_shape
         _latest_source_frame_shape = source_shape
         _latest_live_decode_ms = decode_ms
@@ -106,13 +152,61 @@ def update_frame(image_bytes: bytes) -> Optional[List[int]]:
 
 
 def update_detections(detections: Any, metadata: Optional[Dict[str, Any]] = None) -> None:
-    """Store latest detection list for overlay."""
+    """Store the newest synchronous YOLO result and its exact JPEG frame."""
     global _latest_detections, _latest_detection_metadata, _latest_detection_timestamp
+    global _latest_source_frame_shape
+    global _latest_ready_raw_jpeg, _latest_ready_frame_seq, _latest_ready_timestamp
+    global _latest_ready_source_shape
     with _state_lock:
+        current_seq = int(_latest_frame_seq)
+        current_meta = deepcopy(metadata) if isinstance(metadata, dict) else {}
+        current_meta.setdefault("frameSeq", current_seq)
         _latest_detections = deepcopy(detections) if isinstance(detections, list) else []
-        _latest_detection_metadata = deepcopy(metadata) if isinstance(metadata, dict) else {}
+        _latest_detection_metadata = current_meta
         _latest_detection_timestamp = time.time()
+        shape = current_meta.get("image_shape")
+        if isinstance(shape, list) and len(shape) >= 2:
+            _latest_source_frame_shape = [int(v) for v in shape]
+        # No historical queue: overwrite the single ready frame. This is separate
+        # from ROS publisher/subscriber depth=10, which remains unchanged.
+        _latest_ready_raw_jpeg = bytes(_latest_raw_jpeg) if _latest_raw_jpeg else None
+        _latest_ready_frame_seq = current_seq
+        _latest_ready_timestamp = float(_latest_frame_timestamp)
+        _latest_ready_source_shape = deepcopy(_latest_source_frame_shape)
 
+
+def get_stream_snapshot(sync_to_yolo: bool = True) -> Dict[str, Any]:
+    """Return one latest JPEG snapshot without creating a frame backlog."""
+    with _state_lock:
+        if sync_to_yolo:
+            return {
+                "jpeg": _latest_ready_raw_jpeg,
+                "frameSeq": int(_latest_ready_frame_seq),
+                "timestamp": float(_latest_ready_timestamp),
+                "sourceShape": deepcopy(_latest_ready_source_shape),
+            }
+        return {
+            "jpeg": _latest_raw_jpeg,
+            "frameSeq": int(_latest_frame_seq),
+            "timestamp": float(_latest_frame_timestamp),
+            "sourceShape": deepcopy(_latest_source_frame_shape),
+        }
+
+
+def overlay_state() -> Dict[str, Any]:
+    """브라우저 YOLO Canvas 전용 경량 상태를 반환한다."""
+    with _state_lock:
+        now = time.time()
+        return {
+            "frameSeq": int(_latest_ready_frame_seq or _latest_frame_seq),
+            "latestFrameSeq": int(_latest_frame_seq),
+            "latestDetections": deepcopy(_latest_detections),
+            "latestDetectionCount": len(_latest_detections),
+            "latestDetectionMetadata": deepcopy(_latest_detection_metadata),
+            "latestSourceFrameShape": deepcopy(_latest_ready_source_shape or _latest_source_frame_shape),
+            "latestDetectionAgeMs": None if not _latest_detection_timestamp else (now - _latest_detection_timestamp) * 1000.0,
+            "latestFrameAgeMs": None if not _latest_frame_timestamp else (now - _latest_frame_timestamp) * 1000.0,
+        }
 
 def _class_color(class_name: str, class_id: int = 0) -> Tuple[int, int, int]:
     key = str(class_name).strip().lower()
@@ -416,13 +510,14 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 position: relative;
                 background: #020403;
             }
-            #driveFeed {
+            #driveFeed, #driveWebrtc {
                 width: 100%;
                 height: 100%;
                 object-fit: contain;
                 display: block;
                 background: #000;
             }
+            #driveWebrtc { display: none; }
             #driveOverlay {
                 position: absolute;
                 inset: 0;
@@ -697,7 +792,8 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 <section class="panel">
                     <div class="panel-title"><span>① CAMERA · YOLO</span><span id="feedStatusText" class="feed-status-text">det=0 sync</span></div>
                     <div class="feed-wrap">
-                        <img id="driveFeed" src="/video_feed" alt="drive feed">
+                        <img id="driveFeed" data-src="/video_feed" alt="drive feed">
+                        <video id="driveWebrtc" autoplay muted playsinline></video>
                         <canvas id="driveOverlay"></canvas>
                     </div>
                 </section>
@@ -755,6 +851,11 @@ def render_view_page(poll_ms: int = 1000) -> str:
             let activeTab = "route";
             let activeMapTab = "terrain";
             let latestState = null;
+            let latestLiveOverlay = null;
+            let webRtcPeer = null;
+            let webRtcCodec = null;
+            const WEBRTC_ENABLED = false;
+            const WEB_STREAM_MODE = "mjpeg";
             let lastFetchOk = false;
             let staticMap = null;
             let staticMapLoadError = null;
@@ -1474,6 +1575,8 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 return true;
             }
             function getDetections(state) {
+                const immediateDetections = latestLiveOverlay?.latestDetections;
+                if (Array.isArray(immediateDetections)) return immediateDetections;
                 const yoloDetections = state?.yolo?.latestReturnedDetections;
                 if (Array.isArray(yoloDetections) && yoloDetections.length) return yoloDetections;
                 const liveDetections = state?.liveView?.latestDetections;
@@ -1563,10 +1666,11 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 const ctx = canvas.getContext("2d");
                 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
                 ctx.clearRect(0, 0, rect.width, rect.height);
-                const metadata = state?.liveView?.latestDetectionMetadata || latestBridge(state)?.detect_result || {};
-                const shape = metadata.image_shape || state?.liveView?.latestSourceFrameShape || state?.yolo?.latestFrameShape || [];
-                const sourceW = Number(metadata.image?.width || shape[1] || byId("driveFeed")?.naturalWidth || 1920);
-                const sourceH = Number(metadata.image?.height || shape[0] || byId("driveFeed")?.naturalHeight || 1080);
+                const metadata = latestLiveOverlay?.latestDetectionMetadata || state?.liveView?.latestDetectionMetadata || latestBridge(state)?.detect_result || {};
+                const shape = metadata.image_shape || latestLiveOverlay?.latestSourceFrameShape || state?.liveView?.latestSourceFrameShape || state?.yolo?.latestFrameShape || [];
+                const video = byId("driveWebrtc");
+                const sourceW = Number(metadata.image?.width || shape[1] || video?.videoWidth || byId("driveFeed")?.naturalWidth || 1920);
+                const sourceH = Number(metadata.image?.height || shape[0] || video?.videoHeight || byId("driveFeed")?.naturalHeight || 1080);
                 if (!Number.isFinite(sourceW) || !Number.isFinite(sourceH) || sourceW <= 0 || sourceH <= 0) return;
                 const imageBox = driveImageBox(canvas, sourceW, sourceH);
                 const detections = getDetections(state);
@@ -1591,7 +1695,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 }
             }
             function feedStatusText(state) {
-                const liveView = state?.liveView || {};
+                const liveView = latestLiveOverlay ? { ...(state?.liveView || {}), ...latestLiveOverlay } : (state?.liveView || {});
                 const metadata = liveView.latestDetectionMetadata || latestBridge(state)?.detect_result || {};
                 const detections = getDetections(state);
                 const count = Number.isFinite(Number(liveView.latestDetectionCount))
@@ -2389,6 +2493,113 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 byId("bottomRoute").textContent = `/detect ${safe(counts["/detect"], 0)} /info ${safe(counts["/info"], 0)}`;
                 byId("bottomWarning").textContent = state?.bridge?.error || state?.yolo?.error || state?.liveView?.latestError || "-";
             }
+            function setFeedStatusMessage(text) {
+                const status = byId("feedStatusText");
+                if (status && text) status.textContent = text;
+            }
+            function stopMjpeg() {
+                const img = byId("driveFeed");
+                if (img) { img.removeAttribute("src"); img.style.display = "none"; }
+            }
+            function startMjpeg(reason = "MJPEG") {
+                const img = byId("driveFeed");
+                const video = byId("driveWebrtc");
+                if (webRtcPeer) { try { webRtcPeer.close(); } catch (e) {} webRtcPeer = null; }
+                if (video) { video.pause(); video.srcObject = null; video.style.display = "none"; }
+                if (img) {
+                    if (!img.getAttribute("src")) img.src = `${img.dataset.src || "/video_feed"}?t=${Date.now()}`;
+                    img.style.display = "block";
+                }
+                setFeedStatusMessage(reason);
+            }
+            function waitForIceGatheringComplete(pc) {
+                if (pc.iceGatheringState === "complete") return Promise.resolve();
+                return new Promise((resolve) => {
+                    const check = () => {
+                        if (pc.iceGatheringState === "complete") { pc.removeEventListener("icegatheringstatechange", check); resolve(); }
+                    };
+                    pc.addEventListener("icegatheringstatechange", check);
+                    setTimeout(resolve, 3000);
+                });
+            }
+            async function reportWebRtcCodec(pc) {
+                try {
+                    const stats = await pc.getStats();
+                    let codec = null;
+                    stats.forEach((row) => {
+                        if (row.type === "inbound-rtp" && row.kind === "video" && row.codecId) {
+                            const c = stats.get(row.codecId);
+                            if (c?.mimeType) codec = c.mimeType;
+                        }
+                    });
+                    if (codec) { webRtcCodec = codec; setFeedStatusMessage(`WebRTC ${codec}`); }
+                } catch (e) {}
+            }
+            function handleWebRtcFailure(message) {
+                if (WEB_STREAM_MODE === "auto") startMjpeg(`${message} · MJPEG fallback`);
+                else { stopMjpeg(); setFeedStatusMessage(message); }
+            }
+            async function startWebRtcPreview() {
+                stopMjpeg();
+                if (!WEBRTC_ENABLED || !window.RTCPeerConnection) {
+                    handleWebRtcFailure("WebRTC unavailable");
+                    return;
+                }
+                const video = byId("driveWebrtc");
+                try {
+                    const pc = new RTCPeerConnection({ iceServers: [] });
+                    webRtcPeer = pc;
+                    const transceiver = pc.addTransceiver("video", { direction: "recvonly" });
+                    if (transceiver.setCodecPreferences && window.RTCRtpReceiver?.getCapabilities) {
+                        const codecs = RTCRtpReceiver.getCapabilities("video")?.codecs || [];
+                        const h264 = codecs.filter((c) => String(c.mimeType).toLowerCase() === "video/h264");
+                        const rest = codecs.filter((c) => !h264.includes(c));
+                        if (h264.length) transceiver.setCodecPreferences([...h264, ...rest]);
+                    }
+                    pc.ontrack = (event) => {
+                        video.srcObject = event.streams[0];
+                        video.style.display = "block";
+                        stopMjpeg();
+                        video.play().catch(() => {});
+                        setFeedStatusMessage("WebRTC connected");
+                        setTimeout(() => reportWebRtcCodec(pc), 1000);
+                    };
+                    pc.onconnectionstatechange = () => {
+                        if (["failed", "closed", "disconnected"].includes(pc.connectionState)) {
+                            handleWebRtcFailure(`WebRTC ${pc.connectionState}`);
+                        }
+                    };
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+                    await waitForIceGatheringComplete(pc);
+                    const response = await fetch("/webrtc/offer", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+                    });
+                    const answer = await response.json();
+                    if (!response.ok) throw new Error(answer.error || `HTTP ${response.status}`);
+                    await pc.setRemoteDescription(answer);
+                } catch (err) {
+                    console.warn("WebRTC preview failed:", err);
+                    handleWebRtcFailure("WebRTC failed");
+                }
+            }
+            function startSelectedPreview() {
+                if (WEB_STREAM_MODE === "mjpeg") startMjpeg("MJPEG");
+                else startWebRtcPreview();
+            }
+
+            async function fetchLiveOverlayState() {
+                try {
+                    const response = await fetch("/api/live-feed/state", { cache: "no-store" });
+                    if (!response.ok) return;
+                    latestLiveOverlay = await response.json();
+                    drawFeedOverlay(latestState || {});
+                    updateFeedStatus(latestState || {});
+                } catch (err) {}
+            }
+
             async function fetchDashboardState() {
                 try {
                     const response = await fetch("/api/dashboard/state", { cache: "no-store" });
@@ -2484,6 +2695,9 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 });
             }
             initPanelMax();
+            startSelectedPreview();
+            fetchLiveOverlayState();
+            setInterval(fetchLiveOverlayState, 100);
             fetchDashboardState();
             setInterval(fetchDashboardState, 300);
         </script>
@@ -2495,27 +2709,85 @@ def render_view_page(poll_ms: int = 1000) -> str:
         "setInterval(fetchDashboardState, 300)",
         f"setInterval(fetchDashboardState, {int(poll_ms)})",
     )
+    html = html.replace(
+        "setInterval(fetchLiveOverlayState, 100)",
+        f"setInterval(fetchLiveOverlayState, {int(_LIVE_OVERLAY_POLL_MS)})",
+    )
+    html = html.replace("const WEBRTC_ENABLED = false", f"const WEBRTC_ENABLED = {str(_WEBRTC_ENABLED).lower()}")
+    html = html.replace('const WEB_STREAM_MODE = "mjpeg"', f'const WEB_STREAM_MODE = "{_WEB_STREAM_MODE}"')
     return render_template_string(html)
 
 
 def generate_video_stream(web_fps: float = 20.0, jpeg_quality: int = 80):
+    """최신 프레임만 전송한다. raw 모드에서는 복사·decode·encode를 생략한다."""
+    global _stream_client_count, _stream_sent_count
     interval = 1.0 / max(1.0, float(web_fps))
     encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)] if cv2 is not None else []
-    while True:
-        with _state_lock:
-            frame = None if _latest_frame is None else _latest_frame.copy()
-            detections = deepcopy(_latest_detections)
-            metadata = deepcopy(_latest_detection_metadata)
-        if frame is None:
-            frame = _blank_frame()
-        elif not _LIVE_VIEW_BROWSER_OVERLAY:
-            frame = _draw_detections(frame, detections, metadata)
-        if cv2 is not None:
-            ok, buffer = cv2.imencode(".jpg", frame, encode_params)
-            if ok:
-                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
-        time.sleep(interval)
+    raw_mode = bool(_LIVE_VIEW_RAW_JPEG and _LIVE_VIEW_BROWSER_OVERLAY)
+    last_sent_seq = -1
+    next_send_at = 0.0
 
+    with _state_lock:
+        _stream_client_count += 1
+    try:
+        while True:
+            with _frame_condition:
+                _frame_condition.wait_for(lambda: _latest_frame_seq != last_sent_seq, timeout=1.0)
+                seq = int(_latest_frame_seq)
+                raw_jpeg = _latest_raw_jpeg
+                if raw_mode:
+                    frame = None
+                    detections = None
+                    metadata = None
+                else:
+                    frame = None if _latest_frame is None else _latest_frame.copy()
+                    detections = deepcopy(_latest_detections)
+                    metadata = deepcopy(_latest_detection_metadata)
+
+            if seq == last_sent_seq:
+                continue
+
+            now = time.monotonic()
+            if now < next_send_at:
+                time.sleep(next_send_at - now)
+                with _state_lock:
+                    seq = int(_latest_frame_seq)
+                    raw_jpeg = _latest_raw_jpeg
+                    if not raw_mode:
+                        frame = None if _latest_frame is None else _latest_frame.copy()
+                        detections = deepcopy(_latest_detections)
+                        metadata = deepcopy(_latest_detection_metadata)
+
+            jpeg_bytes = None
+            if raw_mode and raw_jpeg:
+                jpeg_bytes = raw_jpeg
+            else:
+                if frame is None:
+                    frame = _blank_frame()
+                elif not _LIVE_VIEW_BROWSER_OVERLAY:
+                    frame = _draw_detections(frame, detections or [], metadata or {})
+                if cv2 is not None:
+                    ok, buffer = cv2.imencode(".jpg", frame, encode_params)
+                    if ok:
+                        jpeg_bytes = buffer.tobytes()
+
+            if jpeg_bytes:
+                with _state_lock:
+                    _stream_sent_count += 1
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Cache-Control: no-store, no-cache, must-revalidate, max-age=0\r\n"
+                    b"Pragma: no-cache\r\n\r\n"
+                    + jpeg_bytes
+                    + b"\r\n"
+                )
+
+            last_sent_seq = seq
+            next_send_at = time.monotonic() + interval
+    finally:
+        with _state_lock:
+            _stream_client_count = max(0, _stream_client_count - 1)
 
 def video_response(web_fps: float = 20.0, jpeg_quality: int = 80) -> Response:
     return Response(generate_video_stream(web_fps=web_fps, jpeg_quality=jpeg_quality), mimetype="multipart/x-mixed-replace; boundary=frame")
@@ -2541,5 +2813,11 @@ def debug_state() -> Dict[str, Any]:
             "latestDetectionAgeMs": None if det_age is None else det_age * 1000.0,
             "latestDetectionMetadata": deepcopy(_latest_detection_metadata),
             "latestError": _latest_error,
-            "rawStream": _LIVE_VIEW_BROWSER_OVERLAY,
+            "rawStream": bool(_LIVE_VIEW_RAW_JPEG and _LIVE_VIEW_BROWSER_OVERLAY),
+            "streamClientCount": _stream_client_count,
+            "streamSentCount": _stream_sent_count,
+            "liveOverlayPollMs": _LIVE_OVERLAY_POLL_MS,
+            "webStreamMode": _WEB_STREAM_MODE,
+            "webrtcEnabled": _WEBRTC_ENABLED,
+            "readyFrameSeq": _latest_ready_frame_seq,
         }

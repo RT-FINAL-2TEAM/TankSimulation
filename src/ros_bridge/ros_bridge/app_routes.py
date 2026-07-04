@@ -101,6 +101,7 @@ from .config import (
     YOLO_ASYNC_LOG_INTERVAL_SEC,
     YOLO_ASYNC_MAX_RESULT_AGE_MS,
     YOLO_ASYNC_MIN_INTERVAL_SEC,
+    WEBRTC_ENABLED,
 )
 
 # get_bridge:
@@ -109,6 +110,7 @@ from .config import (
 #   bridge handler에 데이터를 넘기는 구조이다.
 from .ros_runtime import get_bridge, ros_status
 from . import live_view
+from . import webrtc_stream
 from .system_metrics import get_system_metrics
 from .async_yolo import AsyncYoloService
 
@@ -2406,6 +2408,38 @@ def route_video_feed():
     if not LIVE_VIEW_ENABLED:
         return jsonify({"enabled": False, "error": "TANK_LIVE_VIEW is false"}), 404
     return live_view.video_response(web_fps=LIVE_VIEW_FPS, jpeg_quality=LIVE_VIEW_JPEG_QUALITY)
+
+
+@app.route("/api/live-feed/state", methods=["GET"])
+def route_live_feed_state():
+    """YOLO Canvas 전용 경량 상태. 무거운 dashboard payload와 분리한다."""
+    if not LIVE_VIEW_ENABLED:
+        return jsonify({"enabled": False, "error": "TANK_LIVE_VIEW is false"}), 404
+    response = jsonify(live_view.overlay_state())
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return response
+
+
+@app.route("/webrtc/offer", methods=["POST"])
+def route_webrtc_offer():
+    """Accept a browser SDP offer for the optional latest-frame WebRTC preview."""
+    if not WEBRTC_ENABLED:
+        return jsonify({"enabled": False, "error": "TANK_WEBRTC_ENABLED=false"}), 404
+    payload = request.get_json(silent=True) or {}
+    try:
+        response = jsonify(webrtc_stream.create_answer(payload))
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except ValueError as exc:
+        return jsonify({"error": str(exc), "webrtc": webrtc_stream.debug_state()}), 400
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] WebRTC offer failed: {exc}")
+        return jsonify({"error": str(exc), "webrtc": webrtc_stream.debug_state()}), 503
+
+
+@app.route("/debug/webrtc", methods=["GET"])
+def route_debug_webrtc():
+    return jsonify(webrtc_stream.debug_state())
 
 
 @app.route("/rviz3d", methods=["GET"])

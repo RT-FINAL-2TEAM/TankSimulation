@@ -1,0 +1,3 @@
+# Optional WebRTC/H.264 preview dependencies for ros_bridge.
+aiortc
+av

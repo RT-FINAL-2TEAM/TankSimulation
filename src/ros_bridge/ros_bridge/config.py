@@ -258,6 +258,19 @@ YOLO_ASYNC_MAX_RESULT_AGE_MS = float(os.environ.get("TANK_YOLO_ASYNC_MAX_RESULT_
 YOLO_ASYNC_LOG_INTERVAL_SEC = float(os.environ.get("TANK_YOLO_ASYNC_LOG_INTERVAL_SEC", "2.0"))
 
 
+# Optional browser preview transport. This does not alter YOLO sync mode or ROS QoS depth.
+# mjpeg: raw JPEG only, webrtc: WebRTC only, auto: WebRTC first then MJPEG fallback.
+WEB_STREAM_MODE = os.environ.get("TANK_WEB_STREAM_MODE", "mjpeg").strip().lower()
+if WEB_STREAM_MODE not in {"mjpeg", "webrtc", "auto"}:
+    WEB_STREAM_MODE = "mjpeg"
+WEBRTC_ENABLED = os.environ.get("TANK_WEBRTC_ENABLED", "false").strip().lower() in ("1", "true", "yes", "y", "on")
+WEBRTC_FPS = float(os.environ.get("TANK_WEBRTC_FPS", "10"))
+WEBRTC_MAX_SIDE = int(os.environ.get("TANK_WEBRTC_MAX_SIDE", "640"))
+WEBRTC_SYNC_TO_YOLO = os.environ.get("TANK_WEBRTC_SYNC_TO_YOLO", "true").strip().lower() in ("1", "true", "yes", "y", "on")
+WEBRTC_PREFER_H264 = os.environ.get("TANK_WEBRTC_PREFER_H264", "true").strip().lower() in ("1", "true", "yes", "y", "on")
+WEBRTC_OFFER_TIMEOUT_SEC = float(os.environ.get("TANK_WEBRTC_OFFER_TIMEOUT_SEC", "12"))
+
+
 ############################################################
 # 6. /init 기본 시뮬레이터 시작 위치
 ############################################################
