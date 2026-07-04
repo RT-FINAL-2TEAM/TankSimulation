@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 printf '\033]0;S2-T3 Auto Pipeline\007'
-source "/home/tankcc/tankcc/scripts/.terminator_runtime/common_env.sh"
+source "/home/acorn/TankSimulation/scripts/.terminator_runtime/common_env.sh"
 
-MAP_FILE="/home/tankcc/tankcc/recon_reports/recon_map/scenario2_map.map"
-TERRAIN_FILE="/home/tankcc/tankcc/recon_reports/recon_map/scenario2_terrain.npz"
+MAP_FILE="/home/acorn/TankSimulation/recon_reports/recon_map/scenario2_map.map"
+TERRAIN_FILE="/home/acorn/TankSimulation/recon_reports/recon_map/scenario2_terrain.npz"
 
 echo "============================================================"
 echo "[T3] Scenario 2 Auto Pipeline"
@@ -17,7 +17,7 @@ echo "  4) simulator reset/restart 요청"
 echo "  5) 3초 대기"
 echo "  6) python3 scripts/run_scenario2_scenario.py"
 echo
-echo "[LOG DIR] /home/tankcc/tankcc/logs/scenario2_terminator_20260701_123248"
+echo "[LOG DIR] /home/acorn/TankSimulation/logs/scenario2_terminator_20260704_180237"
 echo "[BUILD_MODE] auto"
 echo
 
@@ -32,13 +32,13 @@ run_step() {
   echo "Command: $*"
   echo
 
-  "$@" 2>&1 | tee "/home/tankcc/tankcc/logs/scenario2_terminator_20260701_123248/$name.log"
+  "$@" 2>&1 | tee "/home/acorn/TankSimulation/logs/scenario2_terminator_20260704_180237/$name.log"
   local code="${PIPESTATUS[0]}"
 
   if [[ "$code" -ne 0 ]]; then
     echo
     echo "[ERROR] $name failed with exit code $code"
-    echo "로그: /home/tankcc/tankcc/logs/scenario2_terminator_20260701_123248/$name.log"
+    echo "로그: /home/acorn/TankSimulation/logs/scenario2_terminator_20260704_180237/$name.log"
     exec bash
   fi
 
@@ -51,8 +51,8 @@ wait_for_bridge() {
 
   for _ in $(seq 1 60); do
     if command -v curl >/dev/null 2>&1; then
-      if curl -fsS "http://127.0.0.1:5000/health" >"/home/tankcc/tankcc/logs/scenario2_terminator_20260701_123248/bridge_health.json" 2>/dev/null; then
-        echo "[OK] bridge health: $(cat "/home/tankcc/tankcc/logs/scenario2_terminator_20260701_123248/bridge_health.json")"
+      if curl -fsS "http://127.0.0.1:5000/health" >"/home/acorn/TankSimulation/logs/scenario2_terminator_20260704_180237/bridge_health.json" 2>/dev/null; then
+        echo "[OK] bridge health: $(cat "/home/acorn/TankSimulation/logs/scenario2_terminator_20260704_180237/bridge_health.json")"
         return 0
       fi
     else
@@ -82,7 +82,7 @@ request_simulator_reset() {
   for i in 1 2 3; do
     echo "        publish reset attempt $i/3"
     timeout 6s ros2 topic pub --once /tank/episode/control std_msgs/msg/String "{data: 'reset'}" \
-      2>&1 | tee "/home/tankcc/tankcc/logs/scenario2_terminator_20260701_123248/reset_attempt_${i}.log" || true
+      2>&1 | tee "/home/acorn/TankSimulation/logs/scenario2_terminator_20260704_180237/reset_attempt_${i}.log" || true
     sleep 0.5
   done
 }
@@ -109,7 +109,7 @@ ensure_scenario2_map() {
   if [[ ! -f "$MAP_FILE" ]]; then
     echo
     echo "[ERROR] build 후에도 scenario2_map.map 없음"
-    echo "        build 로그: /home/tankcc/tankcc/logs/scenario2_terminator_20260701_123248/build_scenario2_map.log"
+    echo "        build 로그: /home/acorn/TankSimulation/logs/scenario2_terminator_20260704_180237/build_scenario2_map.log"
     echo "        recon_reports/recon_map 입력 파일들을 확인하세요:"
     find recon_reports -maxdepth 3 -type f 2>/dev/null | sort || true
     exec bash
@@ -152,7 +152,7 @@ echo "  recon_reports/scenario2/"
 echo "  recon_reports/scenario2/scenario2_result.json"
 echo
 echo "로그:"
-echo "  /home/tankcc/tankcc/logs/scenario2_terminator_20260701_123248"
+echo "  /home/acorn/TankSimulation/logs/scenario2_terminator_20260704_180237"
 echo
 echo "이 창은 확인용으로 유지됩니다. 닫아도 됩니다."
 exec bash

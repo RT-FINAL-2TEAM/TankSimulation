@@ -76,38 +76,68 @@ _DEFAULT_ENGAGEMENTS_JSON = (
 )
 
 
-def _scenario2_engagements(project_root: str) -> str:
-    """사격 시퀀스(engagements_json) 결정.
+_DEFAULT_MISSION_CFG = {
+    "route_id": "A",
+    "goal_x": 50.0,
+    "goal_y": 260.0,
+    "engagements_json": _DEFAULT_ENGAGEMENTS_JSON,
+}
 
-    TANK_USE_MISSION_PLAN=true 이고 mission_plan.json에 engagements가 있으면 **정찰→자동 도출** 사격
-    시퀀스를 쓴다(build_mission_plan.py 산출). 아니면 cheol 검증 하드코딩값(_DEFAULT)을 쓴다(안전 기본).
-    실패(파일 없음/파싱 오류)해도 항상 기본값으로 폴백해 시나리오2가 깨지지 않게 한다.
+
+def _scenario2_mission_config(project_root: str) -> dict:
+    """mission_plan.json에서 추천 루트·사격 체크포인트·사격 시퀀스를 읽어 시나리오2 설정 반환.
+
+    TANK_USE_MISSION_PLAN=true(기본)이고 mission_plan.json이 유효하면 정찰→자동 도출 값 사용.
+    실패(파일 없음/파싱 오류/필드 누락)해도 항상 기본값으로 폴백해 시나리오2가 깨지지 않는다.
+
+    반환 키: route_id, goal_x, goal_y, engagements_json
     """
-    use_mp = os.environ.get("TANK_USE_MISSION_PLAN", "false").strip().lower() in ("1", "true", "yes", "y")
+    use_mp = os.environ.get("TANK_USE_MISSION_PLAN", "true").strip().lower() in ("1", "true", "yes", "y")
     if not use_mp:
-        return _DEFAULT_ENGAGEMENTS_JSON
+        print("[scenario2] TANK_USE_MISSION_PLAN=false → 기본 사격 시퀀스 사용")
+        return _DEFAULT_MISSION_CFG
+
     import json
     mp_file = os.environ.get(
         "TANK_MISSION_PLAN_FILE", os.path.join(project_root, "recon_reports", "mission_plan.json")
     )
     try:
         with open(mp_file, "r", encoding="utf-8") as f:
-            engs = json.load(f).get("engagements")
-        if isinstance(engs, list) and engs:
-            print(f"[scenario2] mission_plan 사격 시퀀스 사용: {mp_file} (표적 {len(engs)}개)")
-            return json.dumps(engs, ensure_ascii=False)
-        print(f"[scenario2] mission_plan에 engagements 없음 → 기본 사격 시퀀스 사용: {mp_file}")
+            mp = json.load(f)
+
+        route_id = str(mp.get("route_recommended") or "A").strip().upper()
+        engs = mp.get("engagements")
+        if not isinstance(engs, list) or not engs:
+            print(f"[scenario2] mission_plan에 engagements 없음 → 기본 사격 시퀀스 사용: {mp_file}")
+            return _DEFAULT_MISSION_CFG
+
+        # 마지막 engagement의 checkpoint = 최종 정지·사격 위치 → path planner의 initial goal
+        last_cp = engs[-1].get("checkpoint", {})
+        goal_x = float(last_cp.get("x", _DEFAULT_MISSION_CFG["goal_x"]))
+        goal_y = float(last_cp.get("y", _DEFAULT_MISSION_CFG["goal_y"]))
+
+        print(
+            f"[scenario2] mission_plan 사용: route={route_id}, "
+            f"사격지점=({goal_x},{goal_y}), 표적 {len(engs)}개 — {mp_file}"
+        )
+        return {
+            "route_id": route_id,
+            "goal_x": goal_x,
+            "goal_y": goal_y,
+            "engagements_json": json.dumps(engs, ensure_ascii=False),
+        }
     except FileNotFoundError:
         print(f"[scenario2] mission_plan 파일 없음 → 기본 사격 시퀀스 사용: {mp_file}")
-    except Exception as exc:  # noqa: BLE001 - 어떤 오류든 기본값 폴백
+    except Exception as exc:  # noqa: BLE001
         print(f"[scenario2] mission_plan 로드 실패({exc}) → 기본 사격 시퀀스 사용")
-    return _DEFAULT_ENGAGEMENTS_JSON
+    return _DEFAULT_MISSION_CFG
 
 
 def generate_launch_description():
     project_root = _project_root()
     _clear_stale_scenario2_completion_files(project_root)
-    engagements_json = _scenario2_engagements(project_root)
+    mission_cfg = _scenario2_mission_config(project_root)
+    engagements_json = mission_cfg["engagements_json"]
 
     control_share = get_package_share_directory("control")
     autonomous_launch = os.path.join(control_share, "launch", "tank_autonomous_control.launch.py")
@@ -135,12 +165,12 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(autonomous_launch),
             launch_arguments={
                 "mission_type": "mission",
-                "route_id": "A",        # 시나리오2 임무 루트 = A 고정(설계)
+                # route_id / goal = mission_plan.json 추천 루트·사격 체크포인트. 폴백 시 A / (50,260).
+                "route_id": mission_cfg["route_id"],
                 "route_side": "west",
-                # 정찰 공용 route는 유지하고, 시나리오2에서는 50,260에서 멈추는 별도 route를 사용한다.
                 "route_config_file": scenario2_route_file,
-                "default_goal_x": "50.0",
-                "default_goal_y": "260.0",
+                "default_goal_x": str(mission_cfg["goal_x"]),
+                "default_goal_y": str(mission_cfg["goal_y"]),
                 # 도착 후 pause/exit하지 않고 controller가 STOP을 유지해야 포탑 노드가 실제 발사한다.
                 "pause_on_goal_reached": "false",
                 "exit_on_goal_reached": "false",

@@ -46,6 +46,7 @@ DEFAULT_REPORT_DIR = os.path.join(PROJECT_ROOT, "recon_reports")
 DEFAULT_MAP = os.path.join(DEFAULT_REPORT_DIR, "recon_map", "scenario2_map.map")
 DEFAULT_ROUTES = os.path.join(PROJECT_ROOT, "src", "control", "config", "scenario2_routes.yaml")
 DEFAULT_RISK_FEATURES = os.path.join(DEFAULT_REPORT_DIR, "risk_features.json")
+DEFAULT_RISK_RESULT = os.path.join(DEFAULT_REPORT_DIR, "route_risk_result.json")
 
 # 무기 사거리(ballistic_turret_node: min_range_m 20 / max_range_m 130).
 MIN_RANGE_M = 20.0
@@ -164,6 +165,45 @@ def best_firing_position(target: Dict[str, Any], pts: List[Tuple[float, float]],
                 "route_arc_m": round(arc[idx], 2),
             }
     return best
+
+
+def get_firing_candidates(
+    target: Dict[str, Any],
+    pts: List[Tuple[float, float]],
+    arc: List[float],
+    bboxes: List[Dict[str, float]],
+    exposure_threats: List[Dict[str, Any]],
+    weights: Dict[str, float],
+    sample_step_m: float = 8.0,
+    max_candidates: int = 25,
+) -> List[Dict[str, Any]]:
+    """LLM에 전달할 유효 사격 후보 목록. 8m 간격 샘플링, 점수 상위 max_candidates개."""
+    tx, ty = float(target["x"]), float(target["y"])
+    span = MAX_RANGE_M - MIN_RANGE_M
+    last_arc = -999.0
+    candidates = []
+    for idx, (px, py) in enumerate(pts):
+        if arc[idx] - last_arc < sample_step_m:
+            continue
+        d = math.hypot(px - tx, py - ty)
+        if d < MIN_RANGE_M or d > MAX_RANGE_M:
+            continue
+        if not tg.check_los(px, py, tx, ty, bboxes):
+            continue
+        range_score = 1.0 - (d - MIN_RANGE_M) / span if span > 0 else 1.0
+        exp = point_exposure(px, py, exposure_threats, bboxes, exclude_xy=(tx, ty))
+        score = weights["range"] * range_score + weights["exposure"] * (1.0 - exp)
+        candidates.append({
+            "x": round(px, 1), "y": round(py, 1),
+            "distance_m": round(d, 1),
+            "exposure_band": exposure_band(exp),
+            "exposure": round(exp, 3),
+            "score": round(score, 4),
+            "route_arc_m": round(arc[idx], 1),
+        })
+        last_arc = arc[idx]
+    candidates.sort(key=lambda c: -c["score"])
+    return candidates[:max_candidates]
 
 
 # --------------------------------------------------------------------------- #
@@ -296,56 +336,169 @@ def recommend_route(route_results: Dict[str, Dict[str, Any]]) -> Tuple[str, str]
     return best, reason
 
 
+def _load_risk_selected_route(path: str) -> Optional[str]:
+    """route_risk_result.json에서 LLM 위험도 추천 루트(result.selected_route)를 읽는다. 실패 시 None."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        route = data.get("result", {}).get("selected_route", "")
+        return route.strip().upper() if route else None
+    except Exception:
+        return None
+
+
+def build_enemy_intel(rec: str, plan: Dict[str, Any], risk_features_path: str) -> Dict[str, Any]:
+    """추천 루트의 위협 데이터 + 미션 표적을 합쳐 적 정보 요약 생성."""
+    _OUTPOST_TYPES = {"house", "checkpoint", "outpost", "bunker", "guard_tower", "sentry"}
+    intel: Dict[str, Any] = {"tank_count": 0, "outpost_count": 0, "by_class": {}, "positions": []}
+
+    targets = plan["plan"]["targets"]
+    intel["tank_count"] = len(targets)
+    intel["positions"] = [
+        {"id": t["id"], "x": t["pos"]["x"], "y": t["pos"]["y"], "class": t["class"]}
+        for t in targets
+    ]
+
+    try:
+        with open(risk_features_path, "r", encoding="utf-8") as f:
+            rf = json.load(f)
+        by_class = rf.get(f"route_{rec}", {}).get("threat", {}).get("by_class", {})
+        intel["by_class"] = by_class
+        intel["outpost_count"] = sum(v for k, v in by_class.items() if k.lower() in _OUTPOST_TYPES)
+    except Exception:
+        pass
+
+    return intel
+
+
 # --------------------------------------------------------------------------- #
 # LLM 서술(선택) — 기하 계획을 사람이 읽을 수행 지침으로
 # --------------------------------------------------------------------------- #
 
-def llm_narrate(plan: Dict[str, Any]) -> Dict[str, Any]:
-    """LLMReporter.call_ollama 재사용해 미션 수행 지침을 JSON으로 생성. 실패시 available=false."""
+def _apply_llm_firing_checkpoint(
+    plan: Dict[str, Any],
+    target_id: str,
+    lx: float,
+    ly: float,
+    bboxes: List[Dict[str, float]],
+    exp_threats: List[Dict[str, Any]],
+) -> bool:
+    """LLM이 선택한 (lx, ly)를 검증(사거리·LoS) 후 plan.plan.targets와 plan.engagements에 반영.
+    검증 통과 시 True, 실패 시 False(기하 좌표 유지).
+    """
+    for t in plan["plan"]["targets"]:
+        if t["id"] != target_id:
+            continue
+        cp = t.get("firing_checkpoint")
+        if not cp:
+            return False
+        tx, ty_t = float(t["pos"]["x"]), float(t["pos"]["y"])
+        d = math.hypot(lx - tx, ly - ty_t)
+        if not (MIN_RANGE_M <= d <= MAX_RANGE_M):
+            return False
+        if not tg.check_los(lx, ly, tx, ty_t, bboxes):
+            return False
+        exp = point_exposure(lx, ly, exp_threats, bboxes, exclude_xy=(tx, ty_t))
+        cp["x"] = round(lx, 1)
+        cp["y"] = round(ly, 1)
+        cp["distance_m"] = round(d, 2)
+        cp["exposure"] = round(exp, 3)
+        cp["exposure_band"] = exposure_band(exp)
+        cp["llm_selected"] = True
+        break
+    else:
+        return False
+
+    for eng in plan.get("engagements", []):
+        if eng["id"] == target_id:
+            eng["checkpoint"]["x"] = round(lx, 1)
+            eng["checkpoint"]["y"] = round(ly, 1)
+            break
+    return True
+
+
+def llm_narrate(
+    plan: Dict[str, Any],
+    route_poly: List[Tuple[float, float]],
+    bboxes: List[Dict[str, float]],
+    exp_threats: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """LLM에 루트 후보 좌표·적 위치·지형 노출 정보를 넘겨 사격 좌표를 선택하고
+    수행 지침(성공확률·실행요약·주의사항)을 생성. 실패 시 available=false."""
     try:
         sys.path.insert(0, os.path.join(PROJECT_ROOT, "src", "risk_analysis"))
         from risk_analysis.llm_reporter import LLMReporter  # noqa: E402
-    except Exception as exc:  # ImportError 등
+    except Exception as exc:
         return {"available": False, "error": f"LLMReporter import 실패: {exc}"}
 
     reporter = LLMReporter()
+    pts, arc = densify_polyline(route_poly, CANDIDATE_STEP_M)
 
-    def _fc(e: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        cp = e.get("firing_checkpoint")
-        if not cp:
-            return None
-        return {"x": cp["x"], "y": cp["y"], "distance_m": cp["distance_m"],
-                "exposure_band": cp["exposure_band"]}
+    ctx_targets = []
+    for t in plan["plan"]["targets"]:
+        target_raw = {"id": t["id"], "x": t["pos"]["x"], "y": t["pos"]["y"]}
+        cands = get_firing_candidates(
+            {"x": t["pos"]["x"], "y": t["pos"]["y"]},
+            pts, arc, bboxes, exp_threats, DEFAULT_WEIGHTS,
+        )
+        ctx_targets.append({
+            "target_id": t["id"],
+            "enemy_position": target_raw,
+            "firing_range_m": {"min": MIN_RANGE_M, "max": MAX_RANGE_M},
+            "firing_candidates": cands,  # 이미 사거리·LoS 검증된 루트 위 후보들
+        })
 
     ctx = {
         "route_recommended": plan["route_recommended"],
-        "engage_order": plan["plan"]["engage_order"],
-        "targets": [
-            {"id": e["id"], "class": e["class"], "pos": e["pos"], "firing_checkpoint": _fc(e)}
-            for e in plan["plan"]["targets"]
-        ],
+        "targets": ctx_targets,
     }
     prompt = (
-        "너는 전차 미션 계획 참모 AI다. 아래는 각 표적의 사격 위치·거리·노출·교전순서를 기하로 계산한 미션 계획이다.\n"
-        "이 계획을 실제 수행 지침으로 한국어로 간결하게 서술하라.\n"
+        "너는 전차 미션 계획 참모 AI다.\n"
+        "아래 firing_candidates는 루트 위 좌표 중 적 전차까지 시선(LoS) 확보·사거리(20~130m) 조건을 이미 만족한 후보들이다.\n"
+        "exposure_band(low=은폐 우수, medium=보통, high=노출 위험)와 distance_m을 고려해 최적 사격 위치를 선택하라.\n"
         "규칙:\n"
-        "- 반드시 JSON 객체 하나만 출력한다(마크다운/설명 금지).\n"
-        "- 숫자를 새로 지어내지 말고 주어진 값만 근거로 서술하라.\n"
-        "- 교전 순서는 주어진 engage_order를 그대로 따르라(최종 적전차 enemy_final은 사격 시 임무 종료라 반드시 마지막).\n"
+        "- 반드시 JSON 객체 하나만 출력한다(마크다운·설명 금지).\n"
+        "- firing_checkpoint.x·y는 반드시 firing_candidates 중 하나의 x·y 값을 그대로 사용할 것(새 숫자 지어내기 금지).\n"
+        "- success_probability는 반드시 '높음'·'중간'·'낮음' 중 하나만 출력한다.\n"
+        "- execution_brief는 선택한 사격 위치 기준으로 1~2문장(한국어).\n"
         "출력 JSON 구조:\n"
-        '{"summary":"한국어 한 문장","engage_order_reason":"교전 순서를 정한 이유(한국어)",'
-        '"per_target":{"<표적id>":"이 표적 접근/사격 시 유의점(한국어)"},'
-        '"cautions":["수행상 주의점(한국어)"]}\n'
-        "미션 계획 데이터:\n" + json.dumps(ctx, ensure_ascii=False, indent=2)
+        '{"success_probability":"높음|중간|낮음",'
+        '"execution_brief":"실행 방법(한국어)",'
+        '"cautions":["주의점(한국어)"],'
+        '"firing_checkpoint":{"x":숫자,"y":숫자,"reason":"선택 이유(한국어)"}}\n'
+        "미션 데이터:\n" + json.dumps(ctx, ensure_ascii=False, indent=2)
     )
+    _eta = {"qwen3:0.6b": "~20-30초", "qwen3:1.7b": "~90-120초", "qwen3:4b": "~130-160초",
+            "gemma3:1b": "~20-30초", "gemma3:4b": "~90-120초"}.get(reporter.model_name, "~수 분")
+    print(f"  🧠 LLM 사격 좌표 분석 중... ({reporter.model_name} {_eta} · 끊지 말고 기다리세요)", flush=True)
     try:
         resp = reporter.call_ollama(prompt)
         raw = resp.get("response", "") if isinstance(resp, dict) else ""
         parsed = json.loads(raw)
+
+        # LLM 사격 좌표 검증 및 반영
+        llm_cp = parsed.get("firing_checkpoint")
+        firing_applied = False
+        if isinstance(llm_cp, dict):
+            try:
+                lx = float(llm_cp["x"])
+                ly = float(llm_cp["y"])
+                if math.isfinite(lx) and math.isfinite(ly):
+                    for t in plan["plan"]["targets"]:
+                        ok = _apply_llm_firing_checkpoint(plan, t["id"], lx, ly, bboxes, exp_threats)
+                        if ok:
+                            firing_applied = True
+                            print(f"[mission_plan] LLM 사격 좌표 채택: ({lx}, {ly}) — {llm_cp.get('reason', '')}")
+                            break
+                    if not firing_applied:
+                        print(f"[mission_plan] LLM 사격 좌표 검증 실패({lx},{ly}) — 기하 좌표 유지")
+            except (KeyError, TypeError, ValueError):
+                pass
+        parsed["llm_firing_applied"] = firing_applied
         parsed["available"] = True
         parsed["model"] = reporter.model_name
         return parsed
-    except Exception as exc:  # 연결실패/타임아웃/파싱실패 → 기하 계획만으로 진행
+    except Exception as exc:
         return {"available": False, "error": f"{type(exc).__name__}: {exc}", "model": reporter.model_name}
 
 
@@ -447,7 +600,8 @@ def main() -> int:
     ap.add_argument("--map", default=DEFAULT_MAP, help="scenario2_map.map 경로")
     ap.add_argument("--routes", default=DEFAULT_ROUTES, help="scenario2_routes.yaml 경로")
     ap.add_argument("--risk-features", default=DEFAULT_RISK_FEATURES, help="risk_features.json 경로(노출용, 선택)")
-    ap.add_argument("--route", default=None, help="추천 대신 이 루트로 강제(A/B)")
+    ap.add_argument("--risk-result", default=DEFAULT_RISK_RESULT, help="route_risk_result.json 경로(LLM 위험도 추천 루트)")
+    ap.add_argument("--route", default=None, help="추천 대신 이 루트로 강제(A/B); 미지정 시 LLM 위험도 결과 우선")
     ap.add_argument("--final-enemy", nargs=2, type=float, metavar=("X", "Y"),
                     default=list(DEFAULT_FINAL_ENEMY_XY), help="최종 적전차 명목 좌표")
     ap.add_argument("--no-final-enemy", action="store_true", help="최종 적전차 표적 제외")
@@ -474,11 +628,18 @@ def main() -> int:
         exp_threats = load_exposure_threats(args.risk_features, rid)
         route_results[rid] = plan_route(rid, poly, targets, bboxes, exp_threats, DEFAULT_WEIGHTS)
 
-    # 추천(또는 강제)
+    # 추천(또는 강제): 명시 --route > 정찰 LLM 위험도 > 기하 알고리즘
     if args.route and args.route in route_results:
         rec, reason = args.route, f"route_{args.route} 사용자 지정."
     else:
-        rec, reason = recommend_route(route_results)
+        risk_route = _load_risk_selected_route(args.risk_result)
+        if risk_route and risk_route in route_results:
+            rec = risk_route
+            reason = f"route_{rec} — 정찰 LLM 위험도 분석 추천(route_risk_result.json)."
+            print(f"[mission_plan] LLM 위험도 추천 루트 사용: {rec}")
+        else:
+            rec, reason = recommend_route(route_results)
+            print(f"[mission_plan] 기하 알고리즘 추천 루트 사용: {rec} (위험도 결과 없음)")
 
     rr = route_results[rec]
     plan: Dict[str, Any] = {
@@ -500,6 +661,9 @@ def main() -> int:
     # tank_scenario2.launch.py가 TANK_USE_MISSION_PLAN=true일 때 이 필드를 읽어 사격 시퀀스로 쓴다.
     plan["engagements"] = json.loads(build_engagements_json(plan))
 
+    plan["friendly_unit"] = "K2"
+    plan["enemy_intel"] = build_enemy_intel(rec, plan, args.risk_features)
+
     # 검증
     problems = verify_plan(plan, bboxes)
     if rr["late_statics"]:
@@ -507,8 +671,15 @@ def main() -> int:
                         "최종 적을 먼저 지나쳐 임무 조기 종료 위험(다른 루트/사격위치 검토)")
     plan["verification"] = {"ok": not problems, "problems": problems}
 
-    # LLM 서술
-    plan["llm_guidance"] = {"available": False, "error": "skipped (--no-llm)"} if args.no_llm else llm_narrate(plan)
+    # LLM 서술 + 사격 좌표 선택
+    if args.no_llm:
+        plan["llm_guidance"] = {"available": False, "error": "skipped (--no-llm)"}
+    else:
+        rec_exp_threats = load_exposure_threats(args.risk_features, rec)
+        plan["llm_guidance"] = llm_narrate(plan, routes[rec], bboxes, rec_exp_threats)
+        # LLM이 사격 좌표를 바꿨으면 engagements 재빌드
+        if plan["llm_guidance"].get("llm_firing_applied"):
+            plan["engagements"] = json.loads(build_engagements_json(plan))
 
     # 출력
     os.makedirs(os.path.dirname(args.out_json), exist_ok=True)

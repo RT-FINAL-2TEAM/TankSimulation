@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 printf '\033]0;S2-T2 Scenario2 RViz\007'
-source "/home/tankcc/tankcc/scripts/.terminator_runtime/common_env.sh"
+source "/home/acorn/TankSimulation/scripts/.terminator_runtime/common_env.sh"
 
-MAP_FILE="/home/tankcc/tankcc/recon_reports/recon_map/scenario2_map.map"
+MAP_FILE="/home/acorn/TankSimulation/recon_reports/recon_map/scenario2_map.map"
 
 echo "============================================================"
 echo "[T2] Scenario2 RViz"
@@ -12,7 +12,7 @@ echo "RViz는 scenario2_map.map이 생긴 뒤 실행합니다."
 echo "대기 파일:"
 echo "  $MAP_FILE"
 echo
-echo "[LOG] /home/tankcc/tankcc/logs/scenario2_terminator_20260701_123248/rviz_scenario2.log"
+echo "[LOG] /home/acorn/TankSimulation/logs/scenario2_terminator_20260704_180237/rviz_scenario2.log"
 echo
 
 for i in $(seq 1 "180"); do
@@ -32,40 +32,13 @@ done
 
 echo
 echo "Command:"
-echo "  ros2 launch rviz_visualization tank_scenario2_map_view.launch.py"
+echo "  ros2 launch rviz_web rviz_web_scenario2_map_view.launch.py  # 웹 RViz 3D(rosbridge:9090 포함)"
 echo
 
-ros2 launch rviz_visualization tank_scenario2_map_view.launch.py 2>&1 | tee "/home/tankcc/tankcc/logs/scenario2_terminator_20260701_123248/rviz_scenario2.log" &
-RVIZ_LAUNCH_PID=$!
-
-echo "[WAIT] RViz 창 감지 후 최대화 시도"
-for _ in $(seq 1 60); do
-  if command -v wmctrl >/dev/null 2>&1; then
-    WIN_ID="$(wmctrl -lx 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /rviz|rviz2/ {print $1; exit}')"
-    if [[ -n "${WIN_ID:-}" ]]; then
-      wmctrl -ir "$WIN_ID" -b add,maximized_vert,maximized_horz >/dev/null 2>&1 || true
-      wmctrl -ia "$WIN_ID" >/dev/null 2>&1 || true
-      echo "[OK] RViz window maximized"
-      break
-    fi
-  elif command -v xdotool >/dev/null 2>&1; then
-    WIN_ID="$(xdotool search --name 'RViz' 2>/dev/null | head -n 1 || true)"
-    if [[ -n "${WIN_ID:-}" ]]; then
-      xdotool windowactivate "$WIN_ID" >/dev/null 2>&1 || true
-      xdotool key F11 >/dev/null 2>&1 || true
-      echo "[OK] RViz window activated/fullscreen attempt"
-      break
-    fi
-  else
-    echo "[WARN] wmctrl/xdotool 없음. RViz 자동 최대화 생략."
-    echo "       설치 권장: sudo apt install -y wmctrl"
-    break
-  fi
-  sleep 0.5
-done
-
-wait "$RVIZ_LAUNCH_PID"
+# 웹 RViz 3D(/view의 'RVIZ 3D' 탭)가 붙는 rosbridge(:9090) + scenario2 맵/지형 마커를 함께 띄운다.
+# (rviz_visualization 데스크톱 launch는 rosbridge를 안 띄워 브라우저에 맵이 안 떴음 — 웹 launch로 교체.)
+ros2 launch rviz_web rviz_web_scenario2_map_view.launch.py 2>&1 | tee "/home/acorn/TankSimulation/logs/scenario2_terminator_20260704_180237/rviz_scenario2.log"
 
 echo
-echo "[EXIT] scenario2 RViz launch 종료됨. 창을 닫거나 Enter를 누르세요."
+echo "[EXIT] scenario2 웹 RViz(rosbridge+마커) 종료됨. 창을 닫거나 Enter를 누르세요."
 exec bash

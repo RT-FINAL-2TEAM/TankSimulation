@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 printf '\033]0;S2-T4 Debug\007'
-source "/home/tankcc/tankcc/scripts/.terminator_runtime/common_env.sh"
+source "/home/acorn/TankSimulation/scripts/.terminator_runtime/common_env.sh"
 
 echo "============================================================"
 echo "[T4] Scenario2 Debug Monitor"
@@ -9,7 +9,7 @@ echo "============================================================"
 echo "2초마다 핵심 node/topic/file을 표시합니다."
 echo "종료: Ctrl+C"
 echo
-echo "[LOG DIR] /home/tankcc/tankcc/logs/scenario2_terminator_20260701_123248"
+echo "[LOG DIR] /home/acorn/TankSimulation/logs/scenario2_terminator_20260704_180237"
 echo
 
 sleep 4

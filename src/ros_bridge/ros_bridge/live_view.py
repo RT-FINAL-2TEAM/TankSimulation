@@ -1783,67 +1783,83 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 const SEP = '<div style="border-top:1px solid #1e3a2a;margin:10px 0 8px 0;"></div>';
                 let html = '';
 
-                // 추천 루트 강조 배너
-                const chosen = w.formula || w.llm;
+                // 추천 루트 강조 배너 (LLM 기준)
+                const chosen = w.llm || w.formula;
                 if (chosen) {
-                    const agree = w.agreement;
                     const chosenPr = per[chosen] || {};
-                    const chosenF = chosenPr.formula || {};
-                    const chosenBandCol = riskBandColor(chosenF.band);
-                    const agreeTag = agree
-                        ? '<span style="font-size:11px;color:#39ff88;margin-left:6px;">수식·LLM 일치 ✅</span>'
-                        : `<span style="font-size:11px;color:#ffd34d;margin-left:6px;">수식 ${safe(w.formula)} / LLM ${safe(w.llm)} 불일치 ⚠</span>`;
-                    html += `<div style="background:#0d2e1a;border:1px solid ${chosenBandCol};border-radius:5px;padding:8px 10px;margin-bottom:10px;">
-                        <div style="font-size:13px;font-weight:700;color:#fff;letter-spacing:0.5px;">추천 루트 &nbsp;<span style="font-size:18px;color:${chosenBandCol};">Route ${chosen}</span>${agreeTag}</div>
-                    </div>`;
+                    const chosenL = chosenPr.llm || {};
+                    const chosenBandCol = riskBandColor(chosenL.risk_level);
+                    html += `<div style="background:#0d2e1a;border:1px solid ${chosenBandCol};border-radius:5px;padding:8px 10px;margin-bottom:4px;">
+                        <div style="font-size:13px;font-weight:700;color:#fff;letter-spacing:0.5px;">추천 루트 &nbsp;<span style="font-size:18px;color:${chosenBandCol};">Route ${chosen}</span>
+                        <span style="font-size:11px;color:${chosenBandCol};margin-left:6px;">[${(chosenL.risk_level || "—").toUpperCase()}]</span></div>
+                    </div>
+                    ${cmp.model ? `<div style="font-size:11px;margin-bottom:10px;padding-left:2px;"><span style="color:#7a9a8a;">모델</span><br><span style="color:#c0d8c8;">${escapeHtml(cmp.model)}</span></div>` : ''}`;
                 }
 
                 // 블록 1: 정찰 결과 요약
                 if (feat) {
-                    html += '<div style="margin-bottom:8px;"><div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">정찰 결과</div>';
+                    html += '<div style="margin-bottom:8px;"><div style="font-weight:700;color:#9ec5f0;margin-bottom:6px;">정찰 결과</div>';
                     for (const r of ["A", "B"]) {
                         const f = feat[`route_${r}`];
                         if (!f) continue;
                         const th = f.threat || {};
                         const eff = f.efficiency || {};
+                        const ter = f.terrain || {};
+                        const exp = f.exposure || {};
                         const reached = f.reached ? "✅도착" : "❌미도착";
                         const bc = th.by_class || {};
-                        const bcStr = Object.keys(bc).length ? Object.entries(bc).map(([k, v]) => `${k}${v}`).join("/") : "0";
+                        const bcStr = Object.keys(bc).length ? Object.entries(bc).map(([k, v]) => `${k}${v}`).join("/") : "없음";
                         const near = (th.nearest_dist_m === null || th.nearest_dist_m === undefined) ? "—" : `${numberText(th.nearest_dist_m, 0)}m`;
+                        const stealth = (typeof exp.stealth_ratio === "number") ? `${Math.round(exp.stealth_ratio * 100)}%` : "—";
+                        const sigma = (typeof ter.sigma_deg === "number") ? `${numberText(ter.sigma_deg, 1)}°` : "—";
+                        const collision = eff.collision_count ?? 0;
                         const isChosen = r === chosen;
-                        html += `<div style="font-size:12px;margin:3px 0;${isChosen ? 'color:#d0eaff;font-weight:600;' : 'color:#8aa8b8;'}"><b>route_${r}</b> ${reached} · ${numberText(eff.distance_m, 0)}m · 확정위협 ${safe(th.confirmed_count, 0)}(${escapeHtml(bcStr)}) · 최근접 ${near}</div>`;
+                        const baseColor = isChosen ? '#d0eaff' : '#8aa8b8';
+                        html += `<div style="margin:5px 0 8px 0;padding-left:${isChosen ? '6px' : '0'};border-left:${isChosen ? '2px solid #9ec5f0' : 'none'};">
+                            <div style="font-size:12px;font-weight:${isChosen ? '600' : '400'};color:${baseColor};margin-bottom:3px;">
+                                <b>route_${r}</b> ${reached} · ${numberText(eff.distance_m, 0)}m
+                            </div>
+                            <div style="font-size:11px;color:${isChosen ? '#a0c4d8' : '#6a8898'};display:flex;gap:10px;flex-wrap:wrap;">
+                                <span>위협 <b>${safe(th.confirmed_count, 0)}</b>(${escapeHtml(bcStr)})</span>
+                                <span>최근접 <b>${near}</b></span>
+                                <span>노출 <b>${stealth}</b></span>
+                                <span>지형 <b>${sigma}</b></span>
+                                ${collision > 0 ? `<span style="color:#ff8a3d;">충돌 <b>${collision}</b></span>` : ''}
+                            </div>
+                        </div>`;
                     }
                     html += '</div>';
                 }
 
                 html += SEP;
 
-                // 블록 2: 수식 vs LLM 한눈
-                html += '<div style="margin-bottom:8px;"><div style="font-weight:700;color:#9ec5f0;margin-bottom:6px;">수식 vs LLM &nbsp;<span style="font-size:11px;color:#7a8aa0;">순위일치 ${riskOk(cmp.rank_agreement)}</span></div>';
-                html = html.replace('${riskOk(cmp.rank_agreement)}', riskOk(cmp.rank_agreement));
+                // 블록 2: LLM 위험도 분석
+                html += '<div style="margin-bottom:8px;"><div style="font-weight:700;color:#9ec5f0;margin-bottom:8px;">LLM 위험도 분석</div>';
                 for (const r of ["A", "B"]) {
                     const pr = per[r];
                     if (!pr) continue;
-                    const f = pr.formula || {};
                     const l = pr.llm || {};
-                    const rt = (typeof f.risk_total === "number") ? f.risk_total : null;
-                    const fcol = riskBandColor(f.band);
                     const lcol = riskBandColor(l.risk_level);
-                    const gw = rt === null ? 0 : Math.round(rt * 100);
+                    const levelPct = ({ low: 20, medium: 50, high: 75, critical: 100 })[l.risk_level] || 0;
                     const exp = (feat && feat[`route_${r}`] && feat[`route_${r}`].exposure) || {};
                     const isChosen = r === chosen;
-                    html += `<div style="margin:4px 0 8px 0;${isChosen ? 'padding-left:6px;border-left:2px solid ' + fcol + ';' : 'opacity:0.75;'}">
-                        <div style="font-size:12px;font-weight:${isChosen ? '700' : '400'};"><b>route_${r}</b> ${riskOk(pr.band_match)}</div>
-                        <div style="height:7px;background:#0c2417;border-radius:3px;overflow:hidden;margin:3px 0;"><div style="height:100%;width:${gw}%;background:${fcol};border-radius:3px;"></div></div>
-                        <div style="font-size:11px;">수식 ${rt === null ? "—" : rt.toFixed(3)} <span style="color:${fcol}">[${(f.band || "—").toUpperCase()}]</span> · LLM <span style="color:${lcol}">[${(l.risk_level || "—").toUpperCase()}]</span></div>
-                        ${renderExposureBars(exp.profile, fcol)}
+                    html += `<div style="margin:4px 0 10px 0;${isChosen ? 'padding-left:6px;border-left:2px solid ' + lcol + ';' : 'opacity:0.65;'}">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                            <span style="font-size:12px;font-weight:${isChosen ? '700' : '400'};">route_${r}</span>
+                            <span style="font-size:11px;font-weight:700;color:${lcol};background:${lcol}22;padding:1px 7px;border-radius:3px;border:1px solid ${lcol}55;">${(l.risk_level || "—").toUpperCase()}</span>
+                            ${l.top_risk ? `<span style="font-size:10px;color:#7a8aa0;">${escapeHtml(l.top_risk)}</span>` : ''}
+                        </div>
+                        <div style="height:6px;background:#0c2417;border-radius:3px;overflow:hidden;">
+                            <div style="height:100%;width:${levelPct}%;background:${lcol};border-radius:3px;transition:width 0.4s;"></div>
+                        </div>
+                        ${renderExposureBars(exp.profile, lcol)}
                     </div>`;
                 }
                 html += '</div>';
 
                 html += SEP;
 
-                // 블록 3: 근거/발산
+                // 블록 3: LLM 판단 근거
                 const n = cmp.narrative || {};
                 function formatReason(text) {
                     if (!text) return '<span style="color:#5a6b62;">—</span>';
@@ -1859,12 +1875,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 }
                 html += '<div>';
                 html += '<div style="font-weight:700;color:#9ec5f0;margin-bottom:6px;">판단 근거</div>';
-                html += `<div style="font-size:11px;color:#7a8aa0;margin-bottom:3px;">수식</div>${formatReason(n.formula_reason)}`;
-                html += `<div style="font-size:11px;color:#7a8aa0;margin:7px 0 3px 0;">LLM</div>${formatReason(n.llm_decision_reason || n.llm_summary)}`;
-                if (Array.isArray(cmp.divergence) && cmp.divergence.length) {
-                    const dv = cmp.divergence.map((d) => `route_${d.route} 수식 ${d.formula_band}↔LLM ${d.llm_band}`).join(" / ");
-                    html += `<div style="font-size:11px;margin-top:8px;padding:5px 8px;background:#1a1600;border-radius:4px;color:#ffd34d;line-height:1.5;">⚠ 발산: ${escapeHtml(dv)}</div>`;
-                }
+                html += formatReason(n.llm_decision_reason || n.llm_summary);
                 html += '</div>';
                 return html;
             }
@@ -1890,36 +1901,89 @@ def render_view_page(poll_ms: int = 1000) -> str:
                      + f(w, d, `rotateX(-90deg) translateZ(${h / 2}px)`);
             }
             function renderMissionPlan(state) {
-                // 미션 계획(build_mission_plan.py 산출) — 루트·사격위치·교전순서·LLM 서술. RISK 패널 하단에 표시.
                 const mp = state?.missionPlan;
-                if (!mp || !mp.plan) return '<div style="font-size:11px;color:#5a6b62;padding:8px 0;">미션 계획 생성 중...</div>';
+                if (!mp || !mp.plan) return '<div style="font-size:13px;color:#5a6b62;padding:16px 0;text-align:center;">미션 계획 생성 중...</div>';
                 const plan = mp.plan;
-                let html = '<div>';
-                html += '<div style="font-weight:700;color:#9ec5f0;margin-bottom:6px;">미션 계획 (사격)</div>';
-                const order = (plan.engage_order || []).join(" → ") || "—";
-                html += `<div style="font-size:12px;margin-bottom:4px;">추천 루트 <b>${safe(mp.route_recommended)}</b> · 교전순서 ${escapeHtml(order)}</div>`;
-                for (const e of (plan.targets || [])) {
-                    const cp = e.firing_checkpoint;
-                    if (cp) {
-                        const band = (cp.exposure_band || "—").toUpperCase();
-                        html += `<div style="font-size:11px;margin:2px 0;"><b>${escapeHtml(safe(e.id))}</b> → 사격(${numberText(cp.x, 0)}, ${numberText(cp.y, 0)}) ${numberText(cp.distance_m, 0)}m [${band}]</div>`;
-                    } else {
-                        html += `<div style="font-size:11px;margin:2px 0;color:#f39;"><b>${escapeHtml(safe(e.id))}</b> → 교전불가</div>`;
-                    }
+                const rec = safe(mp.route_recommended);
+                const g = mp.llm_guidance || {};
+                const intel = mp.enemy_intel || {};
+                const targets = plan.targets || [];
+                const friendly = mp.friendly_unit || 'K2';
+                const tankCount = intel.tank_count ?? targets.length;
+                const outpostCount = intel.outpost_count ?? 0;
+                const byClass = intel.by_class || {};
+                const knownEnemyTypes = Object.keys(byClass).filter(k => !['house','checkpoint','outpost','bunker','guard_tower','sentry'].includes(k.toLowerCase()));
+                const enemyType = knownEnemyTypes.length ? knownEnemyTypes.join('/') : '불명';
+                const prob = safe(g.success_probability, '—');
+                const probCol = prob === '높음' ? '#4caf82' : prob === '중간' ? '#e8c37a' : prob === '낮음' ? '#f36c6c' : '#7a8aa0';
+                const card = (bg, border) => `background:${bg};border:1px solid ${border};border-radius:6px;padding:10px 14px;`;
+                const label = t => `<div style="font-size:12px;color:#9ab8c8;margin-bottom:4px;letter-spacing:0.3px;">${t}</div>`;
+                const val = (t, col) => `<div style="font-size:16px;font-weight:700;color:${col || '#ddf0dd'};">${t}</div>`;
+                const secTitle = t => `<div style="font-size:12px;font-weight:700;color:#a0c8e0;letter-spacing:1.2px;margin-bottom:10px;text-transform:uppercase;">${t}</div>`;
+                let html = '<div style="display:flex;flex-direction:column;gap:10px;">';
+
+                // ── 1. 추천 루트 배너 ──
+                html += `<div style="${card('#0d2e1a', '#4caf82')}">
+                    <div style="font-size:12px;color:#5ab87a;letter-spacing:2px;margin-bottom:2px;">추천 루트</div>
+                    <div style="font-size:34px;font-weight:700;color:#4caf82;letter-spacing:4px;line-height:1.1;">ROUTE ${escapeHtml(rec)}</div>
+                    ${mp.route_reason ? `<div style="font-size:12px;color:#4aaa62;margin-top:5px;line-height:1.5;">${escapeHtml(mp.route_reason)}</div>` : ''}
+                </div>`;
+
+                // ── 2. 전력 정보 ──
+                html += `<div style="${card('#0b1a24', '#1e3a4a')}">
+                    ${secTitle('전력 정보')}
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;">
+                        <div>${label('아군 전차')}${val(escapeHtml(friendly), '#4caf82')}</div>
+                        <div>${label('적 전차 유형')}${val(escapeHtml(enemyType), '#f36c6c')}</div>
+                        <div>${label('적 전차 수')}${val(tankCount + '대', '#e8c37a')}</div>
+                        <div>${label('적 초소 수')}${val(outpostCount + '개', '#e8c37a')}</div>
+                    </div>
+                </div>`;
+
+                // ── 3. 표적 정보 ──
+                for (const t of targets) {
+                    const cp = t.firing_checkpoint;
+                    const llmCp = g.firing_checkpoint;
+                    const isLlmSelected = cp && cp.llm_selected;
+                    const firingLabel = isLlmSelected
+                        ? '아군 사격 좌표 <span style="font-size:11px;font-weight:700;color:#9ec5f0;background:#9ec5f022;padding:1px 6px;border-radius:3px;border:1px solid #9ec5f044;margin-left:4px;">★ LLM</span>'
+                        : '아군 사격 좌표';
+                    html += `<div style="${card('#0b1a24', '#1e3a4a')}">
+                        ${secTitle('표적 정보')}
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;">
+                            <div>${label('적 전차 좌표')}${val('(' + numberText(t.pos?.x,1) + ', ' + numberText(t.pos?.y,1) + ')', '#f36c6c')}</div>
+                            <div>${label(firingLabel)}${val(cp ? '(' + numberText(cp.x,1) + ', ' + numberText(cp.y,1) + ')' : '—', '#9ec5f0')}</div>
+                            <div>${label('사격 거리')}${val(cp ? numberText(cp.distance_m,0) + 'm' : '—', '#d0e4d0')}</div>
+                            <div>${label('목표까지 진입 거리')}${val(cp ? numberText(cp.route_arc_m,0) + 'm' : '—', '#d0e4d0')}</div>
+                        </div>
+                        ${isLlmSelected && llmCp && llmCp.reason ? `<div style="font-size:12px;color:#7aaabb;margin-top:8px;padding:5px 8px;border-left:2px solid #9ec5f044;line-height:1.5;">${escapeHtml(llmCp.reason)}</div>` : ''}
+                    </div>`;
                 }
+
+                // ── 4. LLM 분석 ──
+                if (g.available) {
+                    html += `<div style="${card('#0b1a24', '#1e3a4a')}">
+                        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                            ${secTitle('LLM 분석')}
+                            <div style="font-size:13px;font-weight:700;color:${probCol};background:${probCol}18;padding:2px 12px;border-radius:4px;border:1px solid ${probCol}55;margin-top:-6px;">성공 확률 ${escapeHtml(prob)}</div>
+                        </div>
+                        <div style="font-size:13px;color:#c8e0c8;line-height:1.75;margin-bottom:6px;">${escapeHtml(safe(g.execution_brief || g.summary, '—'))}</div>`;
+                    for (const c of (g.cautions || [])) {
+                        html += `<div style="font-size:13px;color:#f0d060;margin-top:6px;padding:5px 9px;border-left:3px solid #f0d06066;background:#1a150022;line-height:1.55;">⚠ ${escapeHtml(c)}</div>`;
+                    }
+                    html += '</div>';
+                }
+
+                // ── 5. 검증 경고 ──
                 const v = mp.verification || {};
                 if (Array.isArray(v.problems) && v.problems.length) {
-                    html += `<div style="font-size:11px;color:#f39;margin-top:4px;">⚠ ${escapeHtml(v.problems.join("; "))}</div>`;
-                }
-                const g = mp.llm_guidance || {};
-                if (g.available) {
-                    html += `<div style="font-size:11px;margin-top:4px;"><b>LLM</b>: ${escapeHtml(safe(g.summary))}</div>`;
-                    for (const c of (g.cautions || [])) {
-                        html += `<div style="font-size:11px;color:#e8c37a;">⚠ ${escapeHtml(c)}</div>`;
+                    html += `<div style="${card('#2a1010', '#f36c6c55')}">`;
+                    for (const p of v.problems) {
+                        html += `<div style="font-size:12px;color:#f36c6c;">⚠ ${escapeHtml(p)}</div>`;
                     }
-                } else if (g.error) {
-                    html += '<div style="font-size:11px;color:#889;">LLM 서술 미사용</div>';
+                    html += '</div>';
                 }
+
                 html += '</div>';
                 return html;
             }

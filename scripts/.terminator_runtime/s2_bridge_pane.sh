@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 printf '\033]0;S2-T1 ros_bridge\007'
-source "/home/tankcc/tankcc/scripts/.terminator_runtime/common_env.sh"
+source "/home/acorn/TankSimulation/scripts/.terminator_runtime/common_env.sh"
 
 echo "============================================================"
 echo "[T1] ros_bridge"
@@ -12,10 +12,10 @@ echo
 echo "[YOLO MODEL]"
 echo "  TANK_YOLO_MODEL_PATH=${TANK_YOLO_MODEL_PATH:-<not set>}"
 echo
-echo "[LOG] /home/tankcc/tankcc/logs/scenario2_terminator_20260701_123248/bridge.log"
+echo "[LOG] /home/acorn/TankSimulation/logs/scenario2_terminator_20260704_180237/bridge.log"
 echo
 
-TANK_MODE=auto TANK_EPISODE_CONTROL=true ros2 run ros_bridge ros_bridge 2>&1 | tee "/home/tankcc/tankcc/logs/scenario2_terminator_20260701_123248/bridge.log"
+TANK_MODE=auto TANK_EPISODE_CONTROL=true ros2 run ros_bridge ros_bridge 2>&1 | tee "/home/acorn/TankSimulation/logs/scenario2_terminator_20260704_180237/bridge.log"
 
 echo
 echo "[EXIT] ros_bridge 종료됨. 창을 닫거나 Enter를 누르세요."

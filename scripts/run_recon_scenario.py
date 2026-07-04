@@ -501,7 +501,10 @@ def main() -> int:
                     ["python3", os.path.join(scripts_dir, "make_llm_input.py")],
                     cwd=PROJECT_ROOT, check=True, timeout=60,
                 )
-                print("  🧠 ollama 추론 중... (qwen3:0.6b ~15-30초 · 끊지 말고 기다리세요)", flush=True)
+                _llm_model = os.environ.get("TANK_LLM_MODEL", "gemma3:4b")
+                _eta = {"qwen3:0.6b": "~20-30초", "qwen3:1.7b": "~90-120초", "qwen3:4b": "~130-160초",
+                        "gemma3:1b": "~20-30초", "gemma3:4b": "~90-120초"}.get(_llm_model, "~수 분")
+                print(f"  🧠 ollama 추론 중... ({_llm_model} {_eta} · 끊지 말고 기다리세요)", flush=True)
                 subprocess.run(
                     ["ros2", "run", "risk_analysis", "route_risk_node"],
                     cwd=PROJECT_ROOT, timeout=180,
