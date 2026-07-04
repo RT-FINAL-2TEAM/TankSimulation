@@ -94,6 +94,13 @@ class PhoneClusterMuxNode(Node):
             return
         if payload.get("source") == "phone_sim2real_cluster_mux":
             return
+        # phone_virtual_obstacle_node can also publish the synthetic payload to
+        # the planner's default LiDAR-cluster topic.  Do not feed that copy back
+        # as a second "real" input when this optional mux is enabled.
+        source = str(payload.get("source", ""))
+        algorithm = str(payload.get("algorithm", ""))
+        if source == "phone_sim2real" and algorithm.startswith("phone_sim2real"):
+            return
 
         self.last_real_msg = payload
         self.last_real_wall = time.time()

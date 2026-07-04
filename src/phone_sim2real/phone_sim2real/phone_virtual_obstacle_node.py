@@ -95,6 +95,10 @@ class PhoneVirtualObstacleNode(Node):
         self.declare_parameter("discovered_objects_topic", "/tank/map/discovered/objects")
         self.declare_parameter("fused_objects_topic", "/tank/perception/fused_objects")
         self.declare_parameter("synthetic_lidar_clusters_topic", "/tank/phone_sim2real/synthetic_lidar_clusters")
+        # Direct planner input keeps phone avoidance working even when the scenario
+        # launch was not started with TANK_TOPIC_LIDAR_CLUSTERS=muxed topic.
+        self.declare_parameter("publish_to_planner_cluster_topic", True)
+        self.declare_parameter("planner_cluster_topic", "/tank/visual_perception/lidar_clusters")
         self.declare_parameter("marker_topic", "/tank/rviz/phone_sim2real_markers")
         self.declare_parameter("fused_marker_topic", "/tank/rviz/fused_object_markers")
         self.declare_parameter("synthetic_cluster_marker_topic", "/tank/rviz/phone_sim2real_image_cluster_markers")
@@ -127,6 +131,9 @@ class PhoneVirtualObstacleNode(Node):
         self.declare_parameter("publish_hz", 10.0)
         self.declare_parameter("min_confidence", 0.20)
         self.declare_parameter("ignored_classes", "person,human,blue,red")
+        # Empty means: accept every class that the vision gateway actually emits.
+        # Set a comma-separated list only when a scenario intentionally wants a subset.
+        self.declare_parameter("accepted_classes", "")
         self.declare_parameter("class_filter_json", self._default_class_filter_json())
         self.declare_parameter("ignore_top_region_ratio", 0.08)
         self.declare_parameter("dedupe_merge_distance_m", 1.5)
@@ -220,6 +227,7 @@ class PhoneVirtualObstacleNode(Node):
         self.publish_hz = float(self.get_parameter("publish_hz").value)
         self.min_confidence = float(self.get_parameter("min_confidence").value)
         self.ignored_classes = parse_csv_set(str(self.get_parameter("ignored_classes").value))
+        self.accepted_classes = parse_csv_set(str(self.get_parameter("accepted_classes").value))
         self.class_filter = self._class_filter_param_json("class_filter_json")
         self.ignore_top_region_ratio = float(self.get_parameter("ignore_top_region_ratio").value)
         self.dedupe_merge_distance_m = float(self.get_parameter("dedupe_merge_distance_m").value)
@@ -253,6 +261,8 @@ class PhoneVirtualObstacleNode(Node):
         self.enable_discovered_objects_publish = bool(self.get_parameter("enable_discovered_objects_publish").value)
         self.enable_fused_objects_mirror = bool(self.get_parameter("enable_fused_objects_mirror").value)
         self.enable_synthetic_lidar_clusters = bool(self.get_parameter("enable_synthetic_lidar_clusters").value)
+        self.publish_to_planner_cluster_topic = bool(self.get_parameter("publish_to_planner_cluster_topic").value)
+        self.planner_cluster_topic = str(self.get_parameter("planner_cluster_topic").value)
         self.publish_empty_synthetic_clusters = bool(self.get_parameter("publish_empty_synthetic_clusters").value)
         self.synthetic_cluster_count_hint = int(self.get_parameter("synthetic_cluster_count_hint").value)
         self.synthetic_cluster_z_min = float(self.get_parameter("synthetic_cluster_z_min").value)
@@ -294,6 +304,7 @@ class PhoneVirtualObstacleNode(Node):
         self.pub_discovered = self.create_publisher(String, str(self.get_parameter("discovered_objects_topic").value), transient_qos)
         self.pub_fused = self.create_publisher(String, str(self.get_parameter("fused_objects_topic").value), 10)
         self.pub_synthetic_clusters = self.create_publisher(String, str(self.get_parameter("synthetic_lidar_clusters_topic").value), 10)
+        self.pub_planner_clusters = self.create_publisher(String, self.planner_cluster_topic, 10)
         self.pub_markers = self.create_publisher(MarkerArray, str(self.get_parameter("marker_topic").value), 10)
         self.pub_fused_markers = self.create_publisher(MarkerArray, str(self.get_parameter("fused_marker_topic").value), 10)
         self.pub_cluster_markers = self.create_publisher(MarkerArray, str(self.get_parameter("synthetic_cluster_marker_topic").value), 10)
@@ -309,6 +320,12 @@ class PhoneVirtualObstacleNode(Node):
         self.active: Dict[str, Dict[str, Any]] = {}
         self.inject_enabled_state = True
         self.next_track_id = 1
+        # Per-frame observability: makes it clear whether a YOLO detection was
+        # received, accepted, or deliberately rejected before map projection.
+        self.latest_gateway_model_classes: List[str] = []
+        self.last_incoming_class_counts: Dict[str, int] = {}
+        self.last_rejected_class_counts: Dict[str, int] = {}
+        self.last_rejection_reasons: Dict[str, int] = {}
         self.last_detection_wall = 0.0
 
         self.create_subscription(PoseStamped, str(self.get_parameter("player_pose_topic").value), self.player_pose_cb, 10)
@@ -325,9 +342,11 @@ class PhoneVirtualObstacleNode(Node):
         self.get_logger().info(
             "phone_sim2real image-only obstacle node started: "
             f"clusters={self.enable_synthetic_lidar_clusters} -> {self.get_parameter('synthetic_lidar_clusters_topic').value}, "
+            f"planner_cluster_direct={self.publish_to_planner_cluster_topic} -> {self.planner_cluster_topic}, "
             f"discovered={self.enable_discovered_objects_publish}, distance_mode={self.distance_mode}, "
             f"anchor_mode={self.obstacle_anchor_mode}, bearing_ref={self.bearing_reference_mode}, locked_clusters_only={self.publish_locked_only_to_clusters}, "
-            f"ignored={sorted(self.ignored_classes)}"
+            f"ignored={sorted(self.ignored_classes)}, accepted="
+            f"{sorted(self.accepted_classes) if self.accepted_classes else 'ALL_GATEWAY_CLASSES'}"
         )
 
     @staticmethod
@@ -745,12 +764,26 @@ class PhoneVirtualObstacleNode(Node):
         cand["position_state"] = "phone_emergency_path_wall_anchor"
         return cand
 
+    def _record_rejection(self, cls: str, reason: str) -> None:
+        cls = str(cls or "unknown").strip().lower() or "unknown"
+        self.last_rejected_class_counts[cls] = self.last_rejected_class_counts.get(cls, 0) + 1
+        self.last_rejection_reasons[reason] = self.last_rejection_reasons.get(reason, 0) + 1
+
+    def _update_gateway_model_metadata(self, payload: Dict[str, Any]) -> None:
+        meta = payload.get("vision_model") if isinstance(payload.get("vision_model"), dict) else {}
+        classes = meta.get("public_classes") if isinstance(meta.get("public_classes"), list) else []
+        self.latest_gateway_model_classes = sorted({str(item).strip().lower() for item in classes if str(item).strip()})
+
     def detections_cb(self, msg: String) -> None:
         payload = safe_json_loads(msg.data, {})
         if not isinstance(payload, dict):
             return
         now = time.time()
         self.last_detection_wall = now
+        self.last_incoming_class_counts = {}
+        self.last_rejected_class_counts = {}
+        self.last_rejection_reasons = {}
+        self._update_gateway_model_metadata(payload)
         phone_meta = self._phone_meta_from_payload(payload)
         command = self._control_command(payload, phone_meta)
 
@@ -791,6 +824,8 @@ class PhoneVirtualObstacleNode(Node):
         for idx, det in enumerate(detections):
             if not isinstance(det, dict):
                 continue
+            raw_cls = str(det.get("className", det.get("class_name", det.get("label", det.get("name", "unknown"))))).strip().lower() or "unknown"
+            self.last_incoming_class_counts[raw_cls] = self.last_incoming_class_counts.get(raw_cls, 0) + 1
             obj = self._convert_detection_candidate(det, idx, width, height, now)
             if obj is not None:
                 candidates.append(obj)
@@ -840,7 +875,10 @@ class PhoneVirtualObstacleNode(Node):
         return d, "pinhole_height"
 
     def _passes_class_filter(self, cls: str, conf: float, box_w: float, box_h: float, bbox: List[float], image_h: int) -> bool:
-        cfg = self.class_filter.get(cls) or self.class_filter.get("unknown") or {}
+        # Prefer the exact class profile, then an explicit wildcard profile.
+        # Do not silently apply a restrictive `unknown` profile to a newly added
+        # model class: full model coverage must continue to work after retraining.
+        cfg = self.class_filter.get(cls) or self.class_filter.get("*") or {}
         min_conf = float(cfg.get("min_conf", self.min_confidence))
         min_h = float(cfg.get("min_bbox_height_px", 0.0))
         min_w = float(cfg.get("min_bbox_width_px", 0.0))
@@ -860,23 +898,32 @@ class PhoneVirtualObstacleNode(Node):
     def _convert_detection_candidate(self, det: Dict[str, Any], idx: int, width: int, height: int, now: float) -> Optional[Dict[str, Any]]:
         cls = str(det.get("className", det.get("class_name", det.get("label", det.get("name", "unknown"))))).strip().lower() or "unknown"
         if cls in self.ignored_classes:
+            self._record_rejection(cls, "ignored_class")
+            return None
+        if self.accepted_classes and cls not in self.accepted_classes:
+            self._record_rejection(cls, "not_in_accepted_classes")
             return None
         conf = _as_float(det.get("confidence", det.get("conf", det.get("score", 0.0))), 0.0)
         if conf < self.min_confidence:
+            self._record_rejection(cls, "below_global_confidence")
             return None
         bbox_raw = det.get("bbox")
         if not isinstance(bbox_raw, list) or len(bbox_raw) < 4:
+            self._record_rejection(cls, "missing_bbox")
             return None
         try:
             bbox = [float(v) for v in bbox_raw[:4]]
             if bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+                self._record_rejection(cls, "invalid_bbox")
                 return None
         except Exception:
+            self._record_rejection(cls, "invalid_bbox")
             return None
 
         box_w = max(1.0, bbox[2] - bbox[0])
         box_h = max(1.0, bbox[3] - bbox[1])
         if not self._passes_class_filter(cls, conf, box_w, box_h, bbox, height):
+            self._record_rejection(cls, "class_filter")
             return None
 
         estimated_distance, distance_source = self._estimate_distance(cls, bbox, height)
@@ -1084,10 +1131,24 @@ class PhoneVirtualObstacleNode(Node):
             self._publish_json(self.pub_discovered, payload)
         if self.enable_fused_objects_mirror:
             self._publish_json(self.pub_fused, payload)
-        if self.enable_synthetic_lidar_clusters and (cluster_objects or self.publish_empty_synthetic_clusters):
-            self._publish_json(self.pub_synthetic_clusters, self._build_synthetic_cluster_payload(cluster_objects, now))
+        cluster_payload: Optional[Dict[str, Any]] = None
+        should_publish_clusters = bool(cluster_objects) or self.publish_empty_synthetic_clusters
+        if should_publish_clusters:
+            cluster_payload = self._build_synthetic_cluster_payload(cluster_objects, now)
+            if self.enable_synthetic_lidar_clusters:
+                self._publish_json(self.pub_synthetic_clusters, cluster_payload)
+            # The normal A* launch subscribes to /tank/visual_perception/lidar_clusters.
+            # Publishing the same payload there makes the phone package self-contained;
+            # the optional mux path remains available for explicit mux launches.
+            synthetic_topic = str(self.get_parameter("synthetic_lidar_clusters_topic").value)
+            if self.publish_to_planner_cluster_topic and self.planner_cluster_topic and self.planner_cluster_topic != synthetic_topic:
+                self._publish_json(self.pub_planner_clusters, cluster_payload)
+        # Dedicated phone marker topic is always safe to render.  Avoid writing
+        # DELETEALL markers to the shared fused-object topic unless the fused
+        # mirror itself was intentionally enabled.
         self.pub_markers.publish(self._build_markers(objects, now, namespace="phone_virtual_obstacles"))
-        self.pub_fused_markers.publish(self._build_markers(objects, now, namespace="phone_fused_mirror"))
+        if self.enable_fused_objects_mirror:
+            self.pub_fused_markers.publish(self._build_markers(objects, now, namespace="phone_fused_mirror"))
         self.pub_cluster_markers.publish(self._build_cluster_markers(cluster_objects, now))
 
     def _build_synthetic_cluster_payload(self, objects: List[Dict[str, Any]], now: float) -> Dict[str, Any]:
@@ -1226,6 +1287,12 @@ class PhoneVirtualObstacleNode(Node):
             "converted_count": len(converted),
             "published_count": len(self._published_objects()),
             "incoming_detection_count": detection_payload.get("count", None),
+            "gateway_model_classes": self.latest_gateway_model_classes,
+            "accepted_classes": sorted(self.accepted_classes) if self.accepted_classes else "ALL_GATEWAY_CLASSES",
+            "ignored_classes": sorted(self.ignored_classes),
+            "incoming_class_counts": self.last_incoming_class_counts,
+            "rejected_class_counts": self.last_rejected_class_counts,
+            "rejection_reasons": self.last_rejection_reasons,
             "last_detection_wall": self.last_detection_wall,
             "distance_mode": self.distance_mode,
             "placement_distance_scale": self.placement_distance_scale,
@@ -1242,6 +1309,8 @@ class PhoneVirtualObstacleNode(Node):
             "locked_count": sum(1 for o in self.active.values() if bool(o.get("is_locked", False))),
             "cluster_publish_count": len(self._cluster_objects(self._published_objects())),
             "synthetic_lidar_clusters_enabled": self.enable_synthetic_lidar_clusters,
+            "planner_cluster_direct_enabled": self.publish_to_planner_cluster_topic,
+            "planner_cluster_topic": self.planner_cluster_topic,
             "emergency_path_wall_enabled": bool(self.emergency_path_wall_enabled),
             "emergency_wall_cluster_count": int(self.emergency_wall_cluster_count),
             "emergency_wall_half_width_m": float(self.emergency_wall_half_width_m),

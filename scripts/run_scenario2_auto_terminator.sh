@@ -4,19 +4,20 @@ set -Eeuo pipefail
 # Use merged real LiDAR + phone_sim2real synthetic clusters for planner.
 export TANK_TOPIC_LIDAR_CLUSTERS=/tank/phone_sim2real/muxed_lidar_clusters
 
-# run_scenario2_auto_terminator_v2.sh
+# run_scenario2_auto_terminator_v3.sh
 #
 # 목적:
 #   Terminator 4분할 창으로 시나리오2를 자동 실행하면서 각 pane 로그를 실시간 확인한다.
 #
-# v2 수정점:
-#   - scenario2_map.map이 없으면 manager pane에서 자동으로 build_scenario2_map.py 실행
-#   - RViz pane은 scenario2_map.map이 생길 때까지 기다린 뒤 launch
-#   - 따라서 static_map_loader_node가 map file not found로 죽는 문제 방지
+# v3 수정점:
+#   - 기본 시각화를 웹 RViz 서버가 아니라 데스크톱 RViz2 창으로 변경
+#   - scenario2_map.map이 생길 때까지 기다린 뒤 RViz2를 실행
+#   - --web-rviz 옵션으로 기존 웹 RViz 모드도 선택 가능
+#   - --no-rviz 옵션은 RViz2 창 없이 marker publisher만 실행
 #
 # Pane 구성:
 #   좌상: T1 ros_bridge
-#   우상: T2 scenario2 RViz, map 파일 대기 후 실행
+#   우상: T2 scenario2 데스크톱 RViz2, map 파일 대기 후 실행
 #   좌하: T3 scenario2 자동 manager
 #   우하: T4 debug monitor
 #
@@ -25,7 +26,8 @@ export TANK_TOPIC_LIDAR_CLUSTERS=/tank/phone_sim2real/muxed_lidar_clusters
 #   (스크립트가 자기 위치로 워크스페이스를 자동 감지. 필요시 TANK_WS로 강제 지정)
 #
 # 옵션:
-#   --no-rviz        RViz 실행 안 함
+#   --no-rviz        RViz2 창 없이 scenario2 marker publisher만 실행
+#   --web-rviz       기존 웹 RViz 모드로 실행(데스크톱 RViz2 대신 웹 서버)
 #   --skip-reset     scenario2 실행 전 simulator reset 생략
 #   --rebuild-map    기존 map이 있어도 build_scenario2_map.py 재실행
 #   --no-build-map   map 자동 생성 안 함. 없으면 에러
@@ -42,7 +44,10 @@ LOG_ROOT="${LOG_ROOT:-$WORKSPACE/logs}"
 RUN_ID="scenario2_terminator_$(date +%Y%m%d_%H%M%S)"
 LOG_DIR="$LOG_ROOT/$RUN_ID"
 
-USE_RVIZ="true"
+# 기본값은 실제 데스크톱 RViz2 창이다.
+# --web-rviz: 기존 웹 RViz 서버 모드
+# --no-rviz : RViz2 창 생략, marker publisher만 실행
+RVIZ_MODE="desktop"   # desktop | web | none
 SKIP_RESET="false"
 BUILD_MODE="auto"     # auto | rebuild | never
 BRIDGE_HEALTH_URL="${BRIDGE_HEALTH_URL:-http://127.0.0.1:5000/health}"
@@ -52,10 +57,11 @@ MAP_WAIT_SEC="${MAP_WAIT_SEC:-180}"
 
 usage() {
   cat <<USAGE
-Usage: $0 [--no-rviz] [--skip-reset] [--rebuild-map] [--no-build-map]
+Usage: $0 [--no-rviz] [--web-rviz] [--skip-reset] [--rebuild-map] [--no-build-map]
 
 Options:
-  --no-rviz       RViz pane에서 RViz를 실행하지 않음
+  --no-rviz       RViz2 창 없이 scenario2 marker publisher만 실행
+  --web-rviz      기존 웹 RViz 모드로 실행(데스크톱 RViz2 대신 웹 서버)
   --skip-reset    run_scenario2_scenario.py 실행 전 simulator reset 요청 생략
   --rebuild-map   기존 scenario2_map.map이 있어도 build_scenario2_map.py 재실행
   --no-build-map  map 자동 생성을 하지 않음. map이 없으면 에러
@@ -72,7 +78,11 @@ USAGE
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-rviz)
-      USE_RVIZ="false"
+      RVIZ_MODE="none"
+      shift
+      ;;
+    --web-rviz)
+      RVIZ_MODE="web"
       shift
       ;;
     --skip-reset)
@@ -180,19 +190,19 @@ EOF
 chmod +x "$BRIDGE_SCRIPT"
 
 RVIZ_SCRIPT="$RUNTIME_DIR/s2_rviz_pane.sh"
-if [[ "$USE_RVIZ" == "true" ]]; then
+if [[ "$RVIZ_MODE" == "desktop" ]]; then
   cat > "$RVIZ_SCRIPT" <<EOF
 #!/usr/bin/env bash
 set -Eeuo pipefail
-printf '\\033]0;S2-T2 Scenario2 RViz\\007'
+printf '\\033]0;S2-T2 Scenario2 RViz2\\007'
 source "$COMMON_ENV"
 
 MAP_FILE="$WORKSPACE/$SCENARIO2_MAP_REL"
 
 echo "============================================================"
-echo "[T2] Scenario2 RViz"
+echo "[T2] Scenario2 Desktop RViz2 (default)"
 echo "============================================================"
-echo "RViz는 scenario2_map.map이 생긴 뒤 실행합니다."
+echo "RViz2는 scenario2_map.map이 생긴 뒤 실행합니다."
 echo "대기 파일:"
 echo "  \$MAP_FILE"
 echo
@@ -216,30 +226,74 @@ done
 
 echo
 echo "Command:"
-echo "  ros2 launch rviz_web rviz_web_scenario2_map_view.launch.py  # 웹 RViz 3D(rosbridge:9090 포함)"
+echo "  ros2 launch rviz_visualization tank_scenario2_map_view.launch.py use_rviz:=true"
 echo
 
-# 웹 RViz 3D(/view의 'RVIZ 3D' 탭)가 붙는 rosbridge(:9090) + scenario2 맵/지형 마커를 함께 띄운다.
-# (rviz_visualization 데스크톱 launch는 rosbridge를 안 띄워 브라우저에 맵이 안 떴음 — 웹 launch로 교체.)
+# 시나리오2 최종맵·지형·탱크/목표/장애물 marker를 발행하고 실제 RViz2 창을 연다.
+ros2 launch rviz_visualization tank_scenario2_map_view.launch.py use_rviz:=true \
+  2>&1 | tee "$LOG_DIR/rviz_scenario2.log"
+
+echo
+echo "[EXIT] scenario2 데스크톱 RViz2 종료됨. 창을 닫거나 Enter를 누르세요."
+exec bash
+EOF
+elif [[ "$RVIZ_MODE" == "web" ]]; then
+  cat > "$RVIZ_SCRIPT" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '\\033]0;S2-T2 Scenario2 Web RViz\\007'
+source "$COMMON_ENV"
+
+MAP_FILE="$WORKSPACE/$SCENARIO2_MAP_REL"
+
+echo "============================================================"
+echo "[T2] Scenario2 Web RViz (--web-rviz)"
+echo "============================================================"
+echo "웹 RViz는 scenario2_map.map이 생긴 뒤 실행합니다."
+echo "대기 파일:"
+echo "  \$MAP_FILE"
+echo
+echo "[LOG] $LOG_DIR/rviz_scenario2.log"
+echo
+
+for i in \$(seq 1 "$MAP_WAIT_SEC"); do
+  if [[ -f "\$MAP_FILE" ]]; then
+    echo "[OK] scenario2 map found:"
+    ls -lh "\$MAP_FILE"
+    break
+  fi
+  if [[ "\$i" -eq "$MAP_WAIT_SEC" ]]; then
+    echo "[ERROR] scenario2 map wait timeout: \$MAP_FILE"
+    echo "        manager pane에서 build_scenario2_map.py 로그를 확인하세요."
+    exec bash
+  fi
+  echo "[WAIT] scenario2_map.map 대기 중... \$i/$MAP_WAIT_SEC"
+  sleep 1
+done
+
+echo
+echo "Command:"
+echo "  ros2 launch rviz_web rviz_web_scenario2_map_view.launch.py"
+echo
+
 ros2 launch rviz_web rviz_web_scenario2_map_view.launch.py 2>&1 | tee "$LOG_DIR/rviz_scenario2.log"
 
 echo
-echo "[EXIT] scenario2 웹 RViz(rosbridge+마커) 종료됨. 창을 닫거나 Enter를 누르세요."
+echo "[EXIT] scenario2 웹 RViz 종료됨. 창을 닫거나 Enter를 누르세요."
 exec bash
 EOF
 else
   cat > "$RVIZ_SCRIPT" <<EOF
 #!/usr/bin/env bash
 set -Eeuo pipefail
-printf '\\033]0;S2-T2 Markers (no RViz window)\\007'
+printf '\\033]0;S2-T2 Scenario2 Marker Publishers\\007'
 source "$COMMON_ENV"
 
 MAP_FILE="$WORKSPACE/$SCENARIO2_MAP_REL"
 
 echo "============================================================"
-echo "[T2] 데스크톱 RViz2 창 생략 (--no-rviz) — 마커 발행 노드만 실행"
+echo "[T2] RViz2 창 생략 (--no-rviz) — scenario2 marker publisher만 실행"
 echo "============================================================"
-echo "웹 RViz 3D(/view의 RVIZ 3D 탭)가 scenario2 맵/지형 마커를 그대로 받는다."
 echo "대기 파일: \$MAP_FILE"
 echo
 
@@ -255,11 +309,14 @@ done
 
 echo
 echo "Command:"
-echo "  ros2 launch rviz_web rviz_web_scenario2_map_view.launch.py"
+echo "  ros2 launch rviz_visualization tank_scenario2_map_view.launch.py use_rviz:=false"
 echo
-ros2 launch rviz_web rviz_web_scenario2_map_view.launch.py 2>&1 | tee "$LOG_DIR/rviz_scenario2.log"
+
+ros2 launch rviz_visualization tank_scenario2_map_view.launch.py use_rviz:=false \
+  2>&1 | tee "$LOG_DIR/rviz_scenario2.log"
+
 echo
-echo "[EXIT] 마커 노드 종료됨. 창을 닫거나 Enter를 누르세요."
+echo "[EXIT] scenario2 marker publisher 종료됨. 창을 닫거나 Enter를 누르세요."
 exec bash
 EOF
 fi
@@ -517,17 +574,17 @@ cat > "$CONFIG_FILE" <<EOF
 [plugins]
 EOF
 
-echo "[RUN] Terminator Scenario 2 Auto v2"
+echo "[RUN] Terminator Scenario 2 Auto v3"
 echo "      workspace : $WORKSPACE"
 echo "      log dir   : $LOG_DIR"
-echo "      rviz      : $USE_RVIZ"
+echo "      rviz mode : $RVIZ_MODE"
 echo "      skip_reset: $SKIP_RESET"
 echo "      build_mode: $BUILD_MODE"
 echo "      config    : $CONFIG_FILE"
 echo
 echo "Terminator 4분할 창이 열립니다:"
 echo "  좌상: ros_bridge"
-echo "  우상: scenario2 RViz, map 파일 대기 후 launch"
+echo "  우상: scenario2 RViz2(기본), map 파일 대기 후 launch"
 echo "  좌하: 자동 순차 실행 manager"
 echo "  우하: debug monitor"
 echo
