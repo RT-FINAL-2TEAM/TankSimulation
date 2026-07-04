@@ -2025,7 +2025,7 @@ def route_detect():
     if bridge:
         bridge.handle_detect_result(detections, metadata=metadata)
 
-    return jsonify(detections)
+    return jsonify([]),200
 
 
 @app.route("/debug/yolo", methods=["GET"])
