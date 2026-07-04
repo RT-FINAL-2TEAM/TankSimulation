@@ -84,16 +84,16 @@ mapping:
   min_confirm_observations: 3
   min_confirm_age_sec: 0.0
   track_id_merge_enabled: true
-  track_id_merge_radius_m: 10.0
+  track_id_merge_radius_m: 12.0
   merge_across_classes: true
   class_vote_by_confidence: true
   memory_decay_sec: 10.0
   merge_radius_by_class:
-    rock: 8.0
-    car: 8.0
-    tank: 8.0
-    house: 8.0
-    tent: 8.0
+    rock: 12.0
+    car: 12.0
+    tank: 12.0
+    house: 12.0
+    tent: 12.0
 rviz:
   current_object_lifetime_sec: 1.2
   discovered_marker_z_offset: 1.5
