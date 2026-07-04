@@ -144,6 +144,15 @@ def generate_launch_description():
                 # 도착 후 pause/exit하지 않고 controller가 STOP을 유지해야 포탑 노드가 실제 발사한다.
                 "pause_on_goal_reached": "false",
                 "exit_on_goal_reached": "false",
+                # Intermediate firing checkpoints must remain alive; final home
+                # arrival becomes an all-axis terminal STOP only after the
+                # ballistic FSM reports returned/complete.
+                # Final STOP is owned by ballistic_turret_node, not by the
+                # controller's generic /tank/goal/pose check.  Home == spawn,
+                # so controller-owned terminal logic can falsely stop at launch
+                # when another stale planner/status publisher exists.
+                "terminal_stop_on_turret_complete": "false",
+                "terminal_stop_require_goal_departure": "false",
                 # The external Scenario-2 harness declares success when it sees
                 # route_A.json(reached=true). Hold that report at (50,260)
                 # until ballistic_turret_node has fired and physically returned.
@@ -242,11 +251,16 @@ def generate_launch_description():
                 "return_y": 27.0,
                 "return_radius_m": 10.0,
                 "return_goal_topic": "/tank/mission/goal_pose",
+                # sudden_advisor RETURN is a safety preemption of the fixed
+                # two-target firing FSM, not merely an MFD recommendation.
+                "mission_abort_enabled": True,
+                "mission_abort_topic": "/tank/mission/abort",
             }],
         ),
-        # 돌발 대응 자문(advise-only) — perception→sudden_decision→/tank/decision/status(+MFD 패널).
-        # goal/engage를 발행하지 않아 ballistic 체크포인트 시퀀스와 충돌 없음(decision_node와 달리 안전).
-        # use_llm=false로 LLM 자문만 끄고 수식 판단만 쓸 수 있음.
+        # 돌발 대응: perception→sudden_decision→/tank/decision/status(+MFD 패널).
+        # RETURN만 히스테리시스 통과 후 실제 실행한다. abort 토픽이 ballistic FSM을
+        # 중단하고 planner를 home direct-A*로 고정하므로, 기존 북진 checkpoint를 다시 밟지 않는다.
+        # use_llm=false로 LLM 자문만 끄고 수식 판단+복귀 실행은 유지할 수 있다.
         Node(
             package="mission", executable="sudden_advisor_node", name="tank_sudden_advisor_node",
             output="screen",
@@ -255,6 +269,15 @@ def generate_launch_description():
                 "tick_hz": 2.0,
                 "hysteresis_ticks": 2,
                 "use_llm": True,
+                "execute_return": True,
+                # SCENARIO2_RETURN_ARM_GUARD_V1: prevent spawn-point self-return
+                # if start-area detections are briefly classified as new threats.
+                "return_arm_min_distance_from_home_m": 35.0,
+                "return_x": 59.0,
+                "return_y": 27.0,
+                "return_goal_topic": "/tank/mission/goal_pose",
+                "mission_abort_topic": "/tank/mission/abort",
+                "return_republish_sec": 0.5,
             }],
         ),
     ])
