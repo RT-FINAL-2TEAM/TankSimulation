@@ -702,16 +702,27 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     </div>
                 </section>
                 <section class="panel">
-                    <div class="panel-title"><span>② RVIZ 3D / MAP</span><span id="mapPanelTitle">TERRAIN MAP</span></div>
-                    <div class="map-tabs">
-                        <button id="map-tab-terrain" class="tab-button active" type="button" onclick="setMapTab('terrain')">TERRAIN</button>
-                        <button id="map-tab-ros" class="tab-button" type="button" onclick="setMapTab('ros')">ROS</button>
-                        <button id="map-tab-rviz" class="tab-button" type="button" onclick="setMapTab('rviz')">RVIZ 3D</button>
+                    <div class="panel-title"><span>② MAP</span><span id="mapPanelTitle">TERRAIN MAP</span></div>
+                    <div class="map-tabs" style="display:flex;justify-content:center;gap:6px;padding:6px;">
+                        <button id="map-tab-terrain" class="tab-button active" type="button" onclick="setMapTab('terrain')" style="width:120px;">TERRAIN</button>
+                        <button id="map-tab-llm" class="tab-button" type="button" onclick="setMapTab('llm')" style="width:120px;">LLM</button>
                     </div>
                     <div class="map-wrap">
                         <canvas id="mapCanvas"></canvas>
-                        <iframe id="rvizFrame" title="RViz 3D" style="display:none;"></iframe>
-                        <div id="rosWrap" style="display:none;position:absolute;inset:0;flex-direction:column;background:var(--bg);">
+                        <div id="llmWrap" style="display:none;position:absolute;inset:0;flex-direction:column;overflow:hidden;background:var(--bg);"></div>
+                        <div id="mapLegend" class="map-legend">
+                            <span>SELF</span><span>ENEMY</span><span>TARGET</span><span>WATER</span><span>RIDGE</span><span>HIGH</span><span>TREE</span><span>ROCK</span><span>HOUSE</span><span>ROUTE</span>
+                        </div>
+                    </div>
+                </section>
+                <section class="panel">
+                    <div class="panel-title"><span>③ TANK STATE · SYSTEM</span><span id="tankStatusText" class="feed-status-text">-</span></div>
+                    <div id="tankSystemContent" class="scroll"></div>
+                </section>
+                <section class="panel">
+                    <div class="panel-title"><span>④ ROS MONITOR</span><span id="riskStatusText" class="feed-status-text">-</span></div>
+                    <div id="riskContent" style="display:flex;flex-direction:column;position:absolute;inset:34px 0 0 0;">
+                        <div id="rosWrap" style="display:flex;position:absolute;inset:0;flex-direction:column;background:var(--bg);">
                             <div class="map-tabs" style="grid-template-columns:repeat(3,minmax(0,1fr));height:32px;">
                                 <button id="ros-sub-graph" class="tab-button active" type="button" onclick="setRosSub('graph')">GRAPH</button>
                                 <button id="ros-sub-services" class="tab-button" type="button" onclick="setRosSub('services')">SERVICES</button>
@@ -729,18 +740,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                                 <div id="rosParams" class="scroll" style="position:absolute;inset:0;display:none;"></div>
                             </div>
                         </div>
-                        <div id="mapLegend" class="map-legend">
-                            <span>SELF</span><span>ENEMY</span><span>TARGET</span><span>WATER</span><span>RIDGE</span><span>HIGH</span><span>TREE</span><span>ROCK</span><span>HOUSE</span><span>ROUTE</span>
-                        </div>
                     </div>
-                </section>
-                <section class="panel">
-                    <div class="panel-title"><span>③ TANK STATE · SYSTEM</span><span id="tankStatusText" class="feed-status-text">-</span></div>
-                    <div id="tankSystemContent" class="scroll"></div>
-                </section>
-                <section class="panel">
-                    <div class="panel-title"><span>④ LLM · RECON RISK</span><span id="riskStatusText" class="feed-status-text">-</span></div>
-                    <div id="riskContent" class="scroll"></div>
                 </section>
             </main>
             <footer class="bottom">
@@ -966,26 +966,55 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     if (!d.ok) alert("설정 실패: " + (d.reason || d.error || ""));
                 } catch (e) { alert("오류: " + e); }
             }
+            let activeLlmSub = "recon";
+            function initLlmTabs() {
+                byId("llmWrap").innerHTML = `
+                    <div class="map-tabs" style="grid-template-columns:repeat(3,minmax(0,1fr));height:32px;flex:0 0 auto;">
+                        <button id="llm-sub-recon" class="tab-button active" type="button" onclick="setLlmSub('recon')">정찰결과</button>
+                        <button id="llm-sub-mission" class="tab-button" type="button" onclick="setLlmSub('mission')">미션계획</button>
+                        <button id="llm-sub-realtime" class="tab-button" type="button" onclick="setLlmSub('realtime')">실시간판단</button>
+                    </div>
+                    <div id="llm-content-recon" style="overflow-y:auto;flex:1 1 0;padding:10px 12px;"></div>
+                    <div id="llm-content-mission" style="display:none;overflow-y:auto;flex:1 1 0;padding:10px 12px;"></div>
+                    <div id="llm-content-realtime" style="display:none;overflow-y:auto;flex:1 1 0;padding:10px 12px;"></div>
+                `;
+            }
+            function setLlmSub(subTab) {
+                activeLlmSub = subTab;
+                for (const t of ["recon", "mission", "realtime"]) {
+                    byId(`llm-sub-${t}`).classList.toggle("active", t === subTab);
+                    byId(`llm-content-${t}`).style.display = t === subTab ? "block" : "none";
+                }
+                renderLlmSubContent(subTab, latestState || {});
+            }
+            function renderLlmSubContent(subTab, state) {
+                if (subTab === "recon") {
+                    byId("llm-content-recon").innerHTML = renderRiskPanel(state);
+                } else if (subTab === "mission") {
+                    byId("llm-content-mission").innerHTML = renderMissionPlan(state);
+                } else if (subTab === "realtime") {
+                    byId("llm-content-realtime").innerHTML = renderSuddenDecision(state);
+                }
+            }
             function setMapTab(tabName) {
-                activeMapTab = ["terrain", "ros", "rviz"].includes(tabName) ? tabName : "terrain";
+                activeMapTab = ["terrain", "llm"].includes(tabName) ? tabName : "terrain";
                 byId("map-tab-terrain").classList.toggle("active", activeMapTab === "terrain");
-                byId("map-tab-ros").classList.toggle("active", activeMapTab === "ros");
-                byId("map-tab-rviz").classList.toggle("active", activeMapTab === "rviz");
-                const isTerrain = activeMapTab === "terrain", isRos = activeMapTab === "ros", isRviz = activeMapTab === "rviz";
+                byId("map-tab-llm").classList.toggle("active", activeMapTab === "llm");
+                const isTerrain = activeMapTab === "terrain", isLlm = activeMapTab === "llm";
                 byId("mapCanvas").style.display = isTerrain ? "block" : "none";
                 byId("mapLegend").style.display = isTerrain ? "flex" : "none";
-                byId("rosWrap").style.display = isRos ? "flex" : "none";
-                const frame = byId("rvizFrame");
-                frame.style.display = isRviz ? "block" : "none";
-                if (isRviz && !frame.src) { frame.src = "/rviz3d?frame=tank_map&cloud=detected&rays=1"; }
-                byId("mapPanelTitle").textContent = isRviz ? "RVIZ 3D" : (isRos ? "ROS MONITOR" : "TERRAIN MAP");
+                byId("llmWrap").style.display = isLlm ? "flex" : "none";
+                byId("mapPanelTitle").textContent = isLlm ? "LLM RECON RISK" : "TERRAIN MAP";
                 if (isTerrain) { updateMapLegend(); drawMap(latestState || {}); }
-                if (isRos) { renderRosActive(latestState || {}); }
+                if (isLlm) {
+                    if (!byId("llm-sub-recon")) { initLlmTabs(); }
+                    renderLlmSubContent(activeLlmSub, latestState || {});
+                }
             }
             function updateMapLegend() {
                 const terrain = ["SELF", "ENEMY", "WATER", "RIDGE", "HIGH", "TREE", "ROCK"];
                 const ros = ["SELF", "ENEMY", "TARGET", "OBS", "ROUTE", "YOLO"];
-                byId("mapLegend").innerHTML = (activeMapTab === "ros" ? ros : terrain)
+                byId("mapLegend").innerHTML = (activeMapTab === "llm" ? ros : terrain)
                     .map((label) => `<span>${label}</span>`)
                     .join("");
             }
@@ -1461,15 +1490,6 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 }
                 ctx.restore();
 
-                ctx.save();
-                ctx.fillStyle = "rgba(216, 255, 233, 0.82)";
-                ctx.font = "11px Consolas, monospace";
-                ctx.textAlign = "left";
-                ctx.fillText(`TOPO MAP objects=${staticObjects.length}`, rect.x + 10, rect.y + 18);
-                ctx.textAlign = "right";
-                ctx.fillText(`elev ${numberText(grid.terrain.min, 1)}..${numberText(grid.terrain.max, 1)}`, rect.x + rect.w - 10, rect.y + 18);
-                ctx.fillStyle = "rgba(68, 217, 255, 0.86)";
-                ctx.fillText(`water ${waterLabel}`, rect.x + rect.w - 10, rect.y + 34);
                 ctx.restore();
                 return true;
             }
@@ -1704,7 +1724,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     `;
                 }).join("");
                 const title = selected
-                    ? `${selected.side || selected.id} ROUTE SELECTED`
+                    ? `${selected.id || selected.side || ""} ROUTE SELECTED`
                     : (payload.candidates || []).length ? "ROUTE RISK ASSESSMENT" : "AI DECISION PENDING";
                 return `
                     <div class="route-compare">
@@ -1760,11 +1780,27 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 }
                 const w = cmp.winner || {};
                 const per = cmp.per_route || {};
+                const SEP = '<div style="border-top:1px solid #1e3a2a;margin:10px 0 8px 0;"></div>';
                 let html = '';
+
+                // 추천 루트 강조 배너
+                const chosen = w.formula || w.llm;
+                if (chosen) {
+                    const agree = w.agreement;
+                    const chosenPr = per[chosen] || {};
+                    const chosenF = chosenPr.formula || {};
+                    const chosenBandCol = riskBandColor(chosenF.band);
+                    const agreeTag = agree
+                        ? '<span style="font-size:11px;color:#39ff88;margin-left:6px;">수식·LLM 일치 ✅</span>'
+                        : `<span style="font-size:11px;color:#ffd34d;margin-left:6px;">수식 ${safe(w.formula)} / LLM ${safe(w.llm)} 불일치 ⚠</span>`;
+                    html += `<div style="background:#0d2e1a;border:1px solid ${chosenBandCol};border-radius:5px;padding:8px 10px;margin-bottom:10px;">
+                        <div style="font-size:13px;font-weight:700;color:#fff;letter-spacing:0.5px;">추천 루트 &nbsp;<span style="font-size:18px;color:${chosenBandCol};">Route ${chosen}</span>${agreeTag}</div>
+                    </div>`;
+                }
 
                 // 블록 1: 정찰 결과 요약
                 if (feat) {
-                    html += '<div style="margin-bottom:10px;"><div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">정찰 결과</div>';
+                    html += '<div style="margin-bottom:8px;"><div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">정찰 결과</div>';
                     for (const r of ["A", "B"]) {
                         const f = feat[`route_${r}`];
                         if (!f) continue;
@@ -1774,14 +1810,17 @@ def render_view_page(poll_ms: int = 1000) -> str:
                         const bc = th.by_class || {};
                         const bcStr = Object.keys(bc).length ? Object.entries(bc).map(([k, v]) => `${k}${v}`).join("/") : "0";
                         const near = (th.nearest_dist_m === null || th.nearest_dist_m === undefined) ? "—" : `${numberText(th.nearest_dist_m, 0)}m`;
-                        html += `<div style="font-size:12px;margin:2px 0;"><b>route_${r}</b> ${reached} · ${numberText(eff.distance_m, 0)}m · 확정위협 ${safe(th.confirmed_count, 0)}(${escapeHtml(bcStr)}) · 최근접 ${near}</div>`;
+                        const isChosen = r === chosen;
+                        html += `<div style="font-size:12px;margin:3px 0;${isChosen ? 'color:#d0eaff;font-weight:600;' : 'color:#8aa8b8;'}"><b>route_${r}</b> ${reached} · ${numberText(eff.distance_m, 0)}m · 확정위협 ${safe(th.confirmed_count, 0)}(${escapeHtml(bcStr)}) · 최근접 ${near}</div>`;
                     }
                     html += '</div>';
                 }
 
+                html += SEP;
+
                 // 블록 2: 수식 vs LLM 한눈
-                html += '<div style="margin-bottom:10px;"><div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">수식 vs LLM</div>';
-                html += `<div style="font-size:12px;margin-bottom:6px;">선택 — 수식 <b>${safe(w.formula)}</b> / LLM <b>${safe(w.llm)}</b> ${riskOk(w.agreement)} · 순위일치 ${riskOk(cmp.rank_agreement)}</div>`;
+                html += '<div style="margin-bottom:8px;"><div style="font-weight:700;color:#9ec5f0;margin-bottom:6px;">수식 vs LLM &nbsp;<span style="font-size:11px;color:#7a8aa0;">순위일치 ${riskOk(cmp.rank_agreement)}</span></div>';
+                html = html.replace('${riskOk(cmp.rank_agreement)}', riskOk(cmp.rank_agreement));
                 for (const r of ["A", "B"]) {
                     const pr = per[r];
                     if (!pr) continue;
@@ -1792,23 +1831,39 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     const lcol = riskBandColor(l.risk_level);
                     const gw = rt === null ? 0 : Math.round(rt * 100);
                     const exp = (feat && feat[`route_${r}`] && feat[`route_${r}`].exposure) || {};
-                    html += `<div style="margin:4px 0 8px 0;">
-                        <div style="font-size:12px;"><b>route_${r}</b> ${riskOk(pr.band_match)}</div>
-                        <div style="height:8px;background:#0c2417;border-radius:3px;overflow:hidden;margin:3px 0;"><div style="height:100%;width:${gw}%;background:${fcol};"></div></div>
+                    const isChosen = r === chosen;
+                    html += `<div style="margin:4px 0 8px 0;${isChosen ? 'padding-left:6px;border-left:2px solid ' + fcol + ';' : 'opacity:0.75;'}">
+                        <div style="font-size:12px;font-weight:${isChosen ? '700' : '400'};"><b>route_${r}</b> ${riskOk(pr.band_match)}</div>
+                        <div style="height:7px;background:#0c2417;border-radius:3px;overflow:hidden;margin:3px 0;"><div style="height:100%;width:${gw}%;background:${fcol};border-radius:3px;"></div></div>
                         <div style="font-size:11px;">수식 ${rt === null ? "—" : rt.toFixed(3)} <span style="color:${fcol}">[${(f.band || "—").toUpperCase()}]</span> · LLM <span style="color:${lcol}">[${(l.risk_level || "—").toUpperCase()}]</span></div>
                         ${renderExposureBars(exp.profile, fcol)}
                     </div>`;
                 }
                 html += '</div>';
 
+                html += SEP;
+
                 // 블록 3: 근거/발산
                 const n = cmp.narrative || {};
-                html += '<div><div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">판단 근거</div>';
-                html += `<div style="font-size:11px;margin:2px 0;"><b>수식</b>: ${escapeHtml(safe(n.formula_reason))}</div>`;
-                html += `<div style="font-size:11px;margin:2px 0;"><b>LLM</b>: ${escapeHtml(safe(n.llm_decision_reason || n.llm_summary))}</div>`;
+                function formatReason(text) {
+                    if (!text) return '<span style="color:#5a6b62;">—</span>';
+                    const parts = text.replace(/\s*—\s*/g, '. ').replace(/\*\*/g, '').split(/\.\s+/).map(s => s.trim()).filter(Boolean);
+                    return parts.map(s => {
+                        const isWarn = /⚠|권장|신뢰도 낮|누락|위험/.test(s);
+                        const colored = s.replace(/(\d+\.?\d*)/g, '<b style="color:#d0eaff;">$1</b>');
+                        return `<div style="display:flex;align-items:flex-start;gap:5px;margin:2px 0;font-size:11px;line-height:1.55;">
+                            <span style="flex-shrink:0;margin-top:2px;color:${isWarn ? '#ffd34d' : '#3a6a4a'};">${isWarn ? '⚠' : '·'}</span>
+                            <span style="${isWarn ? 'color:#ffd34d;' : ''}">${colored}</span>
+                        </div>`;
+                    }).join('');
+                }
+                html += '<div>';
+                html += '<div style="font-weight:700;color:#9ec5f0;margin-bottom:6px;">판단 근거</div>';
+                html += `<div style="font-size:11px;color:#7a8aa0;margin-bottom:3px;">수식</div>${formatReason(n.formula_reason)}`;
+                html += `<div style="font-size:11px;color:#7a8aa0;margin:7px 0 3px 0;">LLM</div>${formatReason(n.llm_decision_reason || n.llm_summary)}`;
                 if (Array.isArray(cmp.divergence) && cmp.divergence.length) {
-                    const dv = cmp.divergence.map((d) => `route_${d.route} 수식 ${d.formula_band}↔LLM ${d.llm_band}`).join(", ");
-                    html += `<div style="font-size:11px;margin:4px 0;color:#ffd34d;">발산: ${escapeHtml(dv)}</div>`;
+                    const dv = cmp.divergence.map((d) => `route_${d.route} 수식 ${d.formula_band}↔LLM ${d.llm_band}`).join(" / ");
+                    html += `<div style="font-size:11px;margin-top:8px;padding:5px 8px;background:#1a1600;border-radius:4px;color:#ffd34d;line-height:1.5;">⚠ 발산: ${escapeHtml(dv)}</div>`;
                 }
                 html += '</div>';
                 return html;
@@ -1837,10 +1892,10 @@ def render_view_page(poll_ms: int = 1000) -> str:
             function renderMissionPlan(state) {
                 // 미션 계획(build_mission_plan.py 산출) — 루트·사격위치·교전순서·LLM 서술. RISK 패널 하단에 표시.
                 const mp = state?.missionPlan;
-                if (!mp || !mp.plan) return '';
+                if (!mp || !mp.plan) return '<div style="font-size:11px;color:#5a6b62;padding:8px 0;">미션 계획 생성 중...</div>';
                 const plan = mp.plan;
-                let html = '<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px;">';
-                html += '<div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">미션 계획 (사격)</div>';
+                let html = '<div>';
+                html += '<div style="font-weight:700;color:#9ec5f0;margin-bottom:6px;">미션 계획 (사격)</div>';
                 const order = (plan.engage_order || []).join(" → ") || "—";
                 html += `<div style="font-size:12px;margin-bottom:4px;">추천 루트 <b>${safe(mp.route_recommended)}</b> · 교전순서 ${escapeHtml(order)}</div>`;
                 for (const e of (plan.targets || [])) {
@@ -1871,13 +1926,13 @@ def render_view_page(poll_ms: int = 1000) -> str:
             function renderSuddenDecision(state) {
                 // 돌발 대응(sudden_advisor_node, 라이브) — 미션 주행 중 신규 위협 결정(advise-only).
                 const sd = state?.suddenDecision;
-                if (!sd) return '';
+                if (!sd) return '<div style="font-size:11px;color:#5a6b62;padding:8px 0;">실시간 판단 대기 중 — 미션 주행 시작 후 표시됩니다.</div>';
                 const act = sd.action || 'NONE';
                 if (act === 'NONE' && !(sd.n_new > 0)) {
-                    return '<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px;font-size:11px;color:#7a8aa0;">돌발 대응 대기 (신규 위협 없음)</div>';
+                    return '<div style="font-size:11px;color:#7a8aa0;padding:8px 0;">돌발 대응 대기 (신규 위협 없음)</div>';
                 }
                 const col = act === 'RETURN' ? '#f39' : act === 'ENGAGE' ? '#e8c37a' : act === 'BYPASS' ? '#9ec5f0' : '#7a8aa0';
-                let html = '<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px;">';
+                let html = '<div>';
                 html += '<div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">돌발 대응 (라이브)</div>';
                 html += `<div style="font-size:13px;margin-bottom:2px;">결정 <b style="color:${col}">${escapeHtml(act)}</b> · 신규 ${safe(sd.n_new, 0)} · 교전가능 ${safe(sd.n_engageable, 0)} · 최대위험 ${safe(sd.max_risk, 0)}</div>`;
                 html += `<div style="font-size:11px;margin:2px 0;">${escapeHtml(safe(sd.reason))}</div>`;
@@ -1943,7 +1998,8 @@ def render_view_page(poll_ms: int = 1000) -> str:
             function updateLeftPanel(state) {
                 // C2 4분할: 패널 ③(전차상태+시스템)·④(LLM/위험도) 렌더. 아래 legacy 5탭 코드는 unreachable.
                 byId("tankSystemContent").innerHTML = renderTankState(state) + renderSystem(state);
-                byId("riskContent").innerHTML = renderRiskPanel(state) + renderMissionPlan(state) + renderSuddenDecision(state);
+                if (activeMapTab === "llm" && byId("llm-sub-recon")) { renderLlmSubContent(activeLlmSub, state); }
+                renderRosActive(state);
                 return;
                 const latest = latestBridge(state);
                 const yolo = state?.yolo || {};
@@ -2143,7 +2199,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     ctx.stroke();
                     ctx.restore();
                     const labelPoint = points[Math.max(1, Math.floor(points.length * 0.45))];
-                    const label = isSelected ? `${candidate.side || candidate.id} SELECTED` : `${candidate.side || candidate.id} ${candidate.id || ""}`.trim();
+                    const label = `${candidate.id || candidate.side || ""} ROUTE`.trim();
                     drawMapTag(ctx, label, labelPoint, color, width, height);
                 }
                 const selected = selectedRouteCandidate(payload);
@@ -2362,10 +2418,6 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     if (player) {
                         const selfPoint = mapPoint(player);
                         drawSymbol(ctx, selfPoint, "#39ff88", `SELF ${numberText(player.x, 1)},${numberText(player.y, 1)}`, "circle");
-                    } else {
-                        ctx.fillStyle = "rgba(57,255,136,0.82)";
-                        ctx.font = "12px Consolas, monospace";
-                        ctx.fillText("SELF WAITING: /info or /get_action", 18, staticPoint ? 112 : 92);
                     }
                     if (activeMapTab === "ros") drawRosStatus(ctx, bridge, latest, w);
                 } catch (err) {
@@ -2462,7 +2514,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
             });
             updateMapLegend();
             // 기본으로 웹 3D(RVIZ 3D 탭)를 자동 표시한다. ?map=terrain / ?map=ros 로 되돌릴 수 있다.
-            { const mp = new URLSearchParams(window.location.search).get("map"); setMapTab(["terrain", "ros", "rviz"].includes(mp) ? mp : "rviz"); }
+            { const mp = new URLSearchParams(window.location.search).get("map"); setMapTab(["terrain", "llm"].includes(mp) ? mp : "terrain"); }
             fetchStaticMap();
             function toggleMax(panel) {
                 if (!panel) return;
