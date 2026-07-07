@@ -1993,57 +1993,275 @@ def render_view_page(poll_ms: int = 1000) -> str:
                      + f(w, d, `rotateX(90deg) translateZ(${h / 2}px)`)
                      + f(w, d, `rotateX(-90deg) translateZ(${h / 2}px)`);
             }
-            function renderMissionPlan(state) {
-                // 미션 계획(build_mission_plan.py 산출) — 루트·사격위치·교전순서·LLM 서술. RISK 패널 하단에 표시.
+            const missionSeries = [];
+            const suddenSeries = [];
+            function dist2d(a, b) {
+                if (!a || !b) return null;
+                const ax = Number(a.x), ay = Number(a.y ?? a.z);
+                const bx = Number(b.x), by = Number(b.y ?? b.z);
+                if (![ax, ay, bx, by].every(Number.isFinite)) return null;
+                return Math.hypot(ax - bx, ay - by);
+            }
+            function planPoint(p) {
+                if (!p || typeof p !== "object") return null;
+                const x = Number(p.x);
+                const y = Number(p.y ?? p.z);
+                const z = Number(p.z ?? p.height ?? 0);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+                return { x, y, z: Number.isFinite(z) ? z : 0, radius: Number(p.radius_m ?? p.radius ?? 0) };
+            }
+            function missionEngagementRows(mp) {
+                if (!mp) return [];
+                const planTargets = Array.isArray(mp?.plan?.targets) ? mp.plan.targets : [];
+                const engs = Array.isArray(mp.engagements) ? mp.engagements : [];
+                const engById = {};
+                for (const e of engs) if (e && e.id) engById[String(e.id)] = e;
+                const ids = [];
+                for (const id of (mp?.plan?.engage_order || [])) ids.push(String(id));
+                for (const e of engs) if (e?.id && !ids.includes(String(e.id))) ids.push(String(e.id));
+                for (const t of planTargets) if (t?.id && !ids.includes(String(t.id))) ids.push(String(t.id));
+                return ids.map((id, idx) => {
+                    const t = planTargets.find((x) => String(x?.id) === id) || {};
+                    const e = engById[id] || {};
+                    const cp = planPoint(t.firing_checkpoint || e.checkpoint || t.checkpoint);
+                    const target = planPoint(t.target || e.target);
+                    const range = Number(t?.firing_checkpoint?.distance_m ?? e?.checkpoint?.distance_m ?? dist2d(cp, target));
+                    return {
+                        index: idx + 1,
+                        id,
+                        checkpoint: cp,
+                        target,
+                        range_m: Number.isFinite(range) ? range : null,
+                        exposure: t?.firing_checkpoint?.exposure ?? t?.exposure ?? e?.exposure,
+                        exposure_band: t?.firing_checkpoint?.exposure_band ?? t?.exposure_band ?? e?.exposure_band,
+                        score: t?.firing_checkpoint?.score ?? t?.score ?? e?.score,
+                        los_clear: t?.firing_checkpoint?.los_clear ?? t?.los_clear ?? e?.los_clear,
+                        target_from_enemy_pose: e?.target_from_enemy_pose,
+                        reposition: e?.reposition || {},
+                        rawTarget: t,
+                        rawEngagement: e,
+                    };
+                });
+            }
+            function missionCurrentRow(state, mp) {
+                const rows = missionEngagementRows(mp);
+                if (!rows.length) return null;
+                const b = state?.ballistic || state?.ballisticTurret || state?.missionStatus || {};
+                const id = b.current_id || b.currentTargetId || b.engagement_id || b.engagementId;
+                if (id) {
+                    const found = rows.find((r) => String(r.id) === String(id));
+                    if (found) return found;
+                }
+                const idx = Number(b.current_index ?? b.engagement_index ?? b.target_index);
+                if (Number.isFinite(idx) && idx >= 0 && rows[idx]) return rows[idx];
+                const latest = latestBridge(state);
+                const pose = readPoint(latest.player_pose_map || latest.get_action_pose_map || latest.info_compact?.player_pose_map);
+                if (!pose) return rows[0];
+                const pending = rows
+                    .map((r) => ({ row: r, d: dist2d(pose, r.checkpoint) }))
+                    .filter((x) => Number.isFinite(x.d))
+                    .sort((a, b) => a.d - b.d);
+                return pending[0]?.row || rows[0];
+            }
+            function pushMissionTelemetry(state) {
+                const latest = latestBridge(state);
+                const sim = latest.sim_status || {};
+                const ps = latest.player_state || {};
+                const pose = readPoint(latest.player_pose_map || latest.get_action_pose_map || latest.info_compact?.player_pose_map);
                 const mp = state?.missionPlan;
-                if (!mp || !mp.plan) return '<div style="font-size:11px;color:#5a6b62;padding:8px 0;">미션 계획 생성 중...</div>';
-                const plan = mp.plan;
-                let html = '<div>';
-                html += '<div style="font-weight:700;color:#9ec5f0;margin-bottom:6px;">미션 계획 (사격)</div>';
-                const order = (plan.engage_order || []).join(" → ") || "—";
-                html += `<div style="font-size:12px;margin-bottom:4px;">추천 루트 <b>${safe(mp.route_recommended)}</b> · 교전순서 ${escapeHtml(order)}</div>`;
-                for (const e of (plan.targets || [])) {
-                    const cp = e.firing_checkpoint;
-                    if (cp) {
-                        const band = (cp.exposure_band || "—").toUpperCase();
-                        html += `<div style="font-size:11px;margin:2px 0;"><b>${escapeHtml(safe(e.id))}</b> → 사격(${numberText(cp.x, 0)}, ${numberText(cp.y, 0)}) ${numberText(cp.distance_m, 0)}m [${band}]</div>`;
-                    } else {
-                        html += `<div style="font-size:11px;margin:2px 0;color:#f39;"><b>${escapeHtml(safe(e.id))}</b> → 교전불가</div>`;
+                const cur = missionCurrentRow(state, mp);
+                const t = Number(sim.sim_time ?? state?.serverTime ?? Date.now() / 1000);
+                if (!Number.isFinite(t)) return;
+                const speed = Number(ps.speed ?? sim.player_speed);
+                const turret = ps.turret || {};
+                const cpDist = pose && cur?.checkpoint ? dist2d(pose, cur.checkpoint) : null;
+                const targetDist = pose && cur?.target ? dist2d(pose, cur.target) : null;
+                const fire = !!latest.get_action_response?.command?.fire;
+                const item = {
+                    t,
+                    speed: Number.isFinite(speed) ? speed : null,
+                    cpDist,
+                    targetDist,
+                    turretYaw: Number(turret.x),
+                    turretPitch: Number(turret.y),
+                    currentId: cur?.id || null,
+                    action: state?.suddenDecision?.action || "NONE",
+                    risk: Number(state?.suddenDecision?.max_risk),
+                    fire,
+                };
+                const last = missionSeries[missionSeries.length - 1];
+                if (!last || Math.abs(last.t - item.t) > 0.20 || last.currentId !== item.currentId || last.fire !== item.fire) {
+                    missionSeries.push(item);
+                    while (missionSeries.length > 180) missionSeries.shift();
+                }
+                const sd = state?.suddenDecision;
+                if (sd) {
+                    const risk = Number(sd.max_risk ?? 0);
+                    const prev = suddenSeries[suddenSeries.length - 1];
+                    const si = { t, action: sd.action || "NONE", risk: Number.isFinite(risk) ? risk : 0, nNew: Number(sd.n_new ?? 0), nEngageable: Number(sd.n_engageable ?? 0) };
+                    if (!prev || Math.abs(prev.t - si.t) > 0.20 || prev.action !== si.action || prev.risk !== si.risk) {
+                        suddenSeries.push(si);
+                        while (suddenSeries.length > 180) suddenSeries.shift();
                     }
                 }
-                const v = mp.verification || {};
-                if (Array.isArray(v.problems) && v.problems.length) {
-                    html += `<div style="font-size:11px;color:#f39;margin-top:4px;">⚠ ${escapeHtml(v.problems.join("; "))}</div>`;
+            }
+            function sparklineSvg(series, key, title, unit = "", color = "#5ac8ff", maxHint = null) {
+                const vals = series.map((p) => Number(p[key])).filter(Number.isFinite);
+                if (vals.length < 2) return `<div style="font-size:10px;color:#5a6b62;border:1px dashed var(--line-dim);padding:7px;">${escapeHtml(title)} 데이터 대기</div>`;
+                const w = 300, h = 46;
+                let min = Math.min(...vals), max = Math.max(...vals);
+                if (Number.isFinite(maxHint)) { min = Math.min(min, 0); max = Math.max(max, maxHint); }
+                if (Math.abs(max - min) < 0.001) { max += 1; min -= 1; }
+                const recent = series.slice(-80).filter((p) => Number.isFinite(Number(p[key])));
+                const n = recent.length;
+                const pts = recent.map((p, i) => {
+                    const x = n <= 1 ? 0 : (i / (n - 1)) * w;
+                    const y = h - ((Number(p[key]) - min) / (max - min)) * h;
+                    return `${x.toFixed(1)},${y.toFixed(1)}`;
+                }).join(" ");
+                const last = recent[recent.length - 1];
+                return `<div style="border:1px solid var(--line-dim);background:rgba(8,19,40,0.55);padding:6px;margin-top:6px;">
+                    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:3px;"><span>${escapeHtml(title)}</span><b style="color:${color}">${numberText(last?.[key], 1)}${escapeHtml(unit)}</b></div>
+                    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:42px;display:block;background:rgba(0,0,0,0.18);">
+                        <polyline fill="none" stroke="${color}" stroke-width="2" points="${pts}"></polyline>
+                    </svg>
+                </div>`;
+            }
+            function kvLine(k, v, color = "#dbe6ff") {
+                return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10.5px;line-height:1.45;border-bottom:1px solid rgba(42,83,154,0.22);padding:2px 0;"><span style="color:var(--muted)">${escapeHtml(k)}</span><b style="color:${color};text-align:right;">${escapeHtml(v)}</b></div>`;
+            }
+            function ioStep(title, body, tag = "") {
+                return `<div style="border:1px solid var(--line-dim);background:rgba(8,19,40,0.65);padding:8px;min-width:0;">
+                    <div style="font-size:11px;font-weight:800;color:#9ec5f0;margin-bottom:4px;">${escapeHtml(title)} ${tag ? `<span style="font-size:9px;color:#ffd34d;">${escapeHtml(tag)}</span>` : ""}</div>
+                    <div style="font-size:10.5px;line-height:1.55;color:#b9c8e8;">${body}</div>
+                </div>`;
+            }
+            function renderMissionPlan(state) {
+                // build_mission_plan.py 산출을 "입력→전처리→LLM→시나리오2 실행" 형태로 표시한다.
+                const mp = state?.missionPlan;
+                if (!mp || !mp.plan) {
+                    return `<div style="font-size:11px;color:#5a6b62;padding:8px 0;line-height:1.6;">미션 계획 생성 중...<br>기대 파일: <b>recon_reports/mission_plan.json</b><br>필요 입력: scenario2_map.map, scenario2_terrain.json, risk_features.json, scenario2_routes.yaml</div>`;
                 }
+                const rows = missionEngagementRows(mp);
+                const plan = mp.plan || {};
                 const g = mp.llm_guidance || {};
+                const current = missionCurrentRow(state, mp);
+                const latest = latestBridge(state);
+                const pose = readPoint(latest.player_pose_map || latest.get_action_pose_map || latest.info_compact?.player_pose_map);
+                const order = (plan.engage_order || rows.map((r) => r.id)).join(" → ") || "—";
+                const ver = mp.verification || {};
+                let html = '<div style="display:grid;gap:10px;">';
+
+                html += `<div style="background:#0d2e1a;border:1px solid ${ver.ok === false ? '#ff3448' : '#ffd34d'};border-radius:5px;padding:8px 10px;">
+                    <div style="font-size:13px;font-weight:800;color:#fff;">Scenario 2 사격 미션 계획 · Route <span style="color:#ffd34d">${escapeHtml(safe(mp.route_recommended || plan.route, 'A'))}</span></div>
+                    <div style="font-size:11px;color:#b9c8e8;margin-top:3px;">교전 순서: <b style="color:#e8eefc">${escapeHtml(order)}</b> · 현재 추적: <b style="color:#5ac8ff">${escapeHtml(safe(current?.id, '대기'))}</b></div>
+                </div>`;
+
+                html += `<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;">
+                    ${ioStep('INPUT', '정찰 합본맵 <b>scenario2_map.map</b><br>지형 비용 <b>scenario2_terrain.json</b><br>위험 feature <b>risk_features.json</b><br>후보 루트 <b>scenario2_routes.yaml</b>')}
+                    ${ioStep('PREPROCESS', '표적 추출 → 루트 1m 샘플링 → 사거리 20~130m 검사 → 장애물 LoS 검사 → 노출/지형 점수화 → 교전순서 생성')}
+                    ${ioStep('OUTPUT', '시나리오2 실행 입력 <b>mission_plan.json</b><br>포탑 노드 입력 <b>engagements_json</b><br>LLM 서술 <b>llm_guidance</b>', g.available ? 'LLM ON' : 'LLM OFF')}
+                </div>`;
+
+                html += `<div style="border:1px solid var(--line-dim);background:rgba(4,12,8,0.72);padding:8px;font-size:11px;line-height:1.6;">
+                    <b style="color:#9ec5f0;">상황 구체화</b><br>
+                    1차 사격은 정찰 중 확인된 중간 위협 또는 차폐 뒤 표적을 사거리·시야·노출 조건이 맞는 checkpoint에서 처리한다.<br>
+                    2차 사격은 목적지 전차(enemy_final)를 대상으로 하며, 주변 시야 장애물과 지형 경사 때문에 직접 접근이 아니라 포탑 조준 가능 위치를 선택해 교전한다.<br>
+                    <span style="color:#ffd34d;">주의:</span> 현재 좌표 산출은 LLM이 임의 생성하는 값이 아니라, 기하 전처리 결과를 LLM이 수행 지침으로 설명하는 구조다.
+                </div>`;
+
+                html += '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;">';
+                for (const r of rows) {
+                    const isCurrent = current && current.id === r.id;
+                    const cpDist = pose && r.checkpoint ? dist2d(pose, r.checkpoint) : null;
+                    const tgtDist = pose && r.target ? dist2d(pose, r.target) : null;
+                    const band = String(r.exposure_band || 'unknown').toUpperCase();
+                    const bandColor = band.includes('HIGH') ? '#ff8a3d' : band.includes('LOW') ? '#39ff88' : '#ffd34d';
+                    const perText = g?.per_target?.[r.id] || r.rawTarget?.note || '';
+                    html += `<div style="border:1px solid ${isCurrent ? '#5ac8ff' : 'var(--line-dim)'};background:rgba(8,19,40,0.58);padding:8px;min-width:0;">
+                        <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:5px;"><b style="color:${isCurrent ? '#5ac8ff' : '#e8eefc'};">${r.index}차 사격 · ${escapeHtml(r.id)}</b><span style="font-size:10px;color:${bandColor};border:1px solid ${bandColor};padding:1px 5px;">${escapeHtml(band)}</span></div>
+                        ${kvLine('사격 checkpoint', r.checkpoint ? `(${numberText(r.checkpoint.x, 1)}, ${numberText(r.checkpoint.y, 1)}) R=${numberText(r.checkpoint.radius, 1)}m` : '없음')}
+                        ${kvLine('표적 좌표', r.target ? `(${numberText(r.target.x, 1)}, ${numberText(r.target.y, 1)}, z=${numberText(r.target.z, 1)})` : '없음')}
+                        ${kvLine('사격거리', Number.isFinite(r.range_m) ? `${numberText(r.range_m, 1)}m` : '—')}
+                        ${kvLine('현재→checkpoint', Number.isFinite(cpDist) ? `${numberText(cpDist, 1)}m` : '—')}
+                        ${kvLine('현재→target', Number.isFinite(tgtDist) ? `${numberText(tgtDist, 1)}m` : '—')}
+                        ${kvLine('LoS/재배치', `${r.los_clear === true ? 'clear' : r.los_clear === false ? 'blocked' : 'calc'} / ${r.reposition?.enabled ? 'fallback ON' : 'fallback OFF'}`)}
+                        ${perText ? `<div style="font-size:10.5px;color:#e8c37a;line-height:1.45;margin-top:6px;">LLM 지침: ${escapeHtml(perText)}</div>` : ''}
+                    </div>`;
+                }
+                html += '</div>';
+
+                html += `<div style="border:1px solid var(--line-dim);background:rgba(4,12,8,0.65);padding:8px;">
+                    <div style="font-size:11px;font-weight:800;color:#9ec5f0;margin-bottom:4px;">시계열 로그</div>
+                    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;">
+                        ${sparklineSvg(missionSeries, 'speed', '전차 속도', 'm/s', '#5ac8ff')}
+                        ${sparklineSvg(missionSeries, 'cpDist', '현재 checkpoint까지 거리', 'm', '#ffd34d')}
+                        ${sparklineSvg(missionSeries, 'targetDist', '현재 target까지 거리', 'm', '#ff8a3d')}
+                        ${sparklineSvg(missionSeries, 'turretPitch', '포탑 pitch feedback', '°', '#b084ff')}
+                    </div>
+                </div>`;
+
                 if (g.available) {
-                    html += `<div style="font-size:11px;margin-top:4px;"><b>LLM</b>: ${escapeHtml(safe(g.summary))}</div>`;
-                    for (const c of (g.cautions || [])) {
-                        html += `<div style="font-size:11px;color:#e8c37a;">⚠ ${escapeHtml(c)}</div>`;
-                    }
+                    html += `<div style="border:1px solid var(--line-dim);background:rgba(8,19,40,0.58);padding:8px;font-size:11px;line-height:1.6;">
+                        <b style="color:#9ec5f0;">LLM output</b><br>${escapeHtml(safe(g.summary))}<br>
+                        <span style="color:#b9c8e8;">순서 근거:</span> ${escapeHtml(safe(g.engage_order_reason, '—'))}
+                        ${(g.cautions || []).map((c) => `<div style="color:#e8c37a;">⚠ ${escapeHtml(c)}</div>`).join('')}
+                    </div>`;
                 } else if (g.error) {
-                    html += '<div style="font-size:11px;color:#889;">LLM 서술 미사용</div>';
+                    html += `<div style="font-size:11px;color:#889;">LLM 서술 미사용: ${escapeHtml(g.error)}</div>`;
+                }
+                if (Array.isArray(ver.problems) && ver.problems.length) {
+                    html += `<div style="font-size:11px;color:#ff8a3d;border:1px solid #ff8a3d;padding:6px;">검증 문제: ${escapeHtml(ver.problems.join('; '))}</div>`;
                 }
                 html += '</div>';
                 return html;
             }
             function renderSuddenDecision(state) {
-                // 돌발 대응(sudden_advisor_node, 라이브) — 미션 주행 중 신규 위협 결정(advise-only).
+                // sudden_advisor_node 라이브 판단을 입력→전처리→LLM/결정→출력으로 표시한다.
                 const sd = state?.suddenDecision;
-                if (!sd) return '<div style="font-size:11px;color:#5a6b62;padding:8px 0;">실시간 판단 대기 중 — 미션 주행 시작 후 표시됩니다.</div>';
-                const act = sd.action || 'NONE';
-                if (act === 'NONE' && !(sd.n_new > 0)) {
-                    return '<div style="font-size:11px;color:#7a8aa0;padding:8px 0;">돌발 대응 대기 (신규 위협 없음)</div>';
+                const latest = latestBridge(state);
+                const detections = getDetections(state);
+                const act = sd?.action || 'NONE';
+                const col = act === 'RETURN' ? '#ff3448' : act === 'ENGAGE' ? '#ffd34d' : act === 'BYPASS' ? '#5ac8ff' : '#7a8aa0';
+                let html = '<div style="display:grid;gap:10px;">';
+                html += `<div style="background:rgba(8,19,40,0.65);border:1px solid ${col};border-radius:5px;padding:8px 10px;">
+                    <div style="font-size:13px;font-weight:800;color:#fff;">실시간 판단 · <span style="color:${col};">${escapeHtml(act)}</span></div>
+                    <div style="font-size:11px;color:#b9c8e8;margin-top:3px;">신규 ${safe(sd?.n_new, 0)} · 교전가능 ${safe(sd?.n_engageable, 0)} · 최대위험 ${safe(sd?.max_risk, 0)} · YOLO/Fusion 객체 ${detections.length}</div>
+                </div>`;
+                html += `<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;">
+                    ${ioStep('LIVE INPUT', `현재 pose / 속도 / 포탑각<br>YOLO·fusion detections ${detections.length}개<br>정찰 합본맵 scenario2_map.map`)}
+                    ${ioStep('PREPROCESS', '새 위협 판정 → 사거리/LoS/위험점수 → hysteresis 통과 확인 → RETURN/ENGAGE/BYPASS 후보화')}
+                    ${ioStep('OUTPUT', 'decision/status 패널<br>/tank/mission/abort 또는 계속 주행<br>LLM 조언은 있으면 reason으로 표시', sd?.llm?.available ? 'LLM ON' : 'LLM WAIT')}
+                </div>`;
+                if (!sd) {
+                    html += '<div style="font-size:11px;color:#5a6b62;padding:8px 0;">실시간 판단 대기 중 — 시나리오2 미션 주행과 sudden_advisor_node 상태가 들어오면 표시됩니다.</div>';
+                } else {
+                    html += `<div style="border:1px solid var(--line-dim);background:rgba(4,12,8,0.72);padding:8px;font-size:11px;line-height:1.6;">
+                        <b style="color:#9ec5f0;">판단 근거</b><br>${escapeHtml(safe(sd.reason, '—'))}
+                    </div>`;
+                    const g = sd.llm || {};
+                    if (g.available) {
+                        html += `<div style="border:1px solid var(--line-dim);background:rgba(8,19,40,0.58);padding:8px;font-size:11px;line-height:1.6;">
+                            <b style="color:#9ec5f0;">LLM realtime output</b><br>
+                            action=<b style="color:${col};">${escapeHtml(safe(g.action))}</b><br>
+                            ${escapeHtml(safe(g.reason))}
+                        </div>`;
+                    }
+                    const fp = sd.recommended_firing_point || sd.fire_point || g.fire_point || g.recommended_firing_point;
+                    html += `<div style="font-size:10.5px;color:#7a8aa0;line-height:1.55;border:1px dashed var(--line-dim);padding:7px;">
+                        LLM 사격 좌표 활용 확장 포인트: <b>recommended_firing_point</b> 또는 <b>fire_point</b> 필드가 dashboard state로 들어오면 여기 표시됩니다.<br>
+                        현재 표시값: ${fp ? escapeHtml(JSON.stringify(fp)) : '없음 — 현재는 기하 기반 mission_plan 좌표를 사용'}
+                    </div>`;
                 }
-                const col = act === 'RETURN' ? '#f39' : act === 'ENGAGE' ? '#e8c37a' : act === 'BYPASS' ? '#9ec5f0' : '#7a8aa0';
-                let html = '<div>';
-                html += '<div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">돌발 대응 (라이브)</div>';
-                html += `<div style="font-size:13px;margin-bottom:2px;">결정 <b style="color:${col}">${escapeHtml(act)}</b> · 신규 ${safe(sd.n_new, 0)} · 교전가능 ${safe(sd.n_engageable, 0)} · 최대위험 ${safe(sd.max_risk, 0)}</div>`;
-                html += `<div style="font-size:11px;margin:2px 0;">${escapeHtml(safe(sd.reason))}</div>`;
-                const g = sd.llm || {};
-                if (g.available) {
-                    html += `<div style="font-size:11px;margin-top:3px;"><b>LLM</b> [${escapeHtml(safe(g.action))}]: ${escapeHtml(safe(g.reason))}</div>`;
-                }
+                html += `<div style="border:1px solid var(--line-dim);background:rgba(4,12,8,0.65);padding:8px;">
+                    <div style="font-size:11px;font-weight:800;color:#9ec5f0;margin-bottom:4px;">실시간 위험 시계열</div>
+                    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;">
+                        ${sparklineSvg(suddenSeries, 'risk', 'max_risk', '', '#ff8a3d', 100)}
+                        ${sparklineSvg(suddenSeries, 'nNew', '신규 위협 수', '', '#ffd34d')}
+                        ${sparklineSvg(suddenSeries, 'nEngageable', '교전 가능 수', '', '#5ac8ff')}
+                        ${sparklineSvg(missionSeries, 'cpDist', 'checkpoint 거리', 'm', '#39ff88')}
+                    </div>
+                </div>`;
                 html += '</div>';
                 return html;
             }
@@ -2658,6 +2876,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     latestState = await response.json();
                     lastFetchOk = true;
+                    pushMissionTelemetry(latestState);
                     updateHeader(latestState);
                     updateLeftPanel(latestState);
                     drawMap(latestState);

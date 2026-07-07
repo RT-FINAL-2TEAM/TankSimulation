@@ -40,6 +40,11 @@ export TANK_TOPIC_LIDAR_CLUSTERS=/tank/phone_sim2real/muxed_lidar_clusters
 # TANK_WS 를 지정하면 그 값을 우선 사용한다.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${TANK_WS:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
+# Scenario1 정찰 결과로 생성된 mission_plan.json을 Scenario2 교전 시퀀스에 사용한다.
+export TANK_USE_MISSION_PLAN=true
+export TANK_MISSION_PLAN_FILE="$WORKSPACE/recon_reports/mission_plan.json"
+
 LOG_ROOT="${LOG_ROOT:-$WORKSPACE/logs}"
 RUN_ID="scenario2_terminator_$(date +%Y%m%d_%H%M%S)"
 LOG_DIR="$LOG_ROOT/$RUN_ID"
@@ -47,7 +52,7 @@ LOG_DIR="$LOG_ROOT/$RUN_ID"
 # 기본값은 실제 데스크톱 RViz2 창이다.
 # --web-rviz: 기존 웹 RViz 서버 모드
 # --no-rviz : RViz2 창 생략, marker publisher만 실행
-RVIZ_MODE="desktop"   # desktop | web | none
+RVIZ_MODE="none"   # desktop | web | none
 SKIP_RESET="false"
 BUILD_MODE="auto"     # auto | rebuild | never
 BRIDGE_HEALTH_URL="${BRIDGE_HEALTH_URL:-http://127.0.0.1:5000/health}"
@@ -57,11 +62,9 @@ MAP_WAIT_SEC="${MAP_WAIT_SEC:-180}"
 
 usage() {
   cat <<USAGE
-Usage: $0 [--no-rviz] [--web-rviz] [--skip-reset] [--rebuild-map] [--no-build-map]
-
+Usage: $0 [--no-rviz] [--skip-reset] [--rebuild-map] [--no-build-map]
 Options:
   --no-rviz       RViz2 창 없이 scenario2 marker publisher만 실행
-  --web-rviz      기존 웹 RViz 모드로 실행(데스크톱 RViz2 대신 웹 서버)
   --skip-reset    run_scenario2_scenario.py 실행 전 simulator reset 요청 생략
   --rebuild-map   기존 scenario2_map.map이 있어도 build_scenario2_map.py 재실행
   --no-build-map  map 자동 생성을 하지 않음. map이 없으면 에러
@@ -82,8 +85,9 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --web-rviz)
-      RVIZ_MODE="web"
-      shift
+      echo "[ERROR] 이 PC에서는 Web RViz를 실행하지 않습니다."
+      echo "        Web/RViz는 시각화용 다른 PC에서 실행하세요."
+      exit 2
       ;;
     --skip-reset)
       SKIP_RESET="true"
@@ -173,7 +177,7 @@ echo "============================================================"
 echo "[T1] ros_bridge"
 echo "============================================================"
 echo "Command:"
-echo "  TANK_MODE=auto TANK_EPISODE_CONTROL=true ros2 run ros_bridge ros_bridge"
+echo "  TANK_MODE=auto TANK_EPISODE_CONTROL=true TANK_LIVE_VIEW=true ros2 run ros_bridge ros_bridge"
 echo
 echo "[YOLO MODEL]"
 echo "  TANK_YOLO_MODEL_PATH=\${TANK_YOLO_MODEL_PATH:-<not set>}"
@@ -181,7 +185,7 @@ echo
 echo "[LOG] $LOG_DIR/bridge.log"
 echo
 
-TANK_MODE=auto TANK_EPISODE_CONTROL=true ros2 run ros_bridge ros_bridge 2>&1 | tee "$LOG_DIR/bridge.log"
+TANK_MODE=auto TANK_EPISODE_CONTROL=true TANK_LIVE_VIEW=true ros2 run ros_bridge ros_bridge 2>&1 | tee "$LOG_DIR/bridge.log"
 
 echo
 echo "[EXIT] ros_bridge 종료됨. 창을 닫거나 Enter를 누르세요."
@@ -589,11 +593,17 @@ echo "  좌하: 자동 순차 실행 manager"
 echo "  우하: debug monitor"
 echo
 
-# 웹 3D(/view의 RVIZ 3D 탭, /rviz3d)용 데이터 소켓 rosbridge :9090.
-# 이미 떠 있지 않으면 백그라운드로 기동(로그는 디스크 절약 위해 /dev/null로 버림).
-if ! pgrep -f rosbridge_websocket >/dev/null 2>&1; then
-  echo "[WEB] rosbridge_websocket :9090 백그라운드 기동 (웹 3D 데이터 소켓)"
-  ros2 run rosbridge_server rosbridge_websocket >/dev/null 2>&1 &
+# 웹 3D용 rosbridge websocket은 시각화용 다른 PC에서 실행한다.
+# 이 PC에서는 자동 기동하지 않는다.
+ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET="${ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET:-false}"
+
+if [[ "$ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET" == "true" ]]; then
+  if ! pgrep -f rosbridge_websocket >/dev/null 2>&1; then
+    echo "[WEB] rosbridge_websocket :9090 백그라운드 기동"
+    ros2 run rosbridge_server rosbridge_websocket >/dev/null 2>&1 &
+  fi
+else
+  echo "[WEB] local rosbridge_websocket disabled"
 fi
 
 # -u/--no-dbus: 이미 떠 있는 terminator 인스턴스에 DBus로 붙어 커스텀 -g 설정/레이아웃이

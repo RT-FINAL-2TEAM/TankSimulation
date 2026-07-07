@@ -76,25 +76,44 @@ _DEFAULT_ENGAGEMENTS_JSON = (
 )
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Parse a user-facing boolean env var while preserving explicit false."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "y", "on")
+
+
 def _scenario2_engagements(project_root: str) -> str:
     """사격 시퀀스(engagements_json) 결정.
 
-    TANK_USE_MISSION_PLAN=true 이고 mission_plan.json에 engagements가 있으면 **정찰→자동 도출** 사격
-    시퀀스를 쓴다(build_mission_plan.py 산출). 아니면 cheol 검증 하드코딩값(_DEFAULT)을 쓴다(안전 기본).
-    실패(파일 없음/파싱 오류)해도 항상 기본값으로 폴백해 시나리오2가 깨지지 않게 한다.
+    기본 정책을 "mission_plan.json이 있으면 자동 사용"으로 바꾼다.
+    - TANK_USE_MISSION_PLAN=true  : mission_plan 강제 사용
+    - TANK_USE_MISSION_PLAN=false : 검증 하드코딩값 강제 사용
+    - env 미지정                  : recon_reports/mission_plan.json이 있으면 자동 사용
+
+    실패(파일 없음/파싱 오류/engagements 없음)하면 항상 안전 기본값으로 폴백한다.
     """
-    use_mp = os.environ.get("TANK_USE_MISSION_PLAN", "false").strip().lower() in ("1", "true", "yes", "y")
-    if not use_mp:
-        return _DEFAULT_ENGAGEMENTS_JSON
     import json
+
     mp_file = os.environ.get(
         "TANK_MISSION_PLAN_FILE", os.path.join(project_root, "recon_reports", "mission_plan.json")
     )
+    mission_plan_exists = Path(mp_file).is_file()
+    use_mp = _env_bool("TANK_USE_MISSION_PLAN", default=mission_plan_exists)
+
+    if not use_mp:
+        reason = "env=false" if os.environ.get("TANK_USE_MISSION_PLAN") is not None else "mission_plan 없음"
+        print(f"[scenario2] mission_plan 미사용({reason}) → 기본 사격 시퀀스 사용")
+        return _DEFAULT_ENGAGEMENTS_JSON
+
     try:
         with open(mp_file, "r", encoding="utf-8") as f:
-            engs = json.load(f).get("engagements")
+            data = json.load(f)
+        engs = data.get("engagements")
         if isinstance(engs, list) and engs:
             print(f"[scenario2] mission_plan 사격 시퀀스 사용: {mp_file} (표적 {len(engs)}개)")
+            print(f"[scenario2] route_recommended={data.get('route_recommended', '-')} order={data.get('plan', {}).get('engage_order', '-')}")
             return json.dumps(engs, ensure_ascii=False)
         print(f"[scenario2] mission_plan에 engagements 없음 → 기본 사격 시퀀스 사용: {mp_file}")
     except FileNotFoundError:
@@ -102,8 +121,6 @@ def _scenario2_engagements(project_root: str) -> str:
     except Exception as exc:  # noqa: BLE001 - 어떤 오류든 기본값 폴백
         print(f"[scenario2] mission_plan 로드 실패({exc}) → 기본 사격 시퀀스 사용")
     return _DEFAULT_ENGAGEMENTS_JSON
-
-
 def generate_launch_description():
     project_root = _project_root()
     _clear_stale_scenario2_completion_files(project_root)
