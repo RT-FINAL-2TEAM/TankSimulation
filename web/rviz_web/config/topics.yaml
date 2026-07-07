@@ -12,6 +12,8 @@ marker_arrays:
   - /tank/rviz/lidar_cluster_markers
   - /tank/rviz/fused_object_markers
   - /tank/rviz/discovered_object_markers
+  - /tank/rviz/phone_sim2real_markers
+  - /tank/rviz/phone_sim2real_image_cluster_markers
   - /tank/rviz/recon_map_markers
   - /tank/rviz/terrain_markers
   - /tank/rviz/mission_map_markers

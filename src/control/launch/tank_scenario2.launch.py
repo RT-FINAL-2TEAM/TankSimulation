@@ -71,30 +71,49 @@ _DEFAULT_ENGAGEMENTS_JSON = (
     '"target":{"x":135.46,"y":276.87,"z":0.0},'
     '"target_from_enemy_pose":true,'
     '"target_height_offset_m":0.0,'
-    '"reposition":{"enabled":true,"heading_deg":0.0,"goal_offset_m":16.0,"min_travel_m":3.0,"arrival_radius_m":10.5,"max_attempts":2}'
+    '"reposition":{"enabled":false,"heading_deg":0.0,"goal_offset_m":16.0,"min_travel_m":3.0,"arrival_radius_m":10.5,"max_attempts":2}'
     '}]'
 )
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Parse a user-facing boolean env var while preserving explicit false."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "y", "on")
 
 
 def _scenario2_engagements(project_root: str) -> str:
     """사격 시퀀스(engagements_json) 결정.
 
-    TANK_USE_MISSION_PLAN=true 이고 mission_plan.json에 engagements가 있으면 **정찰→자동 도출** 사격
-    시퀀스를 쓴다(build_mission_plan.py 산출). 아니면 cheol 검증 하드코딩값(_DEFAULT)을 쓴다(안전 기본).
-    실패(파일 없음/파싱 오류)해도 항상 기본값으로 폴백해 시나리오2가 깨지지 않게 한다.
+    기본 정책을 "mission_plan.json이 있으면 자동 사용"으로 바꾼다.
+    - TANK_USE_MISSION_PLAN=true  : mission_plan 강제 사용
+    - TANK_USE_MISSION_PLAN=false : 검증 하드코딩값 강제 사용
+    - env 미지정                  : recon_reports/mission_plan.json이 있으면 자동 사용
+
+    실패(파일 없음/파싱 오류/engagements 없음)하면 항상 안전 기본값으로 폴백한다.
     """
-    use_mp = os.environ.get("TANK_USE_MISSION_PLAN", "false").strip().lower() in ("1", "true", "yes", "y")
-    if not use_mp:
-        return _DEFAULT_ENGAGEMENTS_JSON
     import json
+
     mp_file = os.environ.get(
         "TANK_MISSION_PLAN_FILE", os.path.join(project_root, "recon_reports", "mission_plan.json")
     )
+    mission_plan_exists = Path(mp_file).is_file()
+    use_mp = _env_bool("TANK_USE_MISSION_PLAN", default=mission_plan_exists)
+
+    if not use_mp:
+        reason = "env=false" if os.environ.get("TANK_USE_MISSION_PLAN") is not None else "mission_plan 없음"
+        print(f"[scenario2] mission_plan 미사용({reason}) → 기본 사격 시퀀스 사용")
+        return _DEFAULT_ENGAGEMENTS_JSON
+
     try:
         with open(mp_file, "r", encoding="utf-8") as f:
-            engs = json.load(f).get("engagements")
+            data = json.load(f)
+        engs = data.get("engagements")
         if isinstance(engs, list) and engs:
             print(f"[scenario2] mission_plan 사격 시퀀스 사용: {mp_file} (표적 {len(engs)}개)")
+            print(f"[scenario2] route_recommended={data.get('route_recommended', '-')} order={data.get('plan', {}).get('engage_order', '-')}")
             return json.dumps(engs, ensure_ascii=False)
         print(f"[scenario2] mission_plan에 engagements 없음 → 기본 사격 시퀀스 사용: {mp_file}")
     except FileNotFoundError:
@@ -102,8 +121,6 @@ def _scenario2_engagements(project_root: str) -> str:
     except Exception as exc:  # noqa: BLE001 - 어떤 오류든 기본값 폴백
         print(f"[scenario2] mission_plan 로드 실패({exc}) → 기본 사격 시퀀스 사용")
     return _DEFAULT_ENGAGEMENTS_JSON
-
-
 def generate_launch_description():
     project_root = _project_root()
     _clear_stale_scenario2_completion_files(project_root)
@@ -144,6 +161,15 @@ def generate_launch_description():
                 # 도착 후 pause/exit하지 않고 controller가 STOP을 유지해야 포탑 노드가 실제 발사한다.
                 "pause_on_goal_reached": "false",
                 "exit_on_goal_reached": "false",
+                # Intermediate firing checkpoints must remain alive; final home
+                # arrival becomes an all-axis terminal STOP only after the
+                # ballistic FSM reports returned/complete.
+                # Final STOP is owned by ballistic_turret_node, not by the
+                # controller's generic /tank/goal/pose check.  Home == spawn,
+                # so controller-owned terminal logic can falsely stop at launch
+                # when another stale planner/status publisher exists.
+                "terminal_stop_on_turret_complete": "false",
+                "terminal_stop_require_goal_departure": "false",
                 # The external Scenario-2 harness declares success when it sees
                 # route_A.json(reached=true). Hold that report at (50,260)
                 # until ballistic_turret_node has fired and physically returned.
@@ -201,7 +227,7 @@ def generate_launch_description():
                 "pitch_tolerance_deg": 0.75,
                 "yaw_control_deadband_deg": 1.0,
                 "pitch_control_deadband_deg": 0.75,
-                "yaw_weight_max": 0.42,
+                "yaw_weight_max": 0.38,
                 # Delayed-feedback hybrid yaw control: coarse closed-loop
                 # tracking, then neutral/brake + bounded time pulse +
                 # fresh-feedback observation around the target.
@@ -219,7 +245,7 @@ def generate_launch_description():
                 "yaw_settle_rate_deg_s": 0.65,
                 "yaw_overshoot_min_prev_error_deg": 1.20,
                 "yaw_overshoot_min_current_error_deg": 0.35,
-                "aim_stable_sec": 0.60,
+                "aim_stable_sec": 0.22,
                 "turret_feedback_ttl_sec": 0.75,
                 "on_target_cycles": 1,
                 # F is held down after *each* target so the next drive leg has
@@ -242,11 +268,16 @@ def generate_launch_description():
                 "return_y": 27.0,
                 "return_radius_m": 10.0,
                 "return_goal_topic": "/tank/mission/goal_pose",
+                # sudden_advisor RETURN is a safety preemption of the fixed
+                # two-target firing FSM, not merely an MFD recommendation.
+                "mission_abort_enabled": True,
+                "mission_abort_topic": "/tank/mission/abort",
             }],
         ),
-        # 돌발 대응 자문(advise-only) — perception→sudden_decision→/tank/decision/status(+MFD 패널).
-        # goal/engage를 발행하지 않아 ballistic 체크포인트 시퀀스와 충돌 없음(decision_node와 달리 안전).
-        # use_llm=false로 LLM 자문만 끄고 수식 판단만 쓸 수 있음.
+        # 돌발 대응: perception→sudden_decision→/tank/decision/status(+MFD 패널).
+        # RETURN만 히스테리시스 통과 후 실제 실행한다. abort 토픽이 ballistic FSM을
+        # 중단하고 planner를 home direct-A*로 고정하므로, 기존 북진 checkpoint를 다시 밟지 않는다.
+        # use_llm=false로 LLM 자문만 끄고 수식 판단+복귀 실행은 유지할 수 있다.
         Node(
             package="mission", executable="sudden_advisor_node", name="tank_sudden_advisor_node",
             output="screen",
@@ -255,6 +286,15 @@ def generate_launch_description():
                 "tick_hz": 2.0,
                 "hysteresis_ticks": 2,
                 "use_llm": True,
+                "execute_return": True,
+                # SCENARIO2_RETURN_ARM_GUARD_V1: prevent spawn-point self-return
+                # if start-area detections are briefly classified as new threats.
+                "return_arm_min_distance_from_home_m": 35.0,
+                "return_x": 59.0,
+                "return_y": 27.0,
+                "return_goal_topic": "/tank/mission/goal_pose",
+                "mission_abort_topic": "/tank/mission/abort",
+                "return_republish_sec": 0.5,
             }],
         ),
     ])

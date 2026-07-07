@@ -91,6 +91,18 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
+      Name: Phone YOLO Virtual Obstacles
+      Topic:
+        Value: /tank/rviz/phone_sim2real_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Phone YOLO Replan Clusters
+      Topic:
+        Value: /tank/rviz/phone_sim2real_image_cluster_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
       Name: Final Terrain Elevation Grid
       Topic:
         Value: /tank/terrain/final_elevation_markers

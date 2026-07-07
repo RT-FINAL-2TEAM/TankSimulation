@@ -4,7 +4,7 @@ set -Eeuo pipefail
 # Use merged real LiDAR + phone_sim2real synthetic clusters for planner.
 export TANK_TOPIC_LIDAR_CLUSTERS=/tank/phone_sim2real/muxed_lidar_clusters
 
-# run_scenario1_auto_terminator_v2.sh
+# run_scenario1_auto_terminator_v3.sh
 #
 # 목적:
 #   Terminator 4분할 창을 열고 시나리오 1 전체 절차를 자동 실행한다.
@@ -18,9 +18,13 @@ export TANK_TOPIC_LIDAR_CLUSTERS=/tank/phone_sim2real/muxed_lidar_clusters
 #   - scenario2_map.map / scenario2_terrain.npz 생성 여부 검증
 #   - scenario2_terrain.npz metadata에 route_A, route_B 둘 다 들어있는지 검증
 #
+# v3 시각화 분리:
+#   - 이 PC: marker/map/terrain publisher만 실행(use_rviz:=false)
+#   - 데스크톱 RViz2, Web RViz, rosbridge_websocket(:9090)은 다른 시각화 PC에서 실행
+#
 # Pane 구성:
 #   좌상: T1 ros_bridge
-#   우상: T2 RViz launch + RViz 창 최대화
+#   우상: T2 marker/map/terrain publisher만 실행 (이 PC에서는 RViz/Web 미실행)
 #   좌하: T3 자동 순차 실행 manager
 #   우하: T4 debug monitor
 #
@@ -29,7 +33,7 @@ export TANK_TOPIC_LIDAR_CLUSTERS=/tank/phone_sim2real/muxed_lidar_clusters
 #   (스크립트가 자기 위치로 워크스페이스를 자동 감지. 필요시 TANK_WS로 강제 지정)
 #
 # 옵션:
-#   --no-rviz          RViz 실행 안 함
+#   --no-rviz          호환용 no-op (기본값이 이미 marker publisher-only)
 #   --skip-reset       run_recon_scenario.py 전 simulator reset 생략
 #   --postprocess-only 정찰은 생략하고 analyze_run.py + build_scenario2_map.py만 실행
 #   --keep-old-output  기존 recon_reports 산출물 삭제하지 않음
@@ -42,11 +46,11 @@ LOG_ROOT="${LOG_ROOT:-$WORKSPACE/logs}"
 RUN_ID="scenario1_terminator_$(date +%Y%m%d_%H%M%S)"
 LOG_DIR="$LOG_ROOT/$RUN_ID"
 
-USE_RVIZ="true"
+# 이 PC는 시각화 토픽만 발행한다.
+# RViz2 / Web RViz / rosbridge websocket은 시각화 전용 다른 PC에서 실행한다.
 SKIP_RESET="false"
 POSTPROCESS_ONLY="false"
 KEEP_OLD_OUTPUT="false"
-WEB_DEBUG_URL="false"
 BRIDGE_HEALTH_URL="${BRIDGE_HEALTH_URL:-http://127.0.0.1:5000/health}"
 
 usage() {
@@ -54,11 +58,10 @@ usage() {
 Usage: $0 [--no-rviz] [--skip-reset] [--postprocess-only] [--keep-old-output]
 
 Options:
-  --no-rviz          RViz pane에서 RViz를 실행하지 않음
+  --no-rviz          호환용 옵션. 이 PC는 기본적으로 RViz 창을 띄우지 않음
   --skip-reset       run_recon_scenario.py 실행 전 simulator reset 요청 생략
   --postprocess-only run_recon_scenario.py는 생략하고 analyze/build만 실행
   --keep-old-output  시작 전에 기존 route/scenario2 산출물을 삭제하지 않음
-  --web-debug-url    debug pane에 rviz_web URL 안내도 표시
   -h, --help         도움말 출력
 
 Environment:
@@ -71,7 +74,7 @@ USAGE
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-rviz)
-      USE_RVIZ="false"
+      echo "[INFO] --no-rviz: 기본 marker publisher-only 모드가 이미 활성화되어 있습니다."
       shift
       ;;
     --skip-reset)
@@ -87,8 +90,9 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --web-debug-url)
-      WEB_DEBUG_URL="true"
-      shift
+      echo "[ERROR] 이 PC에서는 Web RViz를 실행하거나 안내하지 않습니다."
+      echo "        Web/RViz는 시각화 전용 다른 PC에서 실행하세요."
+      exit 2
       ;;
     -h|--help)
       usage
@@ -167,7 +171,7 @@ echo "============================================================"
 echo "[T1] ros_bridge"
 echo "============================================================"
 echo "Command:"
-echo "  TANK_MODE=auto TANK_EPISODE_CONTROL=true ros2 run ros_bridge ros_bridge"
+echo "  TANK_MODE=auto TANK_EPISODE_CONTROL=true TANK_LIVE_VIEW=true ros2 run ros_bridge ros_bridge"
 echo
 echo "[YOLO MODEL]"
 echo "  TANK_YOLO_MODEL_PATH=\${TANK_YOLO_MODEL_PATH:-<not set>}"
@@ -175,7 +179,7 @@ echo
 echo "[LOG] $LOG_DIR/bridge.log"
 echo
 
-TANK_MODE=auto TANK_EPISODE_CONTROL=true ros2 run ros_bridge ros_bridge 2>&1 | tee "$LOG_DIR/bridge.log"
+TANK_MODE=auto TANK_EPISODE_CONTROL=true TANK_LIVE_VIEW=true ros2 run ros_bridge ros_bridge 2>&1 | tee "$LOG_DIR/bridge.log"
 
 echo
 echo "[EXIT] ros_bridge 종료됨. 창을 닫거나 Enter를 누르세요."
@@ -184,77 +188,33 @@ EOF
 chmod +x "$BRIDGE_SCRIPT"
 
 RVIZ_SCRIPT="$RUNTIME_DIR/s1_rviz_pane.sh"
-if [[ "$USE_RVIZ" == "true" ]]; then
-  cat > "$RVIZ_SCRIPT" <<EOF
+cat > "$RVIZ_SCRIPT" <<EOF
 #!/usr/bin/env bash
 set -Eeuo pipefail
-printf '\\033]0;S1-T2 RViz\\007'
+printf '\033]0;S1-T2 Marker Publishers (remote RViz)\007'
 source "$COMMON_ENV"
 
 echo "============================================================"
-echo "[T2] RViz"
+echo "[T2] Marker / Map / Terrain Publisher Only"
 echo "============================================================"
+echo "이 PC에서는 데스크톱 RViz2와 Web RViz를 실행하지 않습니다."
+echo "시각화 전용 다른 PC에서 같은 ROS_DOMAIN_ID / DDS 네트워크로"
+echo "RViz를 실행해 이 노드가 발행하는 토픽을 구독하세요."
+echo
 echo "Command:"
-echo "  ros2 launch rviz_visualization tank_rviz.launch.py"
+echo "  ros2 launch rviz_visualization tank_rviz.launch.py use_rviz:=false"
 echo
 echo "[LOG] $LOG_DIR/rviz.log"
 echo
 
-ros2 launch rviz_visualization tank_rviz.launch.py 2>&1 | tee "$LOG_DIR/rviz.log" &
-RVIZ_LAUNCH_PID=\$!
-
-echo "[WAIT] RViz 창 감지 후 최대화 시도"
-for _ in \$(seq 1 60); do
-  if command -v wmctrl >/dev/null 2>&1; then
-    WIN_ID="\$(wmctrl -lx 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /rviz|rviz2/ {print \$1; exit}')"
-    if [[ -n "\${WIN_ID:-}" ]]; then
-      wmctrl -ir "\$WIN_ID" -b add,maximized_vert,maximized_horz >/dev/null 2>&1 || true
-      wmctrl -ia "\$WIN_ID" >/dev/null 2>&1 || true
-      echo "[OK] RViz window maximized"
-      break
-    fi
-  elif command -v xdotool >/dev/null 2>&1; then
-    WIN_ID="\$(xdotool search --name 'RViz' 2>/dev/null | head -n 1 || true)"
-    if [[ -n "\${WIN_ID:-}" ]]; then
-      xdotool windowactivate "\$WIN_ID" >/dev/null 2>&1 || true
-      xdotool key F11 >/dev/null 2>&1 || true
-      echo "[OK] RViz window activated/fullscreen attempt"
-      break
-    fi
-  else
-    echo "[WARN] wmctrl/xdotool 없음. RViz 자동 최대화 생략."
-    echo "       설치 권장: sudo apt install -y wmctrl"
-    break
-  fi
-  sleep 0.5
-done
-
-wait "\$RVIZ_LAUNCH_PID"
+# 실제 RViz2 창은 생략하고, 정적맵/객체/지형/차체 marker publisher만 실행한다.
+ros2 launch rviz_visualization tank_rviz.launch.py use_rviz:=false \
+  2>&1 | tee "$LOG_DIR/rviz.log"
 
 echo
-echo "[EXIT] RViz launch 종료됨. 창을 닫거나 Enter를 누르세요."
+echo "[EXIT] marker publisher 종료됨. 창을 닫거나 Enter를 누르세요."
 exec bash
 EOF
-else
-  cat > "$RVIZ_SCRIPT" <<EOF
-#!/usr/bin/env bash
-set -Eeuo pipefail
-printf '\\033]0;S1-T2 Markers (no RViz window)\\007'
-source "$COMMON_ENV"
-echo "============================================================"
-echo "[T2] 데스크톱 RViz2 창 생략 (--no-rviz) — 마커 발행 노드만 실행"
-echo "============================================================"
-echo "GPU-less에서 무거운 RViz2 창은 끄되, 마커 발행 노드는 켜서"
-echo "웹 RViz 3D(/view의 RVIZ 3D 탭)가 정적맵/객체/지형 마커를 그대로 받게 한다."
-echo "Command:"
-echo "  ros2 launch rviz_visualization tank_rviz.launch.py use_rviz:=false"
-echo
-ros2 launch rviz_visualization tank_rviz.launch.py use_rviz:=false 2>&1 | tee "$LOG_DIR/rviz.log"
-echo
-echo "[EXIT] 마커 노드 종료됨. 창을 닫거나 Enter를 누르세요."
-exec bash
-EOF
-fi
 chmod +x "$RVIZ_SCRIPT"
 
 MANAGER_SCRIPT="$RUNTIME_DIR/s1_manager_pane.sh"
@@ -547,12 +507,6 @@ echo "종료: Ctrl+C"
 echo
 echo "[LOG DIR] $LOG_DIR"
 echo
-if [[ "$WEB_DEBUG_URL" == "true" ]]; then
-  echo "rviz_web URL 예시:"
-  echo "  http://127.0.0.1:5055/rviz3d?frame=tank_map&cloud=off&rays=0&vectors=0"
-  echo
-fi
-
 sleep 4
 
 watch -n 2 "
@@ -626,10 +580,10 @@ cat > "$CONFIG_FILE" <<EOF
 [plugins]
 EOF
 
-echo "[RUN] Terminator Scenario 1 Auto v2"
+echo "[RUN] Terminator Scenario 1 Auto v3 (remote visualization)"
 echo "      workspace       : $WORKSPACE"
 echo "      log dir         : $LOG_DIR"
-echo "      rviz            : $USE_RVIZ"
+echo "      visualization   : remote RViz only (local RViz/Web disabled)"
 echo "      skip_reset      : $SKIP_RESET"
 echo "      postprocess_only: $POSTPROCESS_ONLY"
 echo "      keep_old_output : $KEEP_OLD_OUTPUT"
@@ -637,16 +591,22 @@ echo "      config          : $CONFIG_FILE"
 echo
 echo "Terminator 4분할 창이 열립니다:"
 echo "  좌상: ros_bridge"
-echo "  우상: RViz"
+echo "  우상: marker/map/terrain publisher (RViz 창 없음)"
 echo "  좌하: 자동 순차 실행 manager + postprocess 검증"
 echo "  우하: debug monitor"
 echo
 
-# 웹 3D(/view의 RVIZ 3D 탭, /rviz3d)용 데이터 소켓 rosbridge :9090.
-# 이미 떠 있지 않으면 백그라운드로 기동(로그는 디스크 절약 위해 /dev/null로 버림).
-if ! pgrep -f rosbridge_websocket >/dev/null 2>&1; then
-  echo "[WEB] rosbridge_websocket :9090 백그라운드 기동 (웹 3D 데이터 소켓)"
-  ros2 run rosbridge_server rosbridge_websocket >/dev/null 2>&1 &
+# Web RViz용 rosbridge websocket(:9090)은 시각화 전용 다른 PC에서 실행한다.
+# 이 PC에서는 기본적으로 기동하지 않는다. 긴급 점검에서만 환경변수로 명시적으로 허용할 수 있다.
+ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET="${ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET:-false}"
+
+if [[ "$ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET" == "true" ]]; then
+  if ! pgrep -f rosbridge_websocket >/dev/null 2>&1; then
+    echo "[WEB] ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET=true → local websocket :9090 기동"
+    ros2 run rosbridge_server rosbridge_websocket >/dev/null 2>&1 &
+  fi
+else
+  echo "[WEB] local rosbridge_websocket disabled (remote visualization PC owns Web RViz)"
 fi
 
 # -u/--no-dbus: 이미 떠 있는 terminator 인스턴스에 DBus로 붙어 커스텀 -g 설정/레이아웃이

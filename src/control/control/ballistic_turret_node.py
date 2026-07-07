@@ -44,6 +44,8 @@ TOPIC_TURRET_STATUS = "/tank/turret/status"
 TOPIC_ENGAGE_RESULT = "/tank/engage/result"
 TOPIC_MISSION_GOAL = "/tank/mission/goal_pose"
 TOPIC_REPOSITION_GOAL = "/tank/mission/reposition_goal"
+# A safety RETURN from sudden_advisor_node must preempt the ordered firing FSM.
+TOPIC_MISSION_ABORT = "/tank/mission/abort"
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -82,6 +84,11 @@ class BallisticTurretNode(Node):
         self.declare_parameter("target_id", "enemy_main")
         # JSON list of ordered engagement objects.  See tank_scenario2.launch.py.
         self.declare_parameter("engagements_json", "")
+        # SCENARIO2_INITIAL_CHECKPOINT_GOAL_V1
+        # Scenario-2 home and spawn are identical.  Announce the initial
+        # route endpoint from the FSM itself so A* never starts from a stale
+        # return/home goal before a route has been generated.
+        self.declare_parameter("initial_checkpoint_goal_refresh_sec", 0.75)
 
         # Dataset-calibrated ballistic model and measured mechanical limits.
         self.declare_parameter("ballistic_k", 0.001520)
@@ -162,6 +169,10 @@ class BallisticTurretNode(Node):
         self.declare_parameter("return_y", 27.0)
         self.declare_parameter("return_radius_m", 10.0)
         self.declare_parameter("return_goal_topic", TOPIC_MISSION_GOAL)
+        # Emergency/sudden RETURN preempts aiming, firing recovery and the next
+        # checkpoint.  It is intentionally independent of return_enabled.
+        self.declare_parameter("mission_abort_enabled", True)
+        self.declare_parameter("mission_abort_topic", TOPIC_MISSION_ABORT)
 
         # When the target solution is below/above the mechanically reachable
         # gun pitch because the hull is tilted, do not hold F/R forever.
@@ -186,6 +197,10 @@ class BallisticTurretNode(Node):
         )
         self.engagements = self._load_engagements()
         self.stage_index = 0
+        self.initial_checkpoint_goal_refresh_sec = max(
+            0.10,
+            float(self.get_parameter("initial_checkpoint_goal_refresh_sec").value),
+        )
 
         self.k = max(1e-9, float(self.get_parameter("ballistic_k").value))
         self.muzzle_height_m = float(self.get_parameter("muzzle_height_m").value)
@@ -324,6 +339,8 @@ class BallisticTurretNode(Node):
         )
         self.return_radius_m = max(0.5, float(self.get_parameter("return_radius_m").value))
         self.return_goal_topic = str(self.get_parameter("return_goal_topic").value)
+        self.mission_abort_enabled = bool(self.get_parameter("mission_abort_enabled").value)
+        self.mission_abort_topic = str(self.get_parameter("mission_abort_topic").value)
         self.reposition_on_unreachable_pitch = bool(
             self.get_parameter("reposition_on_unreachable_pitch").value
         )
@@ -397,6 +414,14 @@ class BallisticTurretNode(Node):
         self.stage_results: List[Dict[str, Any]] = []
         self.return_goal_sent = False
         self.return_started_wall: Optional[float] = None
+        # SCENARIO2_INITIAL_CHECKPOINT_GOAL_V1
+        self._initial_checkpoint_goal_last_publish_wall = -1e9
+        self._initial_checkpoint_goal_publish_count = 0
+        # Latching this is important: if perception drops its detections after
+        # one frame, the turret must never resume an interrupted firing stage.
+        self.mission_abort_requested = False
+        self.mission_abort_reason = ""
+        self.mission_abort_source = ""
         self._last_status_wall = -1e9
         self._reset_hybrid_yaw_control()
 
@@ -411,6 +436,7 @@ class BallisticTurretNode(Node):
         self.create_subscription(String, TOPIC_PLAYER_STATE, self._player_state_cb, 10)
         self.create_subscription(Vector3Stamped, TOPIC_TURRET_FEEDBACK, self._turret_feedback_cb, 10)
         self.create_subscription(String, TOPIC_BULLET_RAW, self._bullet_cb, 10)
+        self.create_subscription(String, self.mission_abort_topic, self._mission_abort_cb, 10)
 
         hz = max(1.0, float(self.get_parameter("control_hz").value))
         self.create_timer(1.0 / hz, self._tick)
@@ -609,6 +635,44 @@ class BallisticTurretNode(Node):
         )
         self.dedicated_turret_feedback_wall = now
 
+    def _mission_abort_cb(self, msg: String) -> None:
+        """Preempt the scripted fire FSM when sudden decision commits RETURN.
+
+        The advisor repeats this message as a heartbeat.  Duplicates are
+        harmless; only the first one logs the state transition.  ``return_enabled``
+        is deliberately not consulted because this is a safety override.
+        """
+        if not self.mission_abort_enabled:
+            return
+        try:
+            payload = json.loads(msg.data)
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        action = str(payload.get("action", "")).upper()
+        if action != "RETURN" and not bool(payload.get("abort", False)):
+            return
+
+        goal = payload.get("goal") or payload.get("return")
+        if isinstance(goal, dict):
+            gx = as_finite_float(goal.get("x"))
+            gy = as_finite_float(goal.get("y"))
+            if gx is not None and gy is not None:
+                self.return_point = (float(gx), float(gy))
+
+        reason = str(payload.get("reason") or "mission_abort_return")
+        source = str(payload.get("source") or "unknown")
+        first = not self.mission_abort_requested
+        self.mission_abort_requested = True
+        self.mission_abort_reason = reason
+        self.mission_abort_source = source
+        if first:
+            self.get_logger().warn(
+                "Mission abort received: "
+                f"source={source}, reason={reason} → return=({self.return_point[0]:.1f},{self.return_point[1]:.1f})"
+            )
+
     def _bullet_cb(self, msg: String) -> None:
         if self.fire_started_wall is None or self.phase not in {"firing", "wait_impact"}:
             return
@@ -731,6 +795,36 @@ class BallisticTurretNode(Node):
         self.get_logger().info(
             f"FINAL return goal after {reason}: ({self.return_point[0]:.1f},{self.return_point[1]:.1f})"
         )
+
+    def _publish_initial_checkpoint_goal_if_needed(self, now: float) -> None:
+        """Keep the initial Scenario-2 A* route endpoint asserted at startup.
+
+        ``/tank/mission/goal_pose`` is volatile.  A single startup publish can
+        be missed while the planner launches.  The endpoint is the last
+        engagement checkpoint, so route A still passes every configured
+        waypoint (including stage 1) in order.  Repeating only during stage 1
+        makes the handoff deterministic without changing any later checkpoint
+        or return transition.
+        """
+        if (
+            self.phase != "approach"
+            or self.stage_index != 0
+            or self.return_goal_sent
+            or self.mission_abort_requested
+        ):
+            return
+        if now - self._initial_checkpoint_goal_last_publish_wall < self.initial_checkpoint_goal_refresh_sec:
+            return
+
+        route_goal = self.engagements[-1]["checkpoint"]
+        self.return_goal_pub.publish(self._make_goal_pose(route_goal))
+        self._initial_checkpoint_goal_last_publish_wall = now
+        self._initial_checkpoint_goal_publish_count += 1
+        if self._initial_checkpoint_goal_publish_count == 1:
+            self.get_logger().info(
+                "Scenario-2 initial route goal asserted: "
+                f"({route_goal[0]:.1f},{route_goal[1]:.1f})"
+            )
 
     def _begin_final_return(self, reason: str) -> None:
         if self.return_enabled:
@@ -1543,6 +1637,11 @@ class BallisticTurretNode(Node):
                 "world" if self.turret_pitch_feedback_is_world else "hull_relative"
             ),
             "reposition": self._reposition_status(time.monotonic()),
+            "mission_abort": {
+                "requested": self.mission_abort_requested,
+                "reason": self.mission_abort_reason or None,
+                "source": self.mission_abort_source or None,
+            },
         }
 
     def _publish_override(
@@ -1576,6 +1675,21 @@ class BallisticTurretNode(Node):
     def _tick(self) -> None:
         now = time.monotonic()
 
+        # SCENARIO2_INITIAL_CHECKPOINT_GOAL_V1
+        # Assert the initial route endpoint before any return/terminal state
+        # can be inferred from the shared home coordinate.
+        self._publish_initial_checkpoint_goal_if_needed(now)
+
+        # Safety preemption has priority over every firing-state branch.  The
+        # planner also receives the advisor heartbeat, but publishing here once
+        # makes the turret node self-contained if it started late.
+        if self.mission_abort_requested and self.phase != "returned":
+            if not self.return_goal_sent:
+                self._publish_mission_goal(self.return_point, "mission_abort_return")
+                self.return_goal_sent = True
+                self.return_started_wall = now
+            self.phase = "returning"
+
         # Terminal leg: never re-arm after the final stage.
         if self.phase in {"returning", "returned", "complete"}:
             if self.phase == "returning" and self._at_return_point():
@@ -1585,9 +1699,27 @@ class BallisticTurretNode(Node):
                 "phase": self.phase,
                 "return": {"x": self.return_point[0], "y": self.return_point[1]},
                 "return_goal_sent": self.return_goal_sent,
+                "mission_abort": {
+                    "requested": self.mission_abort_requested,
+                    "reason": self.mission_abort_reason or None,
+                    "source": self.mission_abort_source or None,
+                },
             })
+            # SCENARIO2_TURRET_OWNED_TERMINAL_STOP_V1
+            # The return coordinate is identical to the spawn coordinate.
+            # Do NOT make controller-side goal proximity the authority for the
+            # final STOP. Only this FSM knows that a real return goal was sent
+            # and that the vehicle then reached that point.
+            terminal_return_stop = (
+                self.phase == "returned"
+                and self.return_goal_sent
+            )
+            if terminal_return_stop:
+                status["terminal_stop"] = True
+                status["terminal_stop_owner"] = "ballistic_turret_node"
             self._publish_override(
-                active=False, hold_motion=False,
+                active=terminal_return_stop,
+                hold_motion=terminal_return_stop,
                 turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
                 fire=False, status=status,
             )
@@ -2005,39 +2137,52 @@ class BallisticTurretNode(Node):
                 "yaw_rate_deg_s": round(self.turret_yaw_rate_deg_s, 3),
             }
 
+        # SCENARIO2_CONCURRENT_QE_RF_AIM_OMEN_COMPAT
+        #
+        # The simulator accepts Q/E and R/F together.  Keep both axes in the
+        # same feedback loop so an unresolved yaw error never prevents the gun
+        # from physically testing / reaching its required elevation.
+        #
+        # Safety rule: R/F can move at all yaw errors, but the physical-endstop
+        # watchdog is armed only when yaw is close to the target.  Therefore a
+        # fixed elevation reading during a large lateral sweep cannot trigger a
+        # firing-position fallback prematurely.
         physical_pitch_limit: Dict[str, Any]
         aim_axis = "on_target"
 
-        if not yaw_aligned:
-            # Never mix Q/E and R/F during acquisition or while a delayed
-            # feedback correction is braking/observing.  This prevents pitch
-            # movement while yaw is still passing through the target.
-            self._reset_physical_pitch_watch()
-            if not self.hybrid_yaw_enabled:
-                yaw_weight = (
-                    0.0 if abs(yaw_error) <= self.yaw_control_deadband_deg
-                    else self._yaw_weight(yaw_error, self.yaw_weight_max)
-                )
-                yaw_cmd = ("E" if yaw_error > 0.0 else "Q") if yaw_weight > 0.0 else ""
-            physical_pitch_limit = {
-                "active": False,
-                "stalled": False,
-                "reason": "waiting_for_yaw_stable_alignment",
-            }
-            aim_axis = "yaw"
-        elif not pitch_aligned:
-            # Actual R/F travel test: stay on the yaw target and watch the
-            # simulator feedback.  Only a proven no-motion endstop can move
-            # the vehicle to a fallback firing position.
+        if not self.hybrid_yaw_enabled and not yaw_aligned:
+            yaw_weight = (
+                0.0 if abs(yaw_error) <= self.yaw_control_deadband_deg
+                else self._yaw_weight(yaw_error, self.yaw_weight_max)
+            )
+            yaw_cmd = ("E" if yaw_error > 0.0 else "Q") if yaw_weight > 0.0 else ""
+
+        if not pitch_aligned:
             pitch_cmd = "R" if pitch_error > 0.0 else "F"
             pitch_weight = self._pitch_weight(pitch_error, self.pitch_weight_max)
-            physical_pitch_limit = self._observe_physical_pitch_watch(
-                now=now,
-                command=pitch_cmd if pitch_weight > 0.0 else "",
-                current_pitch_deg=self.turret_elevation_deg,
-                target_pitch_deg=solution["target_pitch_deg"],
-            )
-            aim_axis = "pitch"
+
+            # The watchdog decides whether a real mechanical R/F endstop has
+            # been reached.  Do not arm it while yaw is far away from the
+            # target; pitch may be changing or temporarily appear stationary
+            # during a large horizontal sweep.
+            endstop_yaw_gate_deg = max(4.0, self.yaw_tolerance_deg * 2.0)
+            endstop_gate_open = abs(yaw_error) <= endstop_yaw_gate_deg
+            if endstop_gate_open:
+                physical_pitch_limit = self._observe_physical_pitch_watch(
+                    now=now,
+                    command=pitch_cmd if pitch_weight > 0.0 else "",
+                    current_pitch_deg=self.turret_elevation_deg,
+                    target_pitch_deg=solution["target_pitch_deg"],
+                )
+            else:
+                self._reset_physical_pitch_watch()
+                physical_pitch_limit = {
+                    "active": False,
+                    "stalled": False,
+                    "reason": "waiting_for_yaw_endstop_gate",
+                    "yaw_error_deg": round(yaw_error, 3),
+                    "yaw_gate_deg": round(endstop_yaw_gate_deg, 3),
+                }
 
             if physical_pitch_limit.get("stalled", False):
                 stall_reason = (
@@ -2086,6 +2231,13 @@ class BallisticTurretNode(Node):
                 "stalled": False,
                 "reason": "target_pitch_reached",
             }
+
+        if not yaw_aligned and not pitch_aligned:
+            aim_axis = "yaw_pitch_concurrent"
+        elif not yaw_aligned:
+            aim_axis = "yaw"
+        elif not pitch_aligned:
+            aim_axis = "pitch"
 
         # ``yaw_aligned`` here means measured angle *and* post-release
         # settling observation, not merely instantaneous angle error.
@@ -2164,6 +2316,90 @@ class BallisticTurretNode(Node):
             fire=False, status=status,
         )
 
+
+
+    # SCENARIO2_FINAL_NO_FORWARD_DAMPED_YAW
+    def _damped_aim_yaw_control(
+        self,
+        yaw_error_deg: float,
+        now: float,
+    ) -> Tuple[str, float, Dict[str, Any]]:
+        """Feedback-driven Q/E with near-target braking and reversal settling.
+
+        This method is called only by the ballistic aiming state.  It uses the
+        latest turret-yaw feedback every timer tick; no Q/E command duration is
+        precomputed.  The short neutral interval is used only after a genuine
+        near-target sign reversal, so a far-away new target can still turn fast.
+        """
+        brake_deg = 16.0
+        near_weight_scale = 0.35
+        reverse_hold_sec = 0.14
+        min_near_weight = 0.035
+
+        error_abs = abs(float(yaw_error_deg))
+        deadband = float(self.yaw_control_deadband_deg)
+        if error_abs <= deadband:
+            return "", 0.0, {
+                "mode": "inside_deadband",
+                "raw_error_deg": round(float(yaw_error_deg), 3),
+                "brake_deg": brake_deg,
+                "reverse_hold_active": False,
+                "weight": 0.0,
+            }
+
+        command = "E" if yaw_error_deg > 0.0 else "Q"
+        last_command = str(getattr(self, "_aim_yaw_last_cmd", "") or "")
+        hold_until = float(getattr(self, "_aim_yaw_reverse_hold_until", 0.0) or 0.0)
+
+        # An overshoot is a command-direction reversal while already near the
+        # target.  Stop briefly instead of immediately applying full opposite
+        # Q/E; that lets simulator latency/inertia settle before re-acquiring.
+        if (
+            last_command in {"Q", "E"}
+            and command != last_command
+            and error_abs <= brake_deg
+            and now >= hold_until
+        ):
+            hold_until = now + reverse_hold_sec
+            self._aim_yaw_reverse_hold_until = hold_until
+
+        if now < hold_until:
+            return "", 0.0, {
+                "mode": "reverse_hold",
+                "raw_error_deg": round(float(yaw_error_deg), 3),
+                "last_command": last_command,
+                "next_command": command,
+                "brake_deg": brake_deg,
+                "reverse_hold_active": True,
+                "reverse_hold_remaining_sec": round(max(0.0, hold_until - now), 3),
+                "weight": 0.0,
+            }
+
+        base_weight = self._yaw_weight(yaw_error_deg, self.yaw_weight_max)
+        if error_abs < brake_deg:
+            # Quadratic ramp: significantly slower near target, while retaining
+            # enough authority to recover from small persistent error.
+            span = max(0.001, brake_deg - deadband)
+            normalized = max(0.0, min(1.0, (error_abs - deadband) / span))
+            scale = near_weight_scale + (1.0 - near_weight_scale) * (normalized * normalized)
+            weight = max(min_near_weight, base_weight * scale)
+            mode = "braked_track"
+        else:
+            weight = base_weight
+            mode = "fast_track"
+
+        weight = max(0.0, min(float(self.yaw_weight_max), float(weight)))
+        self._aim_yaw_last_cmd = command if weight > 0.0 else ""
+        self._aim_yaw_reverse_hold_until = 0.0
+        return command if weight > 0.0 else "", weight, {
+            "mode": mode,
+            "raw_error_deg": round(float(yaw_error_deg), 3),
+            "brake_deg": brake_deg,
+            "near_weight_scale": near_weight_scale,
+            "reverse_hold_active": False,
+            "base_weight": round(float(base_weight), 4),
+            "weight": round(float(weight), 4),
+        }
 
 
 def main(args=None) -> None:

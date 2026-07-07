@@ -55,16 +55,12 @@ def generate_launch_description():
             name="tank_rviz_visualizer_node",
             output="screen",
         ),
-        # 3) raw LiDAR를 map 좌표계 terrain/obstacle PointCloud2로 분리한다.
+        # 3) bridge raw PointCloud2를 map 좌표계 terrain/obstacle PointCloud2로 분리한다.
         Node(
             package="lidar",
             executable="lidar_processor_node",
             name="tank_lidar_processor_node",
             output="screen",
-            parameters=[{
-                # String JSON legacy 토픽은 대역폭/CPU 낭비라 수집 launch에서는 끈다.
-                "publish_legacy_lidar_json": False,
-            }],
         ),
         # 4) 장애물 cluster marker 확인용. 저장 파일 자체는 terrain_record_finalize_node가 담당한다.
         Node(

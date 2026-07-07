@@ -8,7 +8,7 @@ clustering, path-block check를 이 클래스 안으로 격리한다.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 from .path_blocking import is_path_blocked
 from .payloads import (
@@ -34,7 +34,49 @@ class LidarObstacleMemory:
         history_resolution: float,
         max_history_points: int,
     ) -> List[Point2D]:
+        """Update from the legacy JSON-shaped LiDAR payload.
+
+        This compatibility path is kept for callers that still have a JSON
+        payload. PointCloud2 consumers should use :meth:`update_from_xy_points`
+        to avoid allocating per-point dictionaries and reparsing them.
+        """
         self.current_points = parse_lidar_points_payload(payload)
+        return self._update_history_if_enabled(
+            history_enabled,
+            history_resolution,
+            max_history_points,
+        )
+
+    def update_from_xy_points(
+        self,
+        xy_points: Iterable[Sequence[float]],
+        history_enabled: bool,
+        history_resolution: float,
+        max_history_points: int,
+    ) -> List[Point2D]:
+        """Update directly from map-frame XY points from PointCloud2.
+
+        The planner still stores stable Python ``(x, y)`` tuples because its
+        history, clustering and path-blocking helpers operate on that form.
+        Unlike ``update_from_payload``, this method does not build a temporary
+        JSON-like ``points`` list and does not parse it again.
+        """
+        self.current_points = [
+            (float(point[0]), float(point[1]))
+            for point in xy_points
+        ]
+        return self._update_history_if_enabled(
+            history_enabled,
+            history_resolution,
+            max_history_points,
+        )
+
+    def _update_history_if_enabled(
+        self,
+        history_enabled: bool,
+        history_resolution: float,
+        max_history_points: int,
+    ) -> List[Point2D]:
         if history_enabled:
             self.history, self.history_set = update_lidar_history(
                 self.history,

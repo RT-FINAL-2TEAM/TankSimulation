@@ -8,7 +8,6 @@ Unity simulator raw 좌표를 ROS/RViz map 좌표로 변환하는 정책을 이�
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from typing import Any, Dict, Optional, Tuple
 
 from .config import MAP_FRAME, UNITY_FRAME
@@ -64,17 +63,3 @@ def raw_and_map_point(position: Dict[str, Any], source: str) -> Tuple[Dict[str, 
     }
     return raw, mapped
 
-
-def lidar_point_with_map_position(point: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    if not isinstance(point, dict):
-        return None
-    position = point.get("position")
-    if not isinstance(position, dict):
-        return None
-    raw_x = to_float(position.get("x"))
-    raw_y = to_float(position.get("y"))
-    raw_z = to_float(position.get("z"))
-    converted = deepcopy(point)
-    converted["position_raw"] = {"x": raw_x, "y": raw_y, "z": raw_z, "frame_id": UNITY_FRAME}
-    converted["position_map"] = {"x": raw_x, "y": raw_z, "z": raw_y, "frame_id": MAP_FRAME}
-    return converted

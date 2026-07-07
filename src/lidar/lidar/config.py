@@ -35,8 +35,11 @@ def env_bool(name: str, default: bool) -> bool:
 MAP_FRAME = os.environ.get("TANK_MAP_FRAME", "tank_map")
 UNITY_FRAME = os.environ.get("TANK_UNITY_FRAME", "tank_unity_raw")
 
-TOPIC_INFO_RAW = os.environ.get("TANK_TOPIC_INFO_RAW", "/tank/api/info/raw")
-TOPIC_LIDAR_POINTS = os.environ.get("TANK_TOPIC_LIDAR_POINTS", "/tank/sensor/lidar/points")
+# bridge가 /info에서 분리한 isDetected hit의 Unity raw-frame PointCloud2 입력이다.
+TOPIC_LIDAR_RAW_DETECTED = os.environ.get(
+    "TANK_TOPIC_LIDAR_RAW_DETECTED",
+    "/tank/sensor/lidar/raw_detected_points",
+)
 TOPIC_LIDAR_POINTS_COUNT = os.environ.get("TANK_TOPIC_LIDAR_POINTS_COUNT", "/tank/sensor/lidar/points_count")
 TOPIC_LIDAR_ORIGIN = os.environ.get("TANK_TOPIC_LIDAR_ORIGIN", "/tank/sensor/lidar/origin")
 TOPIC_LIDAR_ORIGIN_RAW = os.environ.get("TANK_TOPIC_LIDAR_ORIGIN_RAW", "/tank/sensor/lidar/origin_raw")

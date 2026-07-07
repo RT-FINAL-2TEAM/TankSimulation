@@ -19,6 +19,8 @@ import math
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, Iterable, List, Sequence, Set, Tuple
 
+import numpy as np
+
 from .coordinate_utils import to_float
 
 GridKey = Tuple[int, int]
@@ -214,3 +216,93 @@ def convert_to_2d_coords(points: Iterable[Dict[str, Any]]) -> List[Tuple[float, 
         pos = _position(point)
         coords.append((to_float(pos.get("x")), to_float(pos.get("z"))))
     return coords
+
+
+
+def split_terrain_obstacle_xyz(
+    points_xyz: np.ndarray,
+    grid_resolution: float = 0.5,
+    climb_limit: float = 0.4,
+    obstacle_min_height: float = 0.2,
+) -> Tuple[np.ndarray, np.ndarray, TerrainSeparationStats]:
+    """PointCloud2에서 꺼낸 Unity raw XYZ 배열을 지형/장애물로 분리한다.
+
+    입력 열 순서는 ``[raw_x, raw_y(height), raw_z]``이다. 기존
+    :func:`split_terrain_obstacle_points`와 동일한 grid/steep-cell 규칙을 적용하지만,
+    포인트마다 Python dict를 만들지 않아 PointCloud2 fast path를 유지한다.
+    """
+    source = np.ascontiguousarray(np.asarray(points_xyz, dtype=np.float32).reshape(-1, 3))
+    if source.size:
+        source = source[np.isfinite(source).all(axis=1)]
+
+    stats = TerrainSeparationStats(
+        input_points=int(source.shape[0]),
+        grid_resolution=float(grid_resolution),
+        climb_limit=float(climb_limit),
+        obstacle_min_height=float(obstacle_min_height),
+    )
+    if source.size == 0:
+        empty = np.empty((0, 3), dtype=np.float32)
+        return empty, empty, stats
+
+    q = max(float(grid_resolution), 1e-6)
+    grid_coords = np.floor(source[:, (0, 2)] / q).astype(np.int64)
+    grid_map: Dict[GridKey, List[int]] = {}
+    for idx, pair in enumerate(grid_coords):
+        key = (int(pair[0]), int(pair[1]))
+        grid_map.setdefault(key, []).append(idx)
+
+    cell_ground: Dict[GridKey, float] = {
+        key: float(np.min(source[indices, 1]))
+        for key, indices in grid_map.items()
+    }
+
+    steep_cells: Set[GridKey] = set()
+    spans: List[float] = []
+    max_neighbor_gap = 0.0
+    climb = float(climb_limit)
+    for key, indices in grid_map.items():
+        ys = source[indices, 1]
+        span = float(np.max(ys) - np.min(ys))
+        spans.append(span)
+        if span > climb:
+            steep_cells.add(key)
+            continue
+
+        gx, gz = key
+        for neighbor in ((gx + 1, gz), (gx - 1, gz), (gx, gz + 1), (gx, gz - 1)):
+            neighbor_ground = cell_ground.get(neighbor)
+            if neighbor_ground is None:
+                continue
+            gap = abs(cell_ground[key] - neighbor_ground)
+            max_neighbor_gap = max(max_neighbor_gap, gap)
+            if gap > climb:
+                steep_cells.add(key)
+                steep_cells.add(neighbor)
+
+    obstacle_mask = np.zeros(source.shape[0], dtype=bool)
+    min_above_ground = max(float(obstacle_min_height), 0.0)
+    for key in steep_cells:
+        indices = grid_map.get(key)
+        if not indices:
+            continue
+        gx, gz = key
+        neighbors = ((gx, gz), (gx + 1, gz), (gx - 1, gz), (gx, gz + 1), (gx, gz - 1))
+        local_ground = min(cell_ground[n] for n in neighbors if n in cell_ground)
+        indices_arr = np.asarray(indices, dtype=np.intp)
+        obstacle_mask[indices_arr] = source[indices_arr, 1] > (local_ground + min_above_ground)
+
+    obstacle_points = np.ascontiguousarray(source[obstacle_mask], dtype=np.float32)
+    terrain_points = np.ascontiguousarray(source[~obstacle_mask], dtype=np.float32)
+
+    stats.obstacle_points = int(obstacle_points.shape[0])
+    stats.terrain_points = int(terrain_points.shape[0])
+    stats.grid_cell_count = len(grid_map)
+    stats.steep_cell_count = len(steep_cells)
+    stats.max_cell_height_span = max(spans) if spans else 0.0
+    stats.mean_cell_height_span = (sum(spans) / len(spans)) if spans else 0.0
+    stats.max_neighbor_ground_gap = float(max_neighbor_gap)
+    stats.roughness_score = float(
+        max(stats.mean_cell_height_span, max_neighbor_gap) / max(climb, 1e-6)
+    )
+    return obstacle_points, terrain_points, stats

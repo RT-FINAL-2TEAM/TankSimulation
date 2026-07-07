@@ -70,6 +70,18 @@ def generate_launch_description():
         'exit_on_goal_reached', default_value='true',
         description='Keep controller alive at a stop-aim-fire checkpoint when false.',
     )
+    # SCENARIO2_TERMINAL_STOP_WIRING_V1
+    # These were previously supplied by tank_scenario2.launch.py but not
+    # declared or forwarded by this included launch, so the controller kept
+    # its defaults.  Keep ordinary Scenario-1 behavior disabled by default.
+    terminal_stop_on_turret_complete_arg = DeclareLaunchArgument(
+        'terminal_stop_on_turret_complete', default_value='false',
+        description='All-axis STOP only after the ballistic FSM finishes final return.',
+    )
+    terminal_stop_require_goal_departure_arg = DeclareLaunchArgument(
+        'terminal_stop_require_goal_departure', default_value='false',
+        description='Require that a home goal was first observed from away.',
+    )
     accept_external_goal_updates_arg = DeclareLaunchArgument(
         'accept_external_goal_updates', default_value='true',
         description='Accept simulator /set_destination updates on /tank/goal/pose.',
@@ -134,6 +146,8 @@ def generate_launch_description():
         default_goal_y_arg,
         pause_on_goal_reached_arg,
         exit_on_goal_reached_arg,
+        terminal_stop_on_turret_complete_arg,
+        terminal_stop_require_goal_departure_arg,
         accept_external_goal_updates_arg,
         static_map_file_arg,
         terrain_cost_file_arg,
@@ -153,10 +167,9 @@ def generate_launch_description():
             executable="lidar_processor_node",
             name="tank_lidar_processor_node",
             output="screen",
-            parameters=[{"publish_legacy_lidar_json": False}],
         ),
         # Team visual perception integration:
-        # - /detect image from ros_bridge + /info LiDAR raw -> camera LiDAR projection overlay
+        # - /detect image from ros_bridge + map-frame LiDAR PointCloud2 -> camera LiDAR projection overlay
         # - /tank/sensor/lidar/detected_points_map -> DBSCAN cluster markers/status
         Node(
             package="tank_visual_perception",
@@ -472,6 +485,11 @@ def generate_launch_description():
                     LaunchConfiguration("pause_on_goal_reached"), value_type=bool),
                 "exit_on_goal_reached": ParameterValue(
                     LaunchConfiguration("exit_on_goal_reached"), value_type=bool),
+                # SCENARIO2_TERMINAL_STOP_WIRING_V1
+                "terminal_stop_on_turret_complete": ParameterValue(
+                    LaunchConfiguration("terminal_stop_on_turret_complete"), value_type=bool),
+                "terminal_stop_require_goal_departure": ParameterValue(
+                    LaunchConfiguration("terminal_stop_require_goal_departure"), value_type=bool),
                 "heading_deadband_deg": 5.0,
                 "steering_full_error_deg": 45.0,
                 "min_ad_weight": 0.0,
@@ -489,10 +507,10 @@ def generate_launch_description():
                 "enable_stuck_escape": True,
                 "stuck_check_period": 5.0,
                 "stuck_min_movement": 1.5,
-                "escape_reverse_sec": 1.5,
+                # stuck 감지 시에는 S 후진 없이 목표 방향으로 저속 전진 선회만 수행한다.
                 "escape_turn_sec": 1.5,
                 # 발사 뒤 다음 사격지점/복귀 goal로 넘어가는 첫 주행 구간에서는
-                # S 후진 대신 기존 경로의 W를 저속으로 이어간다.
+                # 안전 브레이크의 S 후진 대신 기존 경로의 W를 저속으로 이어간다.
                 "post_fire_reverse_inhibit_sec": 8.0,
                 "post_fire_forward_resume_weight": 0.35,
             }],

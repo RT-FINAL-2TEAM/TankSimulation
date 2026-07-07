@@ -79,6 +79,27 @@ class PhoneYoloGatewayNode(Node):
             f"detector_loaded={self.detector.loaded}"
         )
 
+    def _vision_model_metadata(self) -> Dict[str, Any]:
+        """Expose the active vision class policy to the phone pipeline."""
+        try:
+            state = self.detector.debug_state()
+        except Exception:
+            state = {}
+        public_names = state.get("publicNames", {}) if isinstance(state, dict) else {}
+        public_classes = (
+            sorted({str(name).strip().lower() for name in public_names.values() if str(name).strip()})
+            if isinstance(public_names, dict)
+            else []
+        )
+        canonical = state.get("canonicalClasses", []) if isinstance(state, dict) else []
+        ignored = state.get("ignoredClasses", []) if isinstance(state, dict) else []
+        return {
+            "source": "vision.yolo_detector",
+            "public_classes": public_classes,
+            "canonical_classes": canonical if isinstance(canonical, list) else [],
+            "ignored_classes": ignored if isinstance(ignored, list) else [],
+        }
+
     def _make_flask_app(self):
         if Flask is None:
             raise RuntimeError("Flask is not installed. Install python3-flask or run in the same environment as ros_bridge.")
@@ -96,6 +117,7 @@ class PhoneYoloGatewayNode(Node):
                 "detectorLoaded": bool(state.get("loaded")),
                 "modelPath": state.get("modelPath"),
                 "imgsz": state.get("imgsz"),
+                "visionModel": self._vision_model_metadata(),
                 "time": time.time(),
             })
 
@@ -115,6 +137,7 @@ class PhoneYoloGatewayNode(Node):
                 "remote_addr": remote_addr,
                 "command": command,
                 "phone": metadata,
+                "vision_model": self._vision_model_metadata(),
                 "count": 0,
                 "detections": [],
                 "control_only": True,
@@ -166,6 +189,7 @@ class PhoneYoloGatewayNode(Node):
                     "expected_height": 416,
                 },
                 "phone": metadata,
+                "vision_model": self._vision_model_metadata(),
                 "count": len(detections),
                 "detections": detections,
                 "detect_ms": (time.perf_counter() - started) * 1000.0,
@@ -302,6 +326,7 @@ class PhoneYoloGatewayNode(Node):
             "endpoint": self.endpoint,
             "request_count": self._request_count,
             "detector_loaded": bool(self.detector.loaded),
+            "vision_model": self._vision_model_metadata(),
             **self._last_status,
             "timestamp_wall": time.time(),
         }

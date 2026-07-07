@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 import os
 from copy import deepcopy
-from threading import Lock
+from threading import Condition, Lock
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -22,7 +22,9 @@ except Exception:  # pragma: no cover - runtime optional guard
     cv2 = None
 
 _state_lock = Lock()
+_frame_condition = Condition(_state_lock)
 _latest_frame: Optional[np.ndarray] = None
+_latest_raw_jpeg: Optional[bytes] = None
 _latest_frame_seq = 0
 _latest_frame_timestamp = 0.0
 _latest_frame_shape: Optional[List[int]] = None
@@ -30,14 +32,29 @@ _latest_source_frame_shape: Optional[List[int]] = None
 _latest_detections: List[Dict[str, Any]] = []
 _latest_detection_metadata: Dict[str, Any] = {}
 _latest_detection_timestamp = 0.0
+# Exact newest frame whose synchronous YOLO result has completed. WebRTC can use
+# this pair to keep the video image and detection metadata on the same frame.
+_latest_ready_raw_jpeg: Optional[bytes] = None
+_latest_ready_frame_seq = 0
+_latest_ready_timestamp = 0.0
+_latest_ready_source_shape: Optional[List[int]] = None
 _latest_error: Optional[str] = None
 _latest_live_decode_ms = 0.0
 _skipped_live_decode_count = 0
+_stream_client_count = 0
+_stream_sent_count = 0
+_LIVE_OVERLAY_POLL_MS = max(80, int(os.getenv("TANK_LIVE_OVERLAY_POLL_MS", "100")))
 
 _LIVE_VIEW_DECODE_FPS = float(os.getenv("TANK_LIVE_VIEW_DECODE_FPS", "6"))
 _LIVE_VIEW_DECODE_INTERVAL = 1.0 / max(0.1, _LIVE_VIEW_DECODE_FPS)
 _LIVE_VIEW_MAX_SIDE = int(os.getenv("TANK_LIVE_VIEW_MAX_SIDE", "960"))
 _LIVE_VIEW_BROWSER_OVERLAY = os.getenv("TANK_LIVE_VIEW_BROWSER_OVERLAY", "true").strip().lower() in ("1", "true", "yes", "y")
+# 원본 JPEG를 그대로 전달해 웹용 재인코딩 연산을 없앤다. ROS 큐와 YOLO 방식에는 영향이 없다.
+_LIVE_VIEW_RAW_JPEG = os.getenv("TANK_LIVE_VIEW_RAW_JPEG", "false").strip().lower() in ("1", "true", "yes", "y")
+_WEBRTC_ENABLED = os.getenv("TANK_WEBRTC_ENABLED", "false").strip().lower() in ("1", "true", "yes", "y", "on")
+_WEB_STREAM_MODE = os.getenv("TANK_WEB_STREAM_MODE", "mjpeg").strip().lower()
+if _WEB_STREAM_MODE not in ("mjpeg", "webrtc", "auto"):
+    _WEB_STREAM_MODE = "mjpeg"
 
 _CLASS_COLORS_BGR = {
     "tank": (0, 0, 255),
@@ -77,27 +94,56 @@ def _resize_for_live_view(frame: np.ndarray) -> np.ndarray:
 
 
 def update_frame(image_bytes: bytes) -> Optional[List[int]]:
-    """Store a throttled display frame. Returns source frame shape [h, w, c] if known."""
-    global _latest_frame, _latest_frame_seq, _latest_frame_timestamp, _latest_frame_shape, _latest_source_frame_shape, _latest_error, _latest_live_decode_ms, _skipped_live_decode_count
+    """최신 웹 프레임 한 장만 보관한다.
+
+    ROS publisher/subscriber depth=10과는 별개의 웹 표시용 버퍼다.
+    raw JPEG + browser canvas overlay 모드에서는 서버가 JPEG를 다시 디코딩하지 않는다.
+    """
+    global _latest_frame, _latest_raw_jpeg, _latest_frame_seq, _latest_frame_timestamp
+    global _latest_frame_shape, _latest_source_frame_shape, _latest_error
+    global _latest_live_decode_ms, _skipped_live_decode_count
+
     now = time.time()
-    with _state_lock:
-        if _latest_frame_timestamp and now - _latest_frame_timestamp < _LIVE_VIEW_DECODE_INTERVAL:
+    raw_jpeg = bytes(image_bytes) if image_bytes else None
+
+    with _frame_condition:
+        _latest_raw_jpeg = raw_jpeg
+        _latest_frame_seq += 1
+        _latest_frame_timestamp = now
+        known_shape = deepcopy(_latest_source_frame_shape or _latest_frame_shape)
+
+        # 브라우저가 원본 JPEG를 직접 표시하고 Canvas로 박스를 그릴 때는
+        # 웹 표시용 OpenCV decode/resize가 전혀 필요하지 않다.
+        if _LIVE_VIEW_RAW_JPEG and _LIVE_VIEW_BROWSER_OVERLAY:
             _skipped_live_decode_count += 1
-            return deepcopy(_latest_source_frame_shape or _latest_frame_shape)
+            _latest_error = None
+            _frame_condition.notify_all()
+            return known_shape
+
+        last_decode_at = getattr(update_frame, "_last_decode_at", 0.0)
+        if (
+            _latest_frame is not None
+            and now - last_decode_at < _LIVE_VIEW_DECODE_INTERVAL
+        ):
+            _skipped_live_decode_count += 1
+            _frame_condition.notify_all()
+            return known_shape
+        update_frame._last_decode_at = now
+        _frame_condition.notify_all()
+
     decode_started = time.perf_counter()
     frame = _decode_jpeg(image_bytes)
     decode_ms = (time.perf_counter() - decode_started) * 1000.0
     if frame is None:
         with _state_lock:
             _latest_error = "live_view: failed to decode frame or cv2 unavailable"
-        return None
+        return known_shape
+
     source_shape = [int(v) for v in frame.shape]
     display_frame = _resize_for_live_view(frame)
     display_shape = [int(v) for v in display_frame.shape]
     with _state_lock:
         _latest_frame = display_frame
-        _latest_frame_seq += 1
-        _latest_frame_timestamp = time.time()
         _latest_frame_shape = display_shape
         _latest_source_frame_shape = source_shape
         _latest_live_decode_ms = decode_ms
@@ -106,13 +152,61 @@ def update_frame(image_bytes: bytes) -> Optional[List[int]]:
 
 
 def update_detections(detections: Any, metadata: Optional[Dict[str, Any]] = None) -> None:
-    """Store latest detection list for overlay."""
+    """Store the newest synchronous YOLO result and its exact JPEG frame."""
     global _latest_detections, _latest_detection_metadata, _latest_detection_timestamp
+    global _latest_source_frame_shape
+    global _latest_ready_raw_jpeg, _latest_ready_frame_seq, _latest_ready_timestamp
+    global _latest_ready_source_shape
     with _state_lock:
+        current_seq = int(_latest_frame_seq)
+        current_meta = deepcopy(metadata) if isinstance(metadata, dict) else {}
+        current_meta.setdefault("frameSeq", current_seq)
         _latest_detections = deepcopy(detections) if isinstance(detections, list) else []
-        _latest_detection_metadata = deepcopy(metadata) if isinstance(metadata, dict) else {}
+        _latest_detection_metadata = current_meta
         _latest_detection_timestamp = time.time()
+        shape = current_meta.get("image_shape")
+        if isinstance(shape, list) and len(shape) >= 2:
+            _latest_source_frame_shape = [int(v) for v in shape]
+        # No historical queue: overwrite the single ready frame. This is separate
+        # from ROS publisher/subscriber depth=10, which remains unchanged.
+        _latest_ready_raw_jpeg = bytes(_latest_raw_jpeg) if _latest_raw_jpeg else None
+        _latest_ready_frame_seq = current_seq
+        _latest_ready_timestamp = float(_latest_frame_timestamp)
+        _latest_ready_source_shape = deepcopy(_latest_source_frame_shape)
 
+
+def get_stream_snapshot(sync_to_yolo: bool = True) -> Dict[str, Any]:
+    """Return one latest JPEG snapshot without creating a frame backlog."""
+    with _state_lock:
+        if sync_to_yolo:
+            return {
+                "jpeg": _latest_ready_raw_jpeg,
+                "frameSeq": int(_latest_ready_frame_seq),
+                "timestamp": float(_latest_ready_timestamp),
+                "sourceShape": deepcopy(_latest_ready_source_shape),
+            }
+        return {
+            "jpeg": _latest_raw_jpeg,
+            "frameSeq": int(_latest_frame_seq),
+            "timestamp": float(_latest_frame_timestamp),
+            "sourceShape": deepcopy(_latest_source_frame_shape),
+        }
+
+
+def overlay_state() -> Dict[str, Any]:
+    """브라우저 YOLO Canvas 전용 경량 상태를 반환한다."""
+    with _state_lock:
+        now = time.time()
+        return {
+            "frameSeq": int(_latest_ready_frame_seq or _latest_frame_seq),
+            "latestFrameSeq": int(_latest_frame_seq),
+            "latestDetections": deepcopy(_latest_detections),
+            "latestDetectionCount": len(_latest_detections),
+            "latestDetectionMetadata": deepcopy(_latest_detection_metadata),
+            "latestSourceFrameShape": deepcopy(_latest_ready_source_shape or _latest_source_frame_shape),
+            "latestDetectionAgeMs": None if not _latest_detection_timestamp else (now - _latest_detection_timestamp) * 1000.0,
+            "latestFrameAgeMs": None if not _latest_frame_timestamp else (now - _latest_frame_timestamp) * 1000.0,
+        }
 
 def _class_color(class_name: str, class_id: int = 0) -> Tuple[int, int, int]:
     key = str(class_name).strip().lower()
@@ -416,13 +510,14 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 position: relative;
                 background: #020403;
             }
-            #driveFeed {
+            #driveFeed, #driveWebrtc {
                 width: 100%;
                 height: 100%;
                 object-fit: contain;
                 display: block;
                 background: #000;
             }
+            #driveWebrtc { display: none; }
             #driveOverlay {
                 position: absolute;
                 inset: 0;
@@ -697,21 +792,33 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 <section class="panel">
                     <div class="panel-title"><span>① CAMERA · YOLO</span><span id="feedStatusText" class="feed-status-text">det=0 sync</span></div>
                     <div class="feed-wrap">
-                        <img id="driveFeed" src="/video_feed" alt="drive feed">
+                        <img id="driveFeed" data-src="/video_feed" alt="drive feed">
+                        <video id="driveWebrtc" autoplay muted playsinline></video>
                         <canvas id="driveOverlay"></canvas>
                     </div>
                 </section>
                 <section class="panel">
-                    <div class="panel-title"><span>② RVIZ 3D / MAP</span><span id="mapPanelTitle">TERRAIN MAP</span></div>
-                    <div class="map-tabs">
-                        <button id="map-tab-terrain" class="tab-button active" type="button" onclick="setMapTab('terrain')">TERRAIN</button>
-                        <button id="map-tab-ros" class="tab-button" type="button" onclick="setMapTab('ros')">ROS</button>
-                        <button id="map-tab-rviz" class="tab-button" type="button" onclick="setMapTab('rviz')">RVIZ 3D</button>
+                    <div class="panel-title"><span>② MAP</span><span id="mapPanelTitle">TERRAIN MAP</span></div>
+                    <div class="map-tabs" style="display:flex;justify-content:center;gap:6px;padding:6px;">
+                        <button id="map-tab-terrain" class="tab-button active" type="button" onclick="setMapTab('terrain')" style="width:120px;">TERRAIN</button>
+                        <button id="map-tab-llm" class="tab-button" type="button" onclick="setMapTab('llm')" style="width:120px;">LLM</button>
                     </div>
                     <div class="map-wrap">
                         <canvas id="mapCanvas"></canvas>
-                        <iframe id="rvizFrame" title="RViz 3D" style="display:none;"></iframe>
-                        <div id="rosWrap" style="display:none;position:absolute;inset:0;flex-direction:column;background:var(--bg);">
+                        <div id="llmWrap" style="display:none;position:absolute;inset:0;flex-direction:column;overflow:hidden;background:var(--bg);"></div>
+                        <div id="mapLegend" class="map-legend">
+                            <span>SELF</span><span>ENEMY</span><span>TARGET</span><span>WATER</span><span>RIDGE</span><span>HIGH</span><span>TREE</span><span>ROCK</span><span>HOUSE</span><span>ROUTE</span>
+                        </div>
+                    </div>
+                </section>
+                <section class="panel">
+                    <div class="panel-title"><span>③ TANK STATE · SYSTEM</span><span id="tankStatusText" class="feed-status-text">-</span></div>
+                    <div id="tankSystemContent" class="scroll"></div>
+                </section>
+                <section class="panel">
+                    <div class="panel-title"><span>④ ROS MONITOR</span><span id="riskStatusText" class="feed-status-text">-</span></div>
+                    <div id="riskContent" style="display:flex;flex-direction:column;position:absolute;inset:34px 0 0 0;">
+                        <div id="rosWrap" style="display:flex;position:absolute;inset:0;flex-direction:column;background:var(--bg);">
                             <div class="map-tabs" style="grid-template-columns:repeat(3,minmax(0,1fr));height:32px;">
                                 <button id="ros-sub-graph" class="tab-button active" type="button" onclick="setRosSub('graph')">GRAPH</button>
                                 <button id="ros-sub-services" class="tab-button" type="button" onclick="setRosSub('services')">SERVICES</button>
@@ -729,18 +836,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                                 <div id="rosParams" class="scroll" style="position:absolute;inset:0;display:none;"></div>
                             </div>
                         </div>
-                        <div id="mapLegend" class="map-legend">
-                            <span>SELF</span><span>ENEMY</span><span>TARGET</span><span>WATER</span><span>RIDGE</span><span>HIGH</span><span>TREE</span><span>ROCK</span><span>HOUSE</span><span>ROUTE</span>
-                        </div>
                     </div>
-                </section>
-                <section class="panel">
-                    <div class="panel-title"><span>③ TANK STATE · SYSTEM</span><span id="tankStatusText" class="feed-status-text">-</span></div>
-                    <div id="tankSystemContent" class="scroll"></div>
-                </section>
-                <section class="panel">
-                    <div class="panel-title"><span>④ LLM · RECON RISK</span><span id="riskStatusText" class="feed-status-text">-</span></div>
-                    <div id="riskContent" class="scroll"></div>
                 </section>
             </main>
             <footer class="bottom">
@@ -755,6 +851,11 @@ def render_view_page(poll_ms: int = 1000) -> str:
             let activeTab = "route";
             let activeMapTab = "terrain";
             let latestState = null;
+            let latestLiveOverlay = null;
+            let webRtcPeer = null;
+            let webRtcCodec = null;
+            const WEBRTC_ENABLED = false;
+            const WEB_STREAM_MODE = "mjpeg";
             let lastFetchOk = false;
             let staticMap = null;
             let staticMapLoadError = null;
@@ -966,26 +1067,55 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     if (!d.ok) alert("설정 실패: " + (d.reason || d.error || ""));
                 } catch (e) { alert("오류: " + e); }
             }
+            let activeLlmSub = "recon";
+            function initLlmTabs() {
+                byId("llmWrap").innerHTML = `
+                    <div class="map-tabs" style="grid-template-columns:repeat(3,minmax(0,1fr));height:32px;flex:0 0 auto;">
+                        <button id="llm-sub-recon" class="tab-button active" type="button" onclick="setLlmSub('recon')">정찰결과</button>
+                        <button id="llm-sub-mission" class="tab-button" type="button" onclick="setLlmSub('mission')">미션계획</button>
+                        <button id="llm-sub-realtime" class="tab-button" type="button" onclick="setLlmSub('realtime')">실시간판단</button>
+                    </div>
+                    <div id="llm-content-recon" style="overflow-y:auto;flex:1 1 0;padding:10px 12px;"></div>
+                    <div id="llm-content-mission" style="display:none;overflow-y:auto;flex:1 1 0;padding:10px 12px;"></div>
+                    <div id="llm-content-realtime" style="display:none;overflow-y:auto;flex:1 1 0;padding:10px 12px;"></div>
+                `;
+            }
+            function setLlmSub(subTab) {
+                activeLlmSub = subTab;
+                for (const t of ["recon", "mission", "realtime"]) {
+                    byId(`llm-sub-${t}`).classList.toggle("active", t === subTab);
+                    byId(`llm-content-${t}`).style.display = t === subTab ? "block" : "none";
+                }
+                renderLlmSubContent(subTab, latestState || {});
+            }
+            function renderLlmSubContent(subTab, state) {
+                if (subTab === "recon") {
+                    byId("llm-content-recon").innerHTML = renderRiskPanel(state);
+                } else if (subTab === "mission") {
+                    byId("llm-content-mission").innerHTML = renderMissionPlan(state);
+                } else if (subTab === "realtime") {
+                    byId("llm-content-realtime").innerHTML = renderSuddenDecision(state);
+                }
+            }
             function setMapTab(tabName) {
-                activeMapTab = ["terrain", "ros", "rviz"].includes(tabName) ? tabName : "terrain";
+                activeMapTab = ["terrain", "llm"].includes(tabName) ? tabName : "terrain";
                 byId("map-tab-terrain").classList.toggle("active", activeMapTab === "terrain");
-                byId("map-tab-ros").classList.toggle("active", activeMapTab === "ros");
-                byId("map-tab-rviz").classList.toggle("active", activeMapTab === "rviz");
-                const isTerrain = activeMapTab === "terrain", isRos = activeMapTab === "ros", isRviz = activeMapTab === "rviz";
+                byId("map-tab-llm").classList.toggle("active", activeMapTab === "llm");
+                const isTerrain = activeMapTab === "terrain", isLlm = activeMapTab === "llm";
                 byId("mapCanvas").style.display = isTerrain ? "block" : "none";
                 byId("mapLegend").style.display = isTerrain ? "flex" : "none";
-                byId("rosWrap").style.display = isRos ? "flex" : "none";
-                const frame = byId("rvizFrame");
-                frame.style.display = isRviz ? "block" : "none";
-                if (isRviz && !frame.src) { frame.src = "/rviz3d?frame=tank_map&cloud=detected&rays=1"; }
-                byId("mapPanelTitle").textContent = isRviz ? "RVIZ 3D" : (isRos ? "ROS MONITOR" : "TERRAIN MAP");
+                byId("llmWrap").style.display = isLlm ? "flex" : "none";
+                byId("mapPanelTitle").textContent = isLlm ? "LLM RECON RISK" : "TERRAIN MAP";
                 if (isTerrain) { updateMapLegend(); drawMap(latestState || {}); }
-                if (isRos) { renderRosActive(latestState || {}); }
+                if (isLlm) {
+                    if (!byId("llm-sub-recon")) { initLlmTabs(); }
+                    renderLlmSubContent(activeLlmSub, latestState || {});
+                }
             }
             function updateMapLegend() {
                 const terrain = ["SELF", "ENEMY", "WATER", "RIDGE", "HIGH", "TREE", "ROCK"];
                 const ros = ["SELF", "ENEMY", "TARGET", "OBS", "ROUTE", "YOLO"];
-                byId("mapLegend").innerHTML = (activeMapTab === "ros" ? ros : terrain)
+                byId("mapLegend").innerHTML = (activeMapTab === "llm" ? ros : terrain)
                     .map((label) => `<span>${label}</span>`)
                     .join("");
             }
@@ -1461,19 +1591,12 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 }
                 ctx.restore();
 
-                ctx.save();
-                ctx.fillStyle = "rgba(216, 255, 233, 0.82)";
-                ctx.font = "11px Consolas, monospace";
-                ctx.textAlign = "left";
-                ctx.fillText(`TOPO MAP objects=${staticObjects.length}`, rect.x + 10, rect.y + 18);
-                ctx.textAlign = "right";
-                ctx.fillText(`elev ${numberText(grid.terrain.min, 1)}..${numberText(grid.terrain.max, 1)}`, rect.x + rect.w - 10, rect.y + 18);
-                ctx.fillStyle = "rgba(68, 217, 255, 0.86)";
-                ctx.fillText(`water ${waterLabel}`, rect.x + rect.w - 10, rect.y + 34);
                 ctx.restore();
                 return true;
             }
             function getDetections(state) {
+                const immediateDetections = latestLiveOverlay?.latestDetections;
+                if (Array.isArray(immediateDetections)) return immediateDetections;
                 const yoloDetections = state?.yolo?.latestReturnedDetections;
                 if (Array.isArray(yoloDetections) && yoloDetections.length) return yoloDetections;
                 const liveDetections = state?.liveView?.latestDetections;
@@ -1563,10 +1686,11 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 const ctx = canvas.getContext("2d");
                 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
                 ctx.clearRect(0, 0, rect.width, rect.height);
-                const metadata = state?.liveView?.latestDetectionMetadata || latestBridge(state)?.detect_result || {};
-                const shape = metadata.image_shape || state?.liveView?.latestSourceFrameShape || state?.yolo?.latestFrameShape || [];
-                const sourceW = Number(metadata.image?.width || shape[1] || byId("driveFeed")?.naturalWidth || 1920);
-                const sourceH = Number(metadata.image?.height || shape[0] || byId("driveFeed")?.naturalHeight || 1080);
+                const metadata = latestLiveOverlay?.latestDetectionMetadata || state?.liveView?.latestDetectionMetadata || latestBridge(state)?.detect_result || {};
+                const shape = metadata.image_shape || latestLiveOverlay?.latestSourceFrameShape || state?.liveView?.latestSourceFrameShape || state?.yolo?.latestFrameShape || [];
+                const video = byId("driveWebrtc");
+                const sourceW = Number(metadata.image?.width || shape[1] || video?.videoWidth || byId("driveFeed")?.naturalWidth || 1920);
+                const sourceH = Number(metadata.image?.height || shape[0] || video?.videoHeight || byId("driveFeed")?.naturalHeight || 1080);
                 if (!Number.isFinite(sourceW) || !Number.isFinite(sourceH) || sourceW <= 0 || sourceH <= 0) return;
                 const imageBox = driveImageBox(canvas, sourceW, sourceH);
                 const detections = getDetections(state);
@@ -1591,7 +1715,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 }
             }
             function feedStatusText(state) {
-                const liveView = state?.liveView || {};
+                const liveView = latestLiveOverlay ? { ...(state?.liveView || {}), ...latestLiveOverlay } : (state?.liveView || {});
                 const metadata = liveView.latestDetectionMetadata || latestBridge(state)?.detect_result || {};
                 const detections = getDetections(state);
                 const count = Number.isFinite(Number(liveView.latestDetectionCount))
@@ -1704,7 +1828,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     `;
                 }).join("");
                 const title = selected
-                    ? `${selected.side || selected.id} ROUTE SELECTED`
+                    ? `${selected.id || selected.side || ""} ROUTE SELECTED`
                     : (payload.candidates || []).length ? "ROUTE RISK ASSESSMENT" : "AI DECISION PENDING";
                 return `
                     <div class="route-compare">
@@ -1760,11 +1884,27 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 }
                 const w = cmp.winner || {};
                 const per = cmp.per_route || {};
+                const SEP = '<div style="border-top:1px solid #1e3a2a;margin:10px 0 8px 0;"></div>';
                 let html = '';
+
+                // 추천 루트 강조 배너
+                const chosen = w.formula || w.llm;
+                if (chosen) {
+                    const agree = w.agreement;
+                    const chosenPr = per[chosen] || {};
+                    const chosenF = chosenPr.formula || {};
+                    const chosenBandCol = riskBandColor(chosenF.band);
+                    const agreeTag = agree
+                        ? '<span style="font-size:11px;color:#39ff88;margin-left:6px;">수식·LLM 일치 ✅</span>'
+                        : `<span style="font-size:11px;color:#ffd34d;margin-left:6px;">수식 ${safe(w.formula)} / LLM ${safe(w.llm)} 불일치 ⚠</span>`;
+                    html += `<div style="background:#0d2e1a;border:1px solid ${chosenBandCol};border-radius:5px;padding:8px 10px;margin-bottom:10px;">
+                        <div style="font-size:13px;font-weight:700;color:#fff;letter-spacing:0.5px;">추천 루트 &nbsp;<span style="font-size:18px;color:${chosenBandCol};">Route ${chosen}</span>${agreeTag}</div>
+                    </div>`;
+                }
 
                 // 블록 1: 정찰 결과 요약
                 if (feat) {
-                    html += '<div style="margin-bottom:10px;"><div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">정찰 결과</div>';
+                    html += '<div style="margin-bottom:8px;"><div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">정찰 결과</div>';
                     for (const r of ["A", "B"]) {
                         const f = feat[`route_${r}`];
                         if (!f) continue;
@@ -1774,14 +1914,17 @@ def render_view_page(poll_ms: int = 1000) -> str:
                         const bc = th.by_class || {};
                         const bcStr = Object.keys(bc).length ? Object.entries(bc).map(([k, v]) => `${k}${v}`).join("/") : "0";
                         const near = (th.nearest_dist_m === null || th.nearest_dist_m === undefined) ? "—" : `${numberText(th.nearest_dist_m, 0)}m`;
-                        html += `<div style="font-size:12px;margin:2px 0;"><b>route_${r}</b> ${reached} · ${numberText(eff.distance_m, 0)}m · 확정위협 ${safe(th.confirmed_count, 0)}(${escapeHtml(bcStr)}) · 최근접 ${near}</div>`;
+                        const isChosen = r === chosen;
+                        html += `<div style="font-size:12px;margin:3px 0;${isChosen ? 'color:#d0eaff;font-weight:600;' : 'color:#8aa8b8;'}"><b>route_${r}</b> ${reached} · ${numberText(eff.distance_m, 0)}m · 확정위협 ${safe(th.confirmed_count, 0)}(${escapeHtml(bcStr)}) · 최근접 ${near}</div>`;
                     }
                     html += '</div>';
                 }
 
+                html += SEP;
+
                 // 블록 2: 수식 vs LLM 한눈
-                html += '<div style="margin-bottom:10px;"><div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">수식 vs LLM</div>';
-                html += `<div style="font-size:12px;margin-bottom:6px;">선택 — 수식 <b>${safe(w.formula)}</b> / LLM <b>${safe(w.llm)}</b> ${riskOk(w.agreement)} · 순위일치 ${riskOk(cmp.rank_agreement)}</div>`;
+                html += '<div style="margin-bottom:8px;"><div style="font-weight:700;color:#9ec5f0;margin-bottom:6px;">수식 vs LLM &nbsp;<span style="font-size:11px;color:#7a8aa0;">순위일치 ${riskOk(cmp.rank_agreement)}</span></div>';
+                html = html.replace('${riskOk(cmp.rank_agreement)}', riskOk(cmp.rank_agreement));
                 for (const r of ["A", "B"]) {
                     const pr = per[r];
                     if (!pr) continue;
@@ -1792,23 +1935,39 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     const lcol = riskBandColor(l.risk_level);
                     const gw = rt === null ? 0 : Math.round(rt * 100);
                     const exp = (feat && feat[`route_${r}`] && feat[`route_${r}`].exposure) || {};
-                    html += `<div style="margin:4px 0 8px 0;">
-                        <div style="font-size:12px;"><b>route_${r}</b> ${riskOk(pr.band_match)}</div>
-                        <div style="height:8px;background:#0c2417;border-radius:3px;overflow:hidden;margin:3px 0;"><div style="height:100%;width:${gw}%;background:${fcol};"></div></div>
+                    const isChosen = r === chosen;
+                    html += `<div style="margin:4px 0 8px 0;${isChosen ? 'padding-left:6px;border-left:2px solid ' + fcol + ';' : 'opacity:0.75;'}">
+                        <div style="font-size:12px;font-weight:${isChosen ? '700' : '400'};"><b>route_${r}</b> ${riskOk(pr.band_match)}</div>
+                        <div style="height:7px;background:#0c2417;border-radius:3px;overflow:hidden;margin:3px 0;"><div style="height:100%;width:${gw}%;background:${fcol};border-radius:3px;"></div></div>
                         <div style="font-size:11px;">수식 ${rt === null ? "—" : rt.toFixed(3)} <span style="color:${fcol}">[${(f.band || "—").toUpperCase()}]</span> · LLM <span style="color:${lcol}">[${(l.risk_level || "—").toUpperCase()}]</span></div>
                         ${renderExposureBars(exp.profile, fcol)}
                     </div>`;
                 }
                 html += '</div>';
 
+                html += SEP;
+
                 // 블록 3: 근거/발산
                 const n = cmp.narrative || {};
-                html += '<div><div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">판단 근거</div>';
-                html += `<div style="font-size:11px;margin:2px 0;"><b>수식</b>: ${escapeHtml(safe(n.formula_reason))}</div>`;
-                html += `<div style="font-size:11px;margin:2px 0;"><b>LLM</b>: ${escapeHtml(safe(n.llm_decision_reason || n.llm_summary))}</div>`;
+                function formatReason(text) {
+                    if (!text) return '<span style="color:#5a6b62;">—</span>';
+                    const parts = text.replace(/\s*—\s*/g, '. ').replace(/\*\*/g, '').split(/\.\s+/).map(s => s.trim()).filter(Boolean);
+                    return parts.map(s => {
+                        const isWarn = /⚠|권장|신뢰도 낮|누락|위험/.test(s);
+                        const colored = s.replace(/(\d+\.?\d*)/g, '<b style="color:#d0eaff;">$1</b>');
+                        return `<div style="display:flex;align-items:flex-start;gap:5px;margin:2px 0;font-size:11px;line-height:1.55;">
+                            <span style="flex-shrink:0;margin-top:2px;color:${isWarn ? '#ffd34d' : '#3a6a4a'};">${isWarn ? '⚠' : '·'}</span>
+                            <span style="${isWarn ? 'color:#ffd34d;' : ''}">${colored}</span>
+                        </div>`;
+                    }).join('');
+                }
+                html += '<div>';
+                html += '<div style="font-weight:700;color:#9ec5f0;margin-bottom:6px;">판단 근거</div>';
+                html += `<div style="font-size:11px;color:#7a8aa0;margin-bottom:3px;">수식</div>${formatReason(n.formula_reason)}`;
+                html += `<div style="font-size:11px;color:#7a8aa0;margin:7px 0 3px 0;">LLM</div>${formatReason(n.llm_decision_reason || n.llm_summary)}`;
                 if (Array.isArray(cmp.divergence) && cmp.divergence.length) {
-                    const dv = cmp.divergence.map((d) => `route_${d.route} 수식 ${d.formula_band}↔LLM ${d.llm_band}`).join(", ");
-                    html += `<div style="font-size:11px;margin:4px 0;color:#ffd34d;">발산: ${escapeHtml(dv)}</div>`;
+                    const dv = cmp.divergence.map((d) => `route_${d.route} 수식 ${d.formula_band}↔LLM ${d.llm_band}`).join(" / ");
+                    html += `<div style="font-size:11px;margin-top:8px;padding:5px 8px;background:#1a1600;border-radius:4px;color:#ffd34d;line-height:1.5;">⚠ 발산: ${escapeHtml(dv)}</div>`;
                 }
                 html += '</div>';
                 return html;
@@ -1834,57 +1993,275 @@ def render_view_page(poll_ms: int = 1000) -> str:
                      + f(w, d, `rotateX(90deg) translateZ(${h / 2}px)`)
                      + f(w, d, `rotateX(-90deg) translateZ(${h / 2}px)`);
             }
-            function renderMissionPlan(state) {
-                // 미션 계획(build_mission_plan.py 산출) — 루트·사격위치·교전순서·LLM 서술. RISK 패널 하단에 표시.
+            const missionSeries = [];
+            const suddenSeries = [];
+            function dist2d(a, b) {
+                if (!a || !b) return null;
+                const ax = Number(a.x), ay = Number(a.y ?? a.z);
+                const bx = Number(b.x), by = Number(b.y ?? b.z);
+                if (![ax, ay, bx, by].every(Number.isFinite)) return null;
+                return Math.hypot(ax - bx, ay - by);
+            }
+            function planPoint(p) {
+                if (!p || typeof p !== "object") return null;
+                const x = Number(p.x);
+                const y = Number(p.y ?? p.z);
+                const z = Number(p.z ?? p.height ?? 0);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+                return { x, y, z: Number.isFinite(z) ? z : 0, radius: Number(p.radius_m ?? p.radius ?? 0) };
+            }
+            function missionEngagementRows(mp) {
+                if (!mp) return [];
+                const planTargets = Array.isArray(mp?.plan?.targets) ? mp.plan.targets : [];
+                const engs = Array.isArray(mp.engagements) ? mp.engagements : [];
+                const engById = {};
+                for (const e of engs) if (e && e.id) engById[String(e.id)] = e;
+                const ids = [];
+                for (const id of (mp?.plan?.engage_order || [])) ids.push(String(id));
+                for (const e of engs) if (e?.id && !ids.includes(String(e.id))) ids.push(String(e.id));
+                for (const t of planTargets) if (t?.id && !ids.includes(String(t.id))) ids.push(String(t.id));
+                return ids.map((id, idx) => {
+                    const t = planTargets.find((x) => String(x?.id) === id) || {};
+                    const e = engById[id] || {};
+                    const cp = planPoint(t.firing_checkpoint || e.checkpoint || t.checkpoint);
+                    const target = planPoint(t.target || e.target);
+                    const range = Number(t?.firing_checkpoint?.distance_m ?? e?.checkpoint?.distance_m ?? dist2d(cp, target));
+                    return {
+                        index: idx + 1,
+                        id,
+                        checkpoint: cp,
+                        target,
+                        range_m: Number.isFinite(range) ? range : null,
+                        exposure: t?.firing_checkpoint?.exposure ?? t?.exposure ?? e?.exposure,
+                        exposure_band: t?.firing_checkpoint?.exposure_band ?? t?.exposure_band ?? e?.exposure_band,
+                        score: t?.firing_checkpoint?.score ?? t?.score ?? e?.score,
+                        los_clear: t?.firing_checkpoint?.los_clear ?? t?.los_clear ?? e?.los_clear,
+                        target_from_enemy_pose: e?.target_from_enemy_pose,
+                        reposition: e?.reposition || {},
+                        rawTarget: t,
+                        rawEngagement: e,
+                    };
+                });
+            }
+            function missionCurrentRow(state, mp) {
+                const rows = missionEngagementRows(mp);
+                if (!rows.length) return null;
+                const b = state?.ballistic || state?.ballisticTurret || state?.missionStatus || {};
+                const id = b.current_id || b.currentTargetId || b.engagement_id || b.engagementId;
+                if (id) {
+                    const found = rows.find((r) => String(r.id) === String(id));
+                    if (found) return found;
+                }
+                const idx = Number(b.current_index ?? b.engagement_index ?? b.target_index);
+                if (Number.isFinite(idx) && idx >= 0 && rows[idx]) return rows[idx];
+                const latest = latestBridge(state);
+                const pose = readPoint(latest.player_pose_map || latest.get_action_pose_map || latest.info_compact?.player_pose_map);
+                if (!pose) return rows[0];
+                const pending = rows
+                    .map((r) => ({ row: r, d: dist2d(pose, r.checkpoint) }))
+                    .filter((x) => Number.isFinite(x.d))
+                    .sort((a, b) => a.d - b.d);
+                return pending[0]?.row || rows[0];
+            }
+            function pushMissionTelemetry(state) {
+                const latest = latestBridge(state);
+                const sim = latest.sim_status || {};
+                const ps = latest.player_state || {};
+                const pose = readPoint(latest.player_pose_map || latest.get_action_pose_map || latest.info_compact?.player_pose_map);
                 const mp = state?.missionPlan;
-                if (!mp || !mp.plan) return '';
-                const plan = mp.plan;
-                let html = '<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px;">';
-                html += '<div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">미션 계획 (사격)</div>';
-                const order = (plan.engage_order || []).join(" → ") || "—";
-                html += `<div style="font-size:12px;margin-bottom:4px;">추천 루트 <b>${safe(mp.route_recommended)}</b> · 교전순서 ${escapeHtml(order)}</div>`;
-                for (const e of (plan.targets || [])) {
-                    const cp = e.firing_checkpoint;
-                    if (cp) {
-                        const band = (cp.exposure_band || "—").toUpperCase();
-                        html += `<div style="font-size:11px;margin:2px 0;"><b>${escapeHtml(safe(e.id))}</b> → 사격(${numberText(cp.x, 0)}, ${numberText(cp.y, 0)}) ${numberText(cp.distance_m, 0)}m [${band}]</div>`;
-                    } else {
-                        html += `<div style="font-size:11px;margin:2px 0;color:#f39;"><b>${escapeHtml(safe(e.id))}</b> → 교전불가</div>`;
+                const cur = missionCurrentRow(state, mp);
+                const t = Number(sim.sim_time ?? state?.serverTime ?? Date.now() / 1000);
+                if (!Number.isFinite(t)) return;
+                const speed = Number(ps.speed ?? sim.player_speed);
+                const turret = ps.turret || {};
+                const cpDist = pose && cur?.checkpoint ? dist2d(pose, cur.checkpoint) : null;
+                const targetDist = pose && cur?.target ? dist2d(pose, cur.target) : null;
+                const fire = !!latest.get_action_response?.command?.fire;
+                const item = {
+                    t,
+                    speed: Number.isFinite(speed) ? speed : null,
+                    cpDist,
+                    targetDist,
+                    turretYaw: Number(turret.x),
+                    turretPitch: Number(turret.y),
+                    currentId: cur?.id || null,
+                    action: state?.suddenDecision?.action || "NONE",
+                    risk: Number(state?.suddenDecision?.max_risk),
+                    fire,
+                };
+                const last = missionSeries[missionSeries.length - 1];
+                if (!last || Math.abs(last.t - item.t) > 0.20 || last.currentId !== item.currentId || last.fire !== item.fire) {
+                    missionSeries.push(item);
+                    while (missionSeries.length > 180) missionSeries.shift();
+                }
+                const sd = state?.suddenDecision;
+                if (sd) {
+                    const risk = Number(sd.max_risk ?? 0);
+                    const prev = suddenSeries[suddenSeries.length - 1];
+                    const si = { t, action: sd.action || "NONE", risk: Number.isFinite(risk) ? risk : 0, nNew: Number(sd.n_new ?? 0), nEngageable: Number(sd.n_engageable ?? 0) };
+                    if (!prev || Math.abs(prev.t - si.t) > 0.20 || prev.action !== si.action || prev.risk !== si.risk) {
+                        suddenSeries.push(si);
+                        while (suddenSeries.length > 180) suddenSeries.shift();
                     }
                 }
-                const v = mp.verification || {};
-                if (Array.isArray(v.problems) && v.problems.length) {
-                    html += `<div style="font-size:11px;color:#f39;margin-top:4px;">⚠ ${escapeHtml(v.problems.join("; "))}</div>`;
+            }
+            function sparklineSvg(series, key, title, unit = "", color = "#5ac8ff", maxHint = null) {
+                const vals = series.map((p) => Number(p[key])).filter(Number.isFinite);
+                if (vals.length < 2) return `<div style="font-size:10px;color:#5a6b62;border:1px dashed var(--line-dim);padding:7px;">${escapeHtml(title)} 데이터 대기</div>`;
+                const w = 300, h = 46;
+                let min = Math.min(...vals), max = Math.max(...vals);
+                if (Number.isFinite(maxHint)) { min = Math.min(min, 0); max = Math.max(max, maxHint); }
+                if (Math.abs(max - min) < 0.001) { max += 1; min -= 1; }
+                const recent = series.slice(-80).filter((p) => Number.isFinite(Number(p[key])));
+                const n = recent.length;
+                const pts = recent.map((p, i) => {
+                    const x = n <= 1 ? 0 : (i / (n - 1)) * w;
+                    const y = h - ((Number(p[key]) - min) / (max - min)) * h;
+                    return `${x.toFixed(1)},${y.toFixed(1)}`;
+                }).join(" ");
+                const last = recent[recent.length - 1];
+                return `<div style="border:1px solid var(--line-dim);background:rgba(8,19,40,0.55);padding:6px;margin-top:6px;">
+                    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:3px;"><span>${escapeHtml(title)}</span><b style="color:${color}">${numberText(last?.[key], 1)}${escapeHtml(unit)}</b></div>
+                    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:42px;display:block;background:rgba(0,0,0,0.18);">
+                        <polyline fill="none" stroke="${color}" stroke-width="2" points="${pts}"></polyline>
+                    </svg>
+                </div>`;
+            }
+            function kvLine(k, v, color = "#dbe6ff") {
+                return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:10.5px;line-height:1.45;border-bottom:1px solid rgba(42,83,154,0.22);padding:2px 0;"><span style="color:var(--muted)">${escapeHtml(k)}</span><b style="color:${color};text-align:right;">${escapeHtml(v)}</b></div>`;
+            }
+            function ioStep(title, body, tag = "") {
+                return `<div style="border:1px solid var(--line-dim);background:rgba(8,19,40,0.65);padding:8px;min-width:0;">
+                    <div style="font-size:11px;font-weight:800;color:#9ec5f0;margin-bottom:4px;">${escapeHtml(title)} ${tag ? `<span style="font-size:9px;color:#ffd34d;">${escapeHtml(tag)}</span>` : ""}</div>
+                    <div style="font-size:10.5px;line-height:1.55;color:#b9c8e8;">${body}</div>
+                </div>`;
+            }
+            function renderMissionPlan(state) {
+                // build_mission_plan.py 산출을 "입력→전처리→LLM→시나리오2 실행" 형태로 표시한다.
+                const mp = state?.missionPlan;
+                if (!mp || !mp.plan) {
+                    return `<div style="font-size:11px;color:#5a6b62;padding:8px 0;line-height:1.6;">미션 계획 생성 중...<br>기대 파일: <b>recon_reports/mission_plan.json</b><br>필요 입력: scenario2_map.map, scenario2_terrain.json, risk_features.json, scenario2_routes.yaml</div>`;
                 }
+                const rows = missionEngagementRows(mp);
+                const plan = mp.plan || {};
                 const g = mp.llm_guidance || {};
+                const current = missionCurrentRow(state, mp);
+                const latest = latestBridge(state);
+                const pose = readPoint(latest.player_pose_map || latest.get_action_pose_map || latest.info_compact?.player_pose_map);
+                const order = (plan.engage_order || rows.map((r) => r.id)).join(" → ") || "—";
+                const ver = mp.verification || {};
+                let html = '<div style="display:grid;gap:10px;">';
+
+                html += `<div style="background:#0d2e1a;border:1px solid ${ver.ok === false ? '#ff3448' : '#ffd34d'};border-radius:5px;padding:8px 10px;">
+                    <div style="font-size:13px;font-weight:800;color:#fff;">Scenario 2 사격 미션 계획 · Route <span style="color:#ffd34d">${escapeHtml(safe(mp.route_recommended || plan.route, 'A'))}</span></div>
+                    <div style="font-size:11px;color:#b9c8e8;margin-top:3px;">교전 순서: <b style="color:#e8eefc">${escapeHtml(order)}</b> · 현재 추적: <b style="color:#5ac8ff">${escapeHtml(safe(current?.id, '대기'))}</b></div>
+                </div>`;
+
+                html += `<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;">
+                    ${ioStep('INPUT', '정찰 합본맵 <b>scenario2_map.map</b><br>지형 비용 <b>scenario2_terrain.json</b><br>위험 feature <b>risk_features.json</b><br>후보 루트 <b>scenario2_routes.yaml</b>')}
+                    ${ioStep('PREPROCESS', '표적 추출 → 루트 1m 샘플링 → 사거리 20~130m 검사 → 장애물 LoS 검사 → 노출/지형 점수화 → 교전순서 생성')}
+                    ${ioStep('OUTPUT', '시나리오2 실행 입력 <b>mission_plan.json</b><br>포탑 노드 입력 <b>engagements_json</b><br>LLM 서술 <b>llm_guidance</b>', g.available ? 'LLM ON' : 'LLM OFF')}
+                </div>`;
+
+                html += `<div style="border:1px solid var(--line-dim);background:rgba(4,12,8,0.72);padding:8px;font-size:11px;line-height:1.6;">
+                    <b style="color:#9ec5f0;">상황 구체화</b><br>
+                    1차 사격은 정찰 중 확인된 중간 위협 또는 차폐 뒤 표적을 사거리·시야·노출 조건이 맞는 checkpoint에서 처리한다.<br>
+                    2차 사격은 목적지 전차(enemy_final)를 대상으로 하며, 주변 시야 장애물과 지형 경사 때문에 직접 접근이 아니라 포탑 조준 가능 위치를 선택해 교전한다.<br>
+                    <span style="color:#ffd34d;">주의:</span> 현재 좌표 산출은 LLM이 임의 생성하는 값이 아니라, 기하 전처리 결과를 LLM이 수행 지침으로 설명하는 구조다.
+                </div>`;
+
+                html += '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;">';
+                for (const r of rows) {
+                    const isCurrent = current && current.id === r.id;
+                    const cpDist = pose && r.checkpoint ? dist2d(pose, r.checkpoint) : null;
+                    const tgtDist = pose && r.target ? dist2d(pose, r.target) : null;
+                    const band = String(r.exposure_band || 'unknown').toUpperCase();
+                    const bandColor = band.includes('HIGH') ? '#ff8a3d' : band.includes('LOW') ? '#39ff88' : '#ffd34d';
+                    const perText = g?.per_target?.[r.id] || r.rawTarget?.note || '';
+                    html += `<div style="border:1px solid ${isCurrent ? '#5ac8ff' : 'var(--line-dim)'};background:rgba(8,19,40,0.58);padding:8px;min-width:0;">
+                        <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:5px;"><b style="color:${isCurrent ? '#5ac8ff' : '#e8eefc'};">${r.index}차 사격 · ${escapeHtml(r.id)}</b><span style="font-size:10px;color:${bandColor};border:1px solid ${bandColor};padding:1px 5px;">${escapeHtml(band)}</span></div>
+                        ${kvLine('사격 checkpoint', r.checkpoint ? `(${numberText(r.checkpoint.x, 1)}, ${numberText(r.checkpoint.y, 1)}) R=${numberText(r.checkpoint.radius, 1)}m` : '없음')}
+                        ${kvLine('표적 좌표', r.target ? `(${numberText(r.target.x, 1)}, ${numberText(r.target.y, 1)}, z=${numberText(r.target.z, 1)})` : '없음')}
+                        ${kvLine('사격거리', Number.isFinite(r.range_m) ? `${numberText(r.range_m, 1)}m` : '—')}
+                        ${kvLine('현재→checkpoint', Number.isFinite(cpDist) ? `${numberText(cpDist, 1)}m` : '—')}
+                        ${kvLine('현재→target', Number.isFinite(tgtDist) ? `${numberText(tgtDist, 1)}m` : '—')}
+                        ${kvLine('LoS/재배치', `${r.los_clear === true ? 'clear' : r.los_clear === false ? 'blocked' : 'calc'} / ${r.reposition?.enabled ? 'fallback ON' : 'fallback OFF'}`)}
+                        ${perText ? `<div style="font-size:10.5px;color:#e8c37a;line-height:1.45;margin-top:6px;">LLM 지침: ${escapeHtml(perText)}</div>` : ''}
+                    </div>`;
+                }
+                html += '</div>';
+
+                html += `<div style="border:1px solid var(--line-dim);background:rgba(4,12,8,0.65);padding:8px;">
+                    <div style="font-size:11px;font-weight:800;color:#9ec5f0;margin-bottom:4px;">시계열 로그</div>
+                    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;">
+                        ${sparklineSvg(missionSeries, 'speed', '전차 속도', 'm/s', '#5ac8ff')}
+                        ${sparklineSvg(missionSeries, 'cpDist', '현재 checkpoint까지 거리', 'm', '#ffd34d')}
+                        ${sparklineSvg(missionSeries, 'targetDist', '현재 target까지 거리', 'm', '#ff8a3d')}
+                        ${sparklineSvg(missionSeries, 'turretPitch', '포탑 pitch feedback', '°', '#b084ff')}
+                    </div>
+                </div>`;
+
                 if (g.available) {
-                    html += `<div style="font-size:11px;margin-top:4px;"><b>LLM</b>: ${escapeHtml(safe(g.summary))}</div>`;
-                    for (const c of (g.cautions || [])) {
-                        html += `<div style="font-size:11px;color:#e8c37a;">⚠ ${escapeHtml(c)}</div>`;
-                    }
+                    html += `<div style="border:1px solid var(--line-dim);background:rgba(8,19,40,0.58);padding:8px;font-size:11px;line-height:1.6;">
+                        <b style="color:#9ec5f0;">LLM output</b><br>${escapeHtml(safe(g.summary))}<br>
+                        <span style="color:#b9c8e8;">순서 근거:</span> ${escapeHtml(safe(g.engage_order_reason, '—'))}
+                        ${(g.cautions || []).map((c) => `<div style="color:#e8c37a;">⚠ ${escapeHtml(c)}</div>`).join('')}
+                    </div>`;
                 } else if (g.error) {
-                    html += '<div style="font-size:11px;color:#889;">LLM 서술 미사용</div>';
+                    html += `<div style="font-size:11px;color:#889;">LLM 서술 미사용: ${escapeHtml(g.error)}</div>`;
+                }
+                if (Array.isArray(ver.problems) && ver.problems.length) {
+                    html += `<div style="font-size:11px;color:#ff8a3d;border:1px solid #ff8a3d;padding:6px;">검증 문제: ${escapeHtml(ver.problems.join('; '))}</div>`;
                 }
                 html += '</div>';
                 return html;
             }
             function renderSuddenDecision(state) {
-                // 돌발 대응(sudden_advisor_node, 라이브) — 미션 주행 중 신규 위협 결정(advise-only).
+                // sudden_advisor_node 라이브 판단을 입력→전처리→LLM/결정→출력으로 표시한다.
                 const sd = state?.suddenDecision;
-                if (!sd) return '';
-                const act = sd.action || 'NONE';
-                if (act === 'NONE' && !(sd.n_new > 0)) {
-                    return '<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px;font-size:11px;color:#7a8aa0;">돌발 대응 대기 (신규 위협 없음)</div>';
+                const latest = latestBridge(state);
+                const detections = getDetections(state);
+                const act = sd?.action || 'NONE';
+                const col = act === 'RETURN' ? '#ff3448' : act === 'ENGAGE' ? '#ffd34d' : act === 'BYPASS' ? '#5ac8ff' : '#7a8aa0';
+                let html = '<div style="display:grid;gap:10px;">';
+                html += `<div style="background:rgba(8,19,40,0.65);border:1px solid ${col};border-radius:5px;padding:8px 10px;">
+                    <div style="font-size:13px;font-weight:800;color:#fff;">실시간 판단 · <span style="color:${col};">${escapeHtml(act)}</span></div>
+                    <div style="font-size:11px;color:#b9c8e8;margin-top:3px;">신규 ${safe(sd?.n_new, 0)} · 교전가능 ${safe(sd?.n_engageable, 0)} · 최대위험 ${safe(sd?.max_risk, 0)} · YOLO/Fusion 객체 ${detections.length}</div>
+                </div>`;
+                html += `<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;">
+                    ${ioStep('LIVE INPUT', `현재 pose / 속도 / 포탑각<br>YOLO·fusion detections ${detections.length}개<br>정찰 합본맵 scenario2_map.map`)}
+                    ${ioStep('PREPROCESS', '새 위협 판정 → 사거리/LoS/위험점수 → hysteresis 통과 확인 → RETURN/ENGAGE/BYPASS 후보화')}
+                    ${ioStep('OUTPUT', 'decision/status 패널<br>/tank/mission/abort 또는 계속 주행<br>LLM 조언은 있으면 reason으로 표시', sd?.llm?.available ? 'LLM ON' : 'LLM WAIT')}
+                </div>`;
+                if (!sd) {
+                    html += '<div style="font-size:11px;color:#5a6b62;padding:8px 0;">실시간 판단 대기 중 — 시나리오2 미션 주행과 sudden_advisor_node 상태가 들어오면 표시됩니다.</div>';
+                } else {
+                    html += `<div style="border:1px solid var(--line-dim);background:rgba(4,12,8,0.72);padding:8px;font-size:11px;line-height:1.6;">
+                        <b style="color:#9ec5f0;">판단 근거</b><br>${escapeHtml(safe(sd.reason, '—'))}
+                    </div>`;
+                    const g = sd.llm || {};
+                    if (g.available) {
+                        html += `<div style="border:1px solid var(--line-dim);background:rgba(8,19,40,0.58);padding:8px;font-size:11px;line-height:1.6;">
+                            <b style="color:#9ec5f0;">LLM realtime output</b><br>
+                            action=<b style="color:${col};">${escapeHtml(safe(g.action))}</b><br>
+                            ${escapeHtml(safe(g.reason))}
+                        </div>`;
+                    }
+                    const fp = sd.recommended_firing_point || sd.fire_point || g.fire_point || g.recommended_firing_point;
+                    html += `<div style="font-size:10.5px;color:#7a8aa0;line-height:1.55;border:1px dashed var(--line-dim);padding:7px;">
+                        LLM 사격 좌표 활용 확장 포인트: <b>recommended_firing_point</b> 또는 <b>fire_point</b> 필드가 dashboard state로 들어오면 여기 표시됩니다.<br>
+                        현재 표시값: ${fp ? escapeHtml(JSON.stringify(fp)) : '없음 — 현재는 기하 기반 mission_plan 좌표를 사용'}
+                    </div>`;
                 }
-                const col = act === 'RETURN' ? '#f39' : act === 'ENGAGE' ? '#e8c37a' : act === 'BYPASS' ? '#9ec5f0' : '#7a8aa0';
-                let html = '<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:8px;">';
-                html += '<div style="font-weight:700;color:#9ec5f0;margin-bottom:4px;">돌발 대응 (라이브)</div>';
-                html += `<div style="font-size:13px;margin-bottom:2px;">결정 <b style="color:${col}">${escapeHtml(act)}</b> · 신규 ${safe(sd.n_new, 0)} · 교전가능 ${safe(sd.n_engageable, 0)} · 최대위험 ${safe(sd.max_risk, 0)}</div>`;
-                html += `<div style="font-size:11px;margin:2px 0;">${escapeHtml(safe(sd.reason))}</div>`;
-                const g = sd.llm || {};
-                if (g.available) {
-                    html += `<div style="font-size:11px;margin-top:3px;"><b>LLM</b> [${escapeHtml(safe(g.action))}]: ${escapeHtml(safe(g.reason))}</div>`;
-                }
+                html += `<div style="border:1px solid var(--line-dim);background:rgba(4,12,8,0.65);padding:8px;">
+                    <div style="font-size:11px;font-weight:800;color:#9ec5f0;margin-bottom:4px;">실시간 위험 시계열</div>
+                    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;">
+                        ${sparklineSvg(suddenSeries, 'risk', 'max_risk', '', '#ff8a3d', 100)}
+                        ${sparklineSvg(suddenSeries, 'nNew', '신규 위협 수', '', '#ffd34d')}
+                        ${sparklineSvg(suddenSeries, 'nEngageable', '교전 가능 수', '', '#5ac8ff')}
+                        ${sparklineSvg(missionSeries, 'cpDist', 'checkpoint 거리', 'm', '#39ff88')}
+                    </div>
+                </div>`;
                 html += '</div>';
                 return html;
             }
@@ -1943,7 +2320,8 @@ def render_view_page(poll_ms: int = 1000) -> str:
             function updateLeftPanel(state) {
                 // C2 4분할: 패널 ③(전차상태+시스템)·④(LLM/위험도) 렌더. 아래 legacy 5탭 코드는 unreachable.
                 byId("tankSystemContent").innerHTML = renderTankState(state) + renderSystem(state);
-                byId("riskContent").innerHTML = renderRiskPanel(state) + renderMissionPlan(state) + renderSuddenDecision(state);
+                if (activeMapTab === "llm" && byId("llm-sub-recon")) { renderLlmSubContent(activeLlmSub, state); }
+                renderRosActive(state);
                 return;
                 const latest = latestBridge(state);
                 const yolo = state?.yolo || {};
@@ -2143,7 +2521,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     ctx.stroke();
                     ctx.restore();
                     const labelPoint = points[Math.max(1, Math.floor(points.length * 0.45))];
-                    const label = isSelected ? `${candidate.side || candidate.id} SELECTED` : `${candidate.side || candidate.id} ${candidate.id || ""}`.trim();
+                    const label = `${candidate.id || candidate.side || ""} ROUTE`.trim();
                     drawMapTag(ctx, label, labelPoint, color, width, height);
                 }
                 const selected = selectedRouteCandidate(payload);
@@ -2362,10 +2740,6 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     if (player) {
                         const selfPoint = mapPoint(player);
                         drawSymbol(ctx, selfPoint, "#39ff88", `SELF ${numberText(player.x, 1)},${numberText(player.y, 1)}`, "circle");
-                    } else {
-                        ctx.fillStyle = "rgba(57,255,136,0.82)";
-                        ctx.font = "12px Consolas, monospace";
-                        ctx.fillText("SELF WAITING: /info or /get_action", 18, staticPoint ? 112 : 92);
                     }
                     if (activeMapTab === "ros") drawRosStatus(ctx, bridge, latest, w);
                 } catch (err) {
@@ -2389,12 +2763,120 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 byId("bottomRoute").textContent = `/detect ${safe(counts["/detect"], 0)} /info ${safe(counts["/info"], 0)}`;
                 byId("bottomWarning").textContent = state?.bridge?.error || state?.yolo?.error || state?.liveView?.latestError || "-";
             }
+            function setFeedStatusMessage(text) {
+                const status = byId("feedStatusText");
+                if (status && text) status.textContent = text;
+            }
+            function stopMjpeg() {
+                const img = byId("driveFeed");
+                if (img) { img.removeAttribute("src"); img.style.display = "none"; }
+            }
+            function startMjpeg(reason = "MJPEG") {
+                const img = byId("driveFeed");
+                const video = byId("driveWebrtc");
+                if (webRtcPeer) { try { webRtcPeer.close(); } catch (e) {} webRtcPeer = null; }
+                if (video) { video.pause(); video.srcObject = null; video.style.display = "none"; }
+                if (img) {
+                    if (!img.getAttribute("src")) img.src = `${img.dataset.src || "/video_feed"}?t=${Date.now()}`;
+                    img.style.display = "block";
+                }
+                setFeedStatusMessage(reason);
+            }
+            function waitForIceGatheringComplete(pc) {
+                if (pc.iceGatheringState === "complete") return Promise.resolve();
+                return new Promise((resolve) => {
+                    const check = () => {
+                        if (pc.iceGatheringState === "complete") { pc.removeEventListener("icegatheringstatechange", check); resolve(); }
+                    };
+                    pc.addEventListener("icegatheringstatechange", check);
+                    setTimeout(resolve, 3000);
+                });
+            }
+            async function reportWebRtcCodec(pc) {
+                try {
+                    const stats = await pc.getStats();
+                    let codec = null;
+                    stats.forEach((row) => {
+                        if (row.type === "inbound-rtp" && row.kind === "video" && row.codecId) {
+                            const c = stats.get(row.codecId);
+                            if (c?.mimeType) codec = c.mimeType;
+                        }
+                    });
+                    if (codec) { webRtcCodec = codec; setFeedStatusMessage(`WebRTC ${codec}`); }
+                } catch (e) {}
+            }
+            function handleWebRtcFailure(message) {
+                if (WEB_STREAM_MODE === "auto") startMjpeg(`${message} · MJPEG fallback`);
+                else { stopMjpeg(); setFeedStatusMessage(message); }
+            }
+            async function startWebRtcPreview() {
+                stopMjpeg();
+                if (!WEBRTC_ENABLED || !window.RTCPeerConnection) {
+                    handleWebRtcFailure("WebRTC unavailable");
+                    return;
+                }
+                const video = byId("driveWebrtc");
+                try {
+                    const pc = new RTCPeerConnection({ iceServers: [] });
+                    webRtcPeer = pc;
+                    const transceiver = pc.addTransceiver("video", { direction: "recvonly" });
+                    if (transceiver.setCodecPreferences && window.RTCRtpReceiver?.getCapabilities) {
+                        const codecs = RTCRtpReceiver.getCapabilities("video")?.codecs || [];
+                        const h264 = codecs.filter((c) => String(c.mimeType).toLowerCase() === "video/h264");
+                        const rest = codecs.filter((c) => !h264.includes(c));
+                        if (h264.length) transceiver.setCodecPreferences([...h264, ...rest]);
+                    }
+                    pc.ontrack = (event) => {
+                        video.srcObject = event.streams[0];
+                        video.style.display = "block";
+                        stopMjpeg();
+                        video.play().catch(() => {});
+                        setFeedStatusMessage("WebRTC connected");
+                        setTimeout(() => reportWebRtcCodec(pc), 1000);
+                    };
+                    pc.onconnectionstatechange = () => {
+                        if (["failed", "closed", "disconnected"].includes(pc.connectionState)) {
+                            handleWebRtcFailure(`WebRTC ${pc.connectionState}`);
+                        }
+                    };
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+                    await waitForIceGatheringComplete(pc);
+                    const response = await fetch("/webrtc/offer", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+                    });
+                    const answer = await response.json();
+                    if (!response.ok) throw new Error(answer.error || `HTTP ${response.status}`);
+                    await pc.setRemoteDescription(answer);
+                } catch (err) {
+                    console.warn("WebRTC preview failed:", err);
+                    handleWebRtcFailure("WebRTC failed");
+                }
+            }
+            function startSelectedPreview() {
+                if (WEB_STREAM_MODE === "mjpeg") startMjpeg("MJPEG");
+                else startWebRtcPreview();
+            }
+
+            async function fetchLiveOverlayState() {
+                try {
+                    const response = await fetch("/api/live-feed/state", { cache: "no-store" });
+                    if (!response.ok) return;
+                    latestLiveOverlay = await response.json();
+                    drawFeedOverlay(latestState || {});
+                    updateFeedStatus(latestState || {});
+                } catch (err) {}
+            }
+
             async function fetchDashboardState() {
                 try {
                     const response = await fetch("/api/dashboard/state", { cache: "no-store" });
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     latestState = await response.json();
                     lastFetchOk = true;
+                    pushMissionTelemetry(latestState);
                     updateHeader(latestState);
                     updateLeftPanel(latestState);
                     drawMap(latestState);
@@ -2462,7 +2944,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
             });
             updateMapLegend();
             // 기본으로 웹 3D(RVIZ 3D 탭)를 자동 표시한다. ?map=terrain / ?map=ros 로 되돌릴 수 있다.
-            { const mp = new URLSearchParams(window.location.search).get("map"); setMapTab(["terrain", "ros", "rviz"].includes(mp) ? mp : "rviz"); }
+            { const mp = new URLSearchParams(window.location.search).get("map"); setMapTab(["terrain", "llm"].includes(mp) ? mp : "terrain"); }
             fetchStaticMap();
             function toggleMax(panel) {
                 if (!panel) return;
@@ -2484,6 +2966,9 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 });
             }
             initPanelMax();
+            startSelectedPreview();
+            fetchLiveOverlayState();
+            setInterval(fetchLiveOverlayState, 100);
             fetchDashboardState();
             setInterval(fetchDashboardState, 300);
         </script>
@@ -2495,27 +2980,85 @@ def render_view_page(poll_ms: int = 1000) -> str:
         "setInterval(fetchDashboardState, 300)",
         f"setInterval(fetchDashboardState, {int(poll_ms)})",
     )
+    html = html.replace(
+        "setInterval(fetchLiveOverlayState, 100)",
+        f"setInterval(fetchLiveOverlayState, {int(_LIVE_OVERLAY_POLL_MS)})",
+    )
+    html = html.replace("const WEBRTC_ENABLED = false", f"const WEBRTC_ENABLED = {str(_WEBRTC_ENABLED).lower()}")
+    html = html.replace('const WEB_STREAM_MODE = "mjpeg"', f'const WEB_STREAM_MODE = "{_WEB_STREAM_MODE}"')
     return render_template_string(html)
 
 
 def generate_video_stream(web_fps: float = 20.0, jpeg_quality: int = 80):
+    """최신 프레임만 전송한다. raw 모드에서는 복사·decode·encode를 생략한다."""
+    global _stream_client_count, _stream_sent_count
     interval = 1.0 / max(1.0, float(web_fps))
     encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)] if cv2 is not None else []
-    while True:
-        with _state_lock:
-            frame = None if _latest_frame is None else _latest_frame.copy()
-            detections = deepcopy(_latest_detections)
-            metadata = deepcopy(_latest_detection_metadata)
-        if frame is None:
-            frame = _blank_frame()
-        elif not _LIVE_VIEW_BROWSER_OVERLAY:
-            frame = _draw_detections(frame, detections, metadata)
-        if cv2 is not None:
-            ok, buffer = cv2.imencode(".jpg", frame, encode_params)
-            if ok:
-                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buffer.tobytes() + b"\r\n"
-        time.sleep(interval)
+    raw_mode = bool(_LIVE_VIEW_RAW_JPEG and _LIVE_VIEW_BROWSER_OVERLAY)
+    last_sent_seq = -1
+    next_send_at = 0.0
 
+    with _state_lock:
+        _stream_client_count += 1
+    try:
+        while True:
+            with _frame_condition:
+                _frame_condition.wait_for(lambda: _latest_frame_seq != last_sent_seq, timeout=1.0)
+                seq = int(_latest_frame_seq)
+                raw_jpeg = _latest_raw_jpeg
+                if raw_mode:
+                    frame = None
+                    detections = None
+                    metadata = None
+                else:
+                    frame = None if _latest_frame is None else _latest_frame.copy()
+                    detections = deepcopy(_latest_detections)
+                    metadata = deepcopy(_latest_detection_metadata)
+
+            if seq == last_sent_seq:
+                continue
+
+            now = time.monotonic()
+            if now < next_send_at:
+                time.sleep(next_send_at - now)
+                with _state_lock:
+                    seq = int(_latest_frame_seq)
+                    raw_jpeg = _latest_raw_jpeg
+                    if not raw_mode:
+                        frame = None if _latest_frame is None else _latest_frame.copy()
+                        detections = deepcopy(_latest_detections)
+                        metadata = deepcopy(_latest_detection_metadata)
+
+            jpeg_bytes = None
+            if raw_mode and raw_jpeg:
+                jpeg_bytes = raw_jpeg
+            else:
+                if frame is None:
+                    frame = _blank_frame()
+                elif not _LIVE_VIEW_BROWSER_OVERLAY:
+                    frame = _draw_detections(frame, detections or [], metadata or {})
+                if cv2 is not None:
+                    ok, buffer = cv2.imencode(".jpg", frame, encode_params)
+                    if ok:
+                        jpeg_bytes = buffer.tobytes()
+
+            if jpeg_bytes:
+                with _state_lock:
+                    _stream_sent_count += 1
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Cache-Control: no-store, no-cache, must-revalidate, max-age=0\r\n"
+                    b"Pragma: no-cache\r\n\r\n"
+                    + jpeg_bytes
+                    + b"\r\n"
+                )
+
+            last_sent_seq = seq
+            next_send_at = time.monotonic() + interval
+    finally:
+        with _state_lock:
+            _stream_client_count = max(0, _stream_client_count - 1)
 
 def video_response(web_fps: float = 20.0, jpeg_quality: int = 80) -> Response:
     return Response(generate_video_stream(web_fps=web_fps, jpeg_quality=jpeg_quality), mimetype="multipart/x-mixed-replace; boundary=frame")
@@ -2541,5 +3084,11 @@ def debug_state() -> Dict[str, Any]:
             "latestDetectionAgeMs": None if det_age is None else det_age * 1000.0,
             "latestDetectionMetadata": deepcopy(_latest_detection_metadata),
             "latestError": _latest_error,
-            "rawStream": _LIVE_VIEW_BROWSER_OVERLAY,
+            "rawStream": bool(_LIVE_VIEW_RAW_JPEG and _LIVE_VIEW_BROWSER_OVERLAY),
+            "streamClientCount": _stream_client_count,
+            "streamSentCount": _stream_sent_count,
+            "liveOverlayPollMs": _LIVE_OVERLAY_POLL_MS,
+            "webStreamMode": _WEB_STREAM_MODE,
+            "webrtcEnabled": _WEBRTC_ENABLED,
+            "readyFrameSeq": _latest_ready_frame_seq,
         }

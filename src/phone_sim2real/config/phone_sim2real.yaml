@@ -42,10 +42,18 @@ phone_virtual_obstacle_node:
     # path corridor를 막는 cluster가 보이면 scenario 실행 중에도 동적 재계획한다.
     enable_synthetic_lidar_clusters: true
     synthetic_lidar_clusters_topic: "/tank/phone_sim2real/synthetic_lidar_clusters"
+    # 기본 A* launch가 구독하는 실제 LiDAR cluster topic에도 phone cluster를 함께 발행한다.
+    # 그래서 TANK_TOPIC_LIDAR_CLUSTERS 환경변수 없이도 phone 인식이 동적 재계획에 들어간다.
+    publish_to_planner_cluster_topic: true
+    planner_cluster_topic: "/tank/visual_perception/lidar_clusters"
     publish_empty_synthetic_clusters: false
 
-    # discovered/fused mirror는 RViz와 기존 map-style debug를 위해 유지한다.
-    enable_discovered_objects_publish: false
+    # 스마트폰 YOLO 좌표를 표준 discovered-object 경로에도 발행한다.
+    # map_astar_planner_node는 이 토픽을 기본 구독하므로 별도 환경변수 없이도
+    # 2회 이상 확인된 객체를 costmap/A* 회피 입력으로 사용한다.
+    enable_discovered_objects_publish: true
+    # fused_objects와 /tank/rviz/fused_object_markers는 기존 fusion 노드와 충돌할 수 있으므로
+    # phone 전용 MarkerArray와 discovered 객체 경로를 사용한다.
     enable_fused_objects_mirror: false
 
     # Android app sends 416x416 JPEGs. Keep these values aligned with the app.
@@ -152,13 +160,13 @@ phone_virtual_obstacle_node:
     emergency_wall_radius_m: 3.5
     emergency_wall_first_object_only: true
     emergency_wall_source_tag: "phone_sim2real_emergency_path_wall"
-    # 스마트폰 장애물은 다른 map/fusion 레이어와 중복시키지 않고,
-    # 처음 발견 시점의 lookahead 경로 지점을 기억해 synthetic wall로만 planner에 넣는다.
+    # 스마트폰 장애물은 synthetic wall과 표준 discovered-object 좌표를 함께 발행한다.
+    # discovered-object는 A* costmap/RViz의 공통 입력이고, synthetic wall은 즉시 경로 차단용이다.
     emergency_wall_center_mode: "turret_snapshot"
     emergency_wall_path_fraction: 1.0
     emergency_wall_min_forward_m: 14.0
     emergency_wall_max_forward_m: 22.0
-    emergency_wall_disable_discovered_fused: true
+    emergency_wall_disable_discovered_fused: false
     synthetic_cluster_count_hint: 8
     synthetic_cluster_z_min: 0.2
     synthetic_cluster_z_max: 2.2
@@ -185,22 +193,20 @@ phone_virtual_obstacle_node:
 
     obstacle_ttl_sec: 2.5
     publish_hz: 30.0
+    # vision/yolo_detection.yaml에서 gateway가 이미 canonical/ignored/class threshold를 적용한다.
+    # 여기서는 그 결과를 다시 car/rock/tank 등으로 강하게 걸러 버리지 않는다.
+    # 빈 문자열이면 gateway가 반환한 모든 유효 모델 클래스를 수용한다.
+    # 현재 모델 기준: car, tank, rock, house, tent (person은 vision/phone ignored 정책으로 제외).
     min_confidence: 0.20
+    accepted_classes: ""
     ignored_classes: "person,human,blue,red"
-
-    # class별 오탐 필터. rock 사진 상단에 작게 잡히는 car 같은 false positive 제거용.
     class_filter_json: >-
       {
-        "rock":  {"min_conf": 0.70, "min_bbox_height_px": 40, "min_bbox_area_px": 2500},
-        "car":   {"min_conf": 0.80, "min_bbox_height_px": 45, "min_bbox_area_px": 3000},
-        "tank":  {"min_conf": 0.75, "min_bbox_height_px": 45, "min_bbox_area_px": 3000},
-        "house": {"min_conf": 0.75, "min_bbox_height_px": 50, "min_bbox_area_px": 3500},
-        "tent":  {"min_conf": 0.70, "min_bbox_height_px": 45, "min_bbox_area_px": 2500},
-        "unknown": {"min_conf": 0.70, "min_bbox_height_px": 45, "min_bbox_area_px": 2500}
+        "*": {"min_conf": 0.20, "min_bbox_height_px": 0, "min_bbox_area_px": 0}
       }
 
-    # 이미지 최상단 일부에서 발생하는 작은 오탐 제거. 416px 기준 0.08 ≈ 33px.
-    ignore_top_region_ratio: 0.08
+    # 모델이 검출한 tank/house/tent도 화면 가장자리에 있을 수 있으므로 추가 상단 crop 필터는 끈다.
+    ignore_top_region_ratio: 0.0
 
     dedupe_merge_distance_m: 1.5
     track_merge_distance_m: 2.0
@@ -260,8 +266,9 @@ phone_emergency_brake_node:
     trigger_on_synthetic_clusters: true
     require_inject_enabled: true
     ignored_classes: "person,human,blue,red"
-    min_detection_confidence: 0.50
-    min_virtual_confidence: 0.35
+    # phone_virtual_obstacle_node와 동일하게 vision gateway의 통과 결과를 사용한다.
+    min_detection_confidence: 0.20
+    min_virtual_confidence: 0.20
 
     # 강화된 긴급 정지: 최소 시간 동안 정지하고, route_version 변경 또는 최대 정지시간까지 유지한다.
     emergency_stop_min_sec: 3.0

@@ -618,6 +618,9 @@ class TeamDynamicAStarPlannerNode(Node):
         # launch-defined checkpoint goal.  Dedicated mission goals still work.
         self.declare_parameter("accept_external_goal_updates", True)
         self.declare_parameter("mission_goal_pose_topic", "/tank/mission/goal_pose")
+        # A sudden RETURN is a terminal safety transition.  Its abort message
+        # carries the home goal and must bypass normal northbound route waypoints.
+        self.declare_parameter("mission_abort_topic", "/tank/mission/abort")
         # A turret pitch-limit reposition is a temporary direct goal.  It must
         # not be forced through the next engagement checkpoint waypoint.
         self.declare_parameter("reposition_goal_pose_topic", "/tank/mission/reposition_goal")
@@ -727,6 +730,9 @@ class TeamDynamicAStarPlannerNode(Node):
         self.mission_goal_pose_topic = str(
             self.get_parameter("mission_goal_pose_topic").value
         )
+        self.mission_abort_topic = str(
+            self.get_parameter("mission_abort_topic").value
+        )
         self.reposition_goal_pose_topic = str(
             self.get_parameter("reposition_goal_pose_topic").value
         )
@@ -824,6 +830,11 @@ class TeamDynamicAStarPlannerNode(Node):
             self.goal_pos = (float(self.get_parameter("default_goal_x").value), float(self.get_parameter("default_goal_y").value))
         self.gt_obstacles: List[Dict[str, float]] = []
         self.temporary_direct_goal_active = False
+        # Unlike a turret reposition, a mission return stays direct until the
+        # process restarts.  This prevents route A's forward checkpoints from
+        # being inserted between the current pose and the home point.
+        self.mission_return_active = False
+        self.mission_return_reason = ""
         self.lidar_obstacles = LidarObstacleMemory()
         # Raw DBSCAN boxes remain available for RViz/debug.  The filtered list
         # is the only one allowed to influence A* and path-block replanning.
@@ -896,6 +907,7 @@ class TeamDynamicAStarPlannerNode(Node):
         self.create_subscription(
             PoseStamped, self.mission_goal_pose_topic, self.mission_goal_pose_cb, 10
         )
+        self.create_subscription(String, self.mission_abort_topic, self.mission_abort_cb, 10)
         self.create_subscription(
             PoseStamped, self.reposition_goal_pose_topic, self.reposition_goal_pose_cb, 10
         )
@@ -980,6 +992,9 @@ class TeamDynamicAStarPlannerNode(Node):
                 self.route_remaining_waypoints = []
 
     def goal_pose_cb(self, msg: PoseStamped) -> None:
+        # A latched emergency RETURN owns the goal until process restart.
+        if self.mission_return_active:
+            return
         # In Scenario-2 the simulator still POSTs its original enemy-position
         # destination.  It must not overwrite the firing checkpoint.
         if not self.accept_external_goal_updates:
@@ -993,13 +1008,53 @@ class TeamDynamicAStarPlannerNode(Node):
     def mission_goal_pose_cb(self, msg: PoseStamped) -> None:
         # Only mission orchestration (the ballistic node) uses this topic.
         # It remains enabled even when external simulator goals are locked.
+        # Once a sudden RETURN is latched, stale/late checkpoint goals must not
+        # restore route-waypoint mode or replace the home goal.
+        if self.mission_return_active:
+            return
         self.temporary_direct_goal_active = False
         self._set_goal(
             (float(msg.pose.position.x), float(msg.pose.position.y)),
             "mission_goal_updated",
         )
 
+    def mission_abort_cb(self, msg: String) -> None:
+        """Receive terminal RETURN and plan directly home, never via route A."""
+        try:
+            payload = json.loads(msg.data)
+        except Exception:
+            return
+        if not isinstance(payload, dict) or str(payload.get("action", "")).upper() != "RETURN":
+            return
+        goal = payload.get("goal") or payload.get("return")
+        if not isinstance(goal, dict):
+            self.get_logger().warn("mission abort ignored: missing return goal")
+            return
+        try:
+            home = (float(goal.get("x")), float(goal.get("y")))
+        except (TypeError, ValueError):
+            self.get_logger().warn("mission abort ignored: invalid return goal")
+            return
+        if not (math.isfinite(home[0]) and math.isfinite(home[1])):
+            self.get_logger().warn("mission abort ignored: non-finite return goal")
+            return
+        first = not self.mission_return_active
+        self.mission_return_active = True
+        self.mission_return_reason = str(payload.get("reason") or "mission_abort_return")
+        self.temporary_direct_goal_active = False
+        # Force is intentional: a repeated abort heartbeat should recover if a
+        # stale goal/race replaced the route before the planner observed it.
+        self._set_goal(home, "mission_abort_return", force=first)
+        if first:
+            self.get_logger().warn(
+                f"Mission RETURN latched → direct A*: home=({home[0]:.1f},{home[1]:.1f}), "
+                f"reason={self.mission_return_reason}"
+            )
+
     def reposition_goal_pose_cb(self, msg: PoseStamped) -> None:
+        # A queued pitch-reposition message must never cancel a safety return.
+        if self.mission_return_active:
+            return
         # Temporary gun-angle reposition: plan directly to this point so the
         # normal route-through list cannot skip to a later firing checkpoint.
         self.temporary_direct_goal_active = True
@@ -1040,25 +1095,11 @@ class TeamDynamicAStarPlannerNode(Node):
     def lidar_cb(self, msg: PointCloud2) -> None:
         try:
             points = pointcloud2_to_xyz_array(msg)
-            # 계획 쪽 메모리/클러스터링 로직은 여전히 LidarObstacleMemory가 담당한다.
-            # LiDAR JSON String을 파싱하는 대신 최소한의 in-memory payload를 넘겨준다.
-            point_items = [
-                {
-                    "isDetected": True,
-                    "position_map": {"x": float(x), "y": float(y), "z": float(z)},
-                }
-                for x, y, z in points
-            ]
-            payload = {
-                "route": "/info",
-                "source": "pointcloud2/detected_points_map",
-                "timestamp_ros_sec": msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9,
-                "frame_id": msg.header.frame_id or MAP_FRAME,
-                "count": len(point_items),
-                "points": point_items,
-            }
-            self.lidar_obstacles.update_from_payload(
-                payload,
+            # detected_points_map is already in tank_map coordinates. Keep the
+            # tuple form required by history/DBSCAN/path blocking, but avoid the
+            # old PC2 -> dict list -> JSON-shaped payload -> reparsing path.
+            self.lidar_obstacles.update_from_xy_points(
+                points[:, :2],
                 history_enabled=self.enable_dynamic_replan,
                 history_resolution=self.lidar_history_resolution,
                 max_history_points=self.max_lidar_history_points,
@@ -1312,7 +1353,9 @@ class TeamDynamicAStarPlannerNode(Node):
 
         start_pos = self.current_pos
         goal_pos = self.goal_pos
-        force_direct_goal = bool(self.temporary_direct_goal_active)
+        force_direct_goal = bool(
+            self.temporary_direct_goal_active or self.mission_return_active
+        )
 
         obstacles: List[Dict[str, float]] = []
         if self.use_gt_obstacles:
@@ -1545,7 +1588,9 @@ class TeamDynamicAStarPlannerNode(Node):
                     static_inflate=self.static_obstacle_inflate,
                 )
                 route_mode = (
-                    "temporary_reposition_direct" if force_direct_goal else "direct_astar"
+                    "mission_return_direct" if self.mission_return_active
+                    else "temporary_reposition_direct" if force_direct_goal
+                    else "direct_astar"
                 )
 
             route_profile: List[Dict[str, Any]] = []
@@ -1764,6 +1809,8 @@ class TeamDynamicAStarPlannerNode(Node):
             "start": {"x": self.current_pos[0], "y": self.current_pos[1]} if self.current_pos else None,
             "goal": {"x": self.goal_pos[0], "y": self.goal_pos[1]} if self.goal_pos else None,
             "temporary_direct_goal_active": self.temporary_direct_goal_active,
+            "mission_return_active": self.mission_return_active,
+            "mission_return_reason": self.mission_return_reason or None,
             "lookahead": {"x": lookahead[0], "y": lookahead[1]} if lookahead else None,
             "use_gt_obstacles": self.use_gt_obstacles,
             "gt_obstacle_count": len(self.gt_obstacles),

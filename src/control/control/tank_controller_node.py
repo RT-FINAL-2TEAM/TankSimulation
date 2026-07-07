@@ -7,7 +7,7 @@
 - 조향 명령은 yaw error에 비례하는 weight의 A/D다.
 - 속도 명령은 yaw error가 크면 동역학 데이터 기반으로 감속하고 최종 goal에서 정지한다.
 - 큰 yaw error에서는 STOP 제자리 회전 대신 W 저속 crawl turn을 사용한다.
-- 지역최소/끼임(stuck) 탈출: 후진 후 저속 선회.
+- 지역최소/끼임(stuck) 탈출: 저속 전진 선회(자동 후진 금지).
 
 공식 Tank Challenge /get_action JSON을 /tank/control/command로 발행한다.
 """
@@ -30,7 +30,6 @@ from control.config import (
     CONTROLLER_HZ,
     ENABLE_LOCAL_TARGET,
     ENABLE_STUCK_ESCAPE,
-    ESCAPE_REVERSE_SEC,
     ESCAPE_TURN_SEC,
     GOAL_TOLERANCE,
     HEADING_DEADBAND_DEG,
@@ -110,6 +109,16 @@ class TeamPathControllerNode(Node):
         # Keep the controller alive at a stop-aim-fire checkpoint.  The legacy
         # default preserves the previous behavior for ordinary one-way runs.
         self.declare_parameter("exit_on_goal_reached", True)
+        # FINAL_GOAL_HARD_STOP_V1
+        # Scenario 2 must stay alive at intermediate firing checkpoints, but
+        # once ballistic_turret_node reports the *final* returned/complete
+        # phase, no controller/avoidance/recon layer may re-issue A/D or Q/E.
+        self.declare_parameter("terminal_stop_on_turret_complete", False)
+        # SCENARIO2_TERMINAL_STOP_DEPARTURE_GUARD_V1
+        # Scenario-2 starts at the same coordinate used for its final home
+        # return.  Do not treat an initial/stale terminal turret status as a
+        # completed return until this goal has first been observed from away.
+        self.declare_parameter("terminal_stop_require_goal_departure", False)
         self.declare_parameter("enable_local_target", ENABLE_LOCAL_TARGET)
         self.declare_parameter("target_ttl_sec", TARGET_TTL_SEC)
         self.declare_parameter("mission_type", "mission")  # 'recon', 'mission', 'return'
@@ -118,9 +127,9 @@ class TeamPathControllerNode(Node):
         # 주행 명령과 합성해 simulator로 보낸다.
         self.declare_parameter("turret_override_topic", "/tank/turret/override")
         self.declare_parameter("turret_override_ttl_sec", 0.35)
-        # 사격 직후 다음 checkpoint/복귀 goal로 인계될 때, 기존 안전 브레이크나
-        # stuck-escape가 S(후진)를 내보내는 것을 잠시 막는다. 후진 대신 기존 경로의
-        # 전진 W를 저속으로 이어서 발사 직후에도 멈추지 않고 다음 사격지점으로 진행한다.
+        # 사격 직후 다음 checkpoint/복귀 goal로 인계될 때, 안전 브레이크가 S(후진)를
+        # 내보내는 것을 잠시 막는다. stuck recovery 자체는 S를 사용하지 않으며,
+        # 후진 대신 기존 경로의 전진 W를 저속으로 이어 다음 사격지점으로 진행한다.
         self.declare_parameter("post_fire_reverse_inhibit_sec", 8.0)
         self.declare_parameter("post_fire_forward_resume_weight", 0.35)
         self.declare_parameter("heading_deadband_deg", HEADING_DEADBAND_DEG)
@@ -139,7 +148,6 @@ class TeamPathControllerNode(Node):
         self.declare_parameter("enable_stuck_escape", ENABLE_STUCK_ESCAPE)
         self.declare_parameter("stuck_check_period", STUCK_CHECK_PERIOD)
         self.declare_parameter("stuck_min_movement", STUCK_MIN_MOVEMENT)
-        self.declare_parameter("escape_reverse_sec", ESCAPE_REVERSE_SEC)
         self.declare_parameter("escape_turn_sec", ESCAPE_TURN_SEC)
         self.declare_parameter("enable_safety_speed_limit", True)
         self.declare_parameter("safety_status_topic", "/tank/potential/safety_status")
@@ -236,6 +244,12 @@ class TeamPathControllerNode(Node):
         self.goal_tolerance = float(self.get_parameter("goal_tolerance").value)
         self.pause_on_goal_reached = bool(self.get_parameter("pause_on_goal_reached").value)
         self.exit_on_goal_reached = bool(self.get_parameter("exit_on_goal_reached").value)
+        self.terminal_stop_on_turret_complete = bool(
+            self.get_parameter("terminal_stop_on_turret_complete").value
+        )
+        self.terminal_stop_require_goal_departure = bool(
+            self.get_parameter("terminal_stop_require_goal_departure").value
+        )
         self.enable_local_target = bool(self.get_parameter("enable_local_target").value)
         self.target_ttl_sec = float(self.get_parameter("target_ttl_sec").value)
         self.mission_type = str(self.get_parameter("mission_type").value).lower()
@@ -347,7 +361,6 @@ class TeamPathControllerNode(Node):
         self.enable_stuck_escape = bool(self.get_parameter("enable_stuck_escape").value)
         self.stuck_check_period = float(self.get_parameter("stuck_check_period").value)
         self.stuck_min_movement = float(self.get_parameter("stuck_min_movement").value)
-        self.escape_reverse_sec = float(self.get_parameter("escape_reverse_sec").value)
         self.escape_turn_sec = float(self.get_parameter("escape_turn_sec").value)
         self.enable_safety_speed_limit = bool(self.get_parameter("enable_safety_speed_limit").value)
         self.safety_status_topic = str(self.get_parameter("safety_status_topic").value)
@@ -453,6 +466,11 @@ class TeamPathControllerNode(Node):
         self.local_target_stamp: float = 0.0
         self.collision_count = 0
         self.mission_complete = False
+        self._terminal_stop_reason_latched = ""
+        # SCENARIO2_TERMINAL_STOP_DEPARTURE_GUARD_V1
+        # False at spawn if the active goal is the home coordinate.  It becomes
+        # true only after that same goal is seen from outside terminal radius.
+        self._terminal_goal_departure_armed = False
         self.target_guard_status: Dict[str, Any] = {"enabled": False, "active": False, "reason": "init"}
 
         self.last_stuck_check_time = 0.0
@@ -518,11 +536,21 @@ class TeamPathControllerNode(Node):
             if get_distance(self.current_pos, new_pos) > 10.0:
                 self.get_logger().info("Teleport/Restart detected. Resetting mission complete flag.")
                 self.mission_complete = False
+                self._terminal_stop_reason_latched = ""
                 self._stop_published_count = 0
                 self.is_escaping = False
                 self.global_path = []
         self.current_pos = new_pos
         self._last_pose_wall_time = time.time()
+        # SCENARIO2_TERMINAL_STOP_DEPARTURE_GUARD_V1
+        # A return goal is armed for final STOP only after the vehicle has been
+        # genuinely outside that goal's terminal radius.  This is intentionally
+        # a one-way latch for each goal leg.
+        if (
+            self.goal_pos is not None
+            and get_distance(self.current_pos, self.goal_pos) > self._effective_goal_stop_distance()
+        ):
+            self._terminal_goal_departure_armed = True
         if self.last_stuck_check_pos is None:
             self.last_stuck_check_pos = self.current_pos
         self.trajectory_history.append(self.current_pos)
@@ -570,11 +598,23 @@ class TeamPathControllerNode(Node):
         new_goal = (float(msg.pose.position.x), float(msg.pose.position.y))
         goal_changed = self.goal_pos != new_goal
         self.goal_pos = new_goal
-        self.mission_complete = False
 
         if goal_changed:
+            # SCENARIO2_TERMINAL_STOP_DEPARTURE_GUARD_V1
+            # Reset per new goal.  A final return goal received while already
+            # at spawn remains unarmed; a real return is published while far
+            # from home and arms immediately here.
+            self._terminal_goal_departure_armed = bool(
+                self.current_pos is not None
+                and get_distance(self.current_pos, new_goal) > self._effective_goal_stop_distance()
+            )
+            # A new planner/mission goal starts a new drive leg.  Repeated
+            # publication of the same terminal goal must not clear the final
+            # STOP latch every planner tick.
+            self.mission_complete = False
+            self._terminal_stop_reason_latched = ""
             # Cancel any previous escape and give the new A* leg a full stuck
-            # observation window before reverse recovery is allowed.
+            # observation window before forward-pivot recovery is allowed.
             self.is_escaping = False
             self.escape_start_time = 0.0
             self.last_stuck_check_pos = self.current_pos
@@ -585,9 +625,9 @@ class TeamPathControllerNode(Node):
 
             # A shot followed by barrel lowering/centering intentionally holds
             # the hull still for several seconds.  On the first tick after the
-            # next checkpoint (or home) goal arrives, three independent
-            # controller paths used to be able to emit S: stuck escape,
-            # hard-turn overspeed braking, and danger-obstacle braking.  Do not
+            # next checkpoint (or home) goal arrives, two independent
+            # controller brake paths can emit S: hard-turn overspeed braking
+            # and danger-obstacle braking.  Do not
             # let those generic recovery brakes reverse the tank immediately
             # after firing; STOP is still allowed and normal W resumes as soon
             # as the heading/path is ready.
@@ -647,7 +687,7 @@ class TeamPathControllerNode(Node):
         """Whether a recently completed shot temporarily forbids ``S``.
 
         This is deliberately a short post-shot handoff guard, not a permanent
-        prohibition: normal stuck recovery becomes available again after the
+        prohibition: normal forward-pivot recovery remains available after the
         next drive leg has had time to start.
         """
         return time.monotonic() < self._post_fire_reverse_inhibit_until
@@ -1566,6 +1606,22 @@ class TeamPathControllerNode(Node):
         w_ws = clamp(self.straight_ws_weight * error_scale, 0.1, 1.0)
         return "W", w_ws, "cruise"
 
+    def _forward_escape_pivot_action(self, target: Optional[Tuple[float, float]]) -> Dict[str, Any]:
+        """Build a stuck-recovery command that never sends the reverse key.
+
+        A stalled hull gets a short, low-speed forward turn toward the active
+        target.  This preserves an escape attempt while guaranteeing that an
+        intentional stop or a false stuck detection cannot command ``S``.
+        """
+        pivot_dir = "D"
+        if target is not None and self.current_pos is not None:
+            dx = target[0] - self.current_pos[0]
+            dy = target[1] - self.current_pos[1]
+            desired_yaw = math.degrees(math.atan2(dx, dy))
+            yaw_error = normalize_angle(desired_yaw - self.current_yaw)
+            pivot_dir = "D" if yaw_error > 0 else "A"
+        return self.make_action("W", 0.4, pivot_dir, 1.0)
+
     def escape_command_if_needed(self, target: Optional[Tuple[float, float]] = None) -> Optional[Tuple[Dict[str, Any], str]]:
         if not self.enable_stuck_escape or self.current_pos is None:
             return None
@@ -1573,7 +1629,7 @@ class TeamPathControllerNode(Node):
         # The ballistic node deliberately stops at intermediate checkpoints.
         # Reset the escape baseline every control tick during that fresh hold,
         # so the first post-shot drive tick starts with a clean movement window
-        # rather than immediately issuing S / escape_start_reverse.
+        # rather than accidentally issuing an automatic recovery command.
         if self._turret_hold_motion_active():
             t = self.current_sim_time if self.current_sim_time > 0.0 else time.time()
             self.is_escaping = False
@@ -1582,9 +1638,8 @@ class TeamPathControllerNode(Node):
             self.last_stuck_check_yaw = self.current_yaw
             self.last_stuck_check_time = t
             return None
-        # During the first drive leg after a shot, never enter/continue the
-        # reverse escape sequence.  Reset its baseline instead so the normal
-        # stuck detector gets a fresh full observation period.
+        # During the first drive leg after a shot, reset the escape baseline so
+        # the normal stuck detector gets a fresh full observation period.
         if self._post_fire_reverse_inhibit_active():
             t = self.current_sim_time if self.current_sim_time > 0.0 else time.time()
             self.is_escaping = False
@@ -1594,7 +1649,7 @@ class TeamPathControllerNode(Node):
             self.last_stuck_check_time = t
             return None
         # Goal/checkpoint에서의 STOP은 의도된 대기다. 이를 stuck으로 오인해
-        # 후진하면 포탑 조준 중 차체가 흔들리고, 사격 뒤 복귀 goal도 망가진다.
+        # 자동 회복을 걸면 포탑 조준 중 차체가 흔들리고, 사격 뒤 복귀 goal도 망가진다.
         if self.goal_pos is not None and get_distance(self.current_pos, self.goal_pos) < self._effective_goal_stop_distance():
             t = self.current_sim_time if self.current_sim_time > 0.0 else time.time()
             self.last_stuck_check_pos = self.current_pos
@@ -1610,27 +1665,19 @@ class TeamPathControllerNode(Node):
         t = self.current_sim_time if self.current_sim_time > 0.0 else time.time()
         if self.is_escaping:
             elapsed = t - self.escape_start_time
-            if elapsed < self.escape_reverse_sec:
-                return self.make_action("S", 1.0, "", 0.0), "escape_reverse"
-            if elapsed < self.escape_reverse_sec + self.escape_turn_sec:
-                pivot_dir = "D"
-                if target is not None and self.current_pos is not None:
-                    dx = target[0] - self.current_pos[0]
-                    dy = target[1] - self.current_pos[1]
-                    desired_yaw = math.degrees(math.atan2(dx, dy))
-                    yaw_error = normalize_angle(desired_yaw - self.current_yaw)
-                    pivot_dir = "D" if yaw_error > 0 else "A"
-                return self.make_action("W", 0.4, pivot_dir, 1.0), "escape_pivot"
+            if elapsed < self.escape_turn_sec:
+                return self._forward_escape_pivot_action(target), "escape_forward_pivot"
             self.is_escaping = False
             self.last_stuck_check_time = t
             self.last_stuck_check_pos = self.current_pos
+            self.last_stuck_check_yaw = self.current_yaw
             return None
-            
+
         # 첫 호출(또는 baseline 미초기화) 시 stuck 판정 기준점을 현재 상태/시각으로 잡고
         # 한 주기(stuck_check_period)만큼 실제 주행할 시간을 준다.
         # ※ last_stuck_check_time은 0.0으로 초기화되는데 sim_time은 이미 크기 때문에,
         #   이 시각 가드가 없으면 출발 첫 사이클에 (t-0)>period 가 즉시 참이 되고
-        #   moved≈0 으로 "끼임" 오판 → 출발 직후 계속 후진하는 버그가 난다.
+        #   moved≈0 으로 "끼임" 오판 → 출발 직후 자동 회복 명령이 시작되는 버그가 난다.
         if self.last_stuck_check_pos is None or self.last_stuck_check_time <= 0.0:
             self.last_stuck_check_pos = self.current_pos
             self.last_stuck_check_yaw = self.current_yaw
@@ -1643,8 +1690,11 @@ class TeamPathControllerNode(Node):
             if moved < self.stuck_min_movement and yaw_moved < 15.0:
                 self.is_escaping = True
                 self.escape_start_time = t
-                self.get_logger().warn(f"stuck detected: moved={moved:.2f}m, yaw_moved={yaw_moved:.2f}deg, starting escape")
-                return self.make_action("S", 1.0, "", 0.0), "escape_start_reverse"
+                self.get_logger().warn(
+                    f"stuck detected: moved={moved:.2f}m, yaw_moved={yaw_moved:.2f}deg, "
+                    "starting forward-pivot escape (reverse disabled)"
+                )
+                return self._forward_escape_pivot_action(target), "escape_start_forward_pivot"
             self.last_stuck_check_time = t
             self.last_stuck_check_pos = self.current_pos
             self.last_stuck_check_yaw = self.current_yaw
@@ -1979,6 +2029,111 @@ class TeamPathControllerNode(Node):
         msg.data = json.dumps(payload, ensure_ascii=False)
         self.pub_status.publish(msg)
 
+
+    # FINAL_GOAL_HARD_STOP_V1
+    def _fresh_terminal_turret_phase(self) -> Optional[str]:
+        """Return a fresh terminal ballistic phase, otherwise ``None``.
+
+        An inactive turret override is normally harmless, but its final
+        ``returned`` / ``complete`` status is the authoritative signal that a
+        Scenario-2 return leg is truly finished.  Stale packets are ignored.
+        """
+        override = self._turret_override
+        if not isinstance(override, dict):
+            return None
+        if time.monotonic() - self._turret_override_stamp > self.turret_override_ttl_sec:
+            return None
+        status = override.get("status")
+        if not isinstance(status, dict):
+            return None
+        phase = str(status.get("phase") or "").strip().lower()
+        if phase not in {"returned", "complete"}:
+            return None
+
+        # SCENARIO2_RETURN_ARM_GUARD_V1
+        # A terminal phase alone is not sufficient: only accept a ballistic
+        # status that really issued a return goal, and only if that return
+        # coordinate matches the controller's current goal.  This makes stale
+        # or unrelated terminal statuses harmless.
+        if not bool(status.get("return_goal_sent", False)):
+            return None
+        return_goal = status.get("return")
+        if not isinstance(return_goal, dict) or self.goal_pos is None:
+            return None
+        try:
+            return_xy = (float(return_goal["x"]), float(return_goal["y"]))
+        except (KeyError, TypeError, ValueError):
+            return None
+        if get_distance(return_xy, self.goal_pos) > 1.0:
+            return None
+        return phase
+
+    def _terminal_goal_stop_reason(self) -> Optional[str]:
+        """Detect a final goal where *all* command axes must remain neutral.
+
+        ``exit_on_goal_reached`` covers ordinary Scenario-1 route completion.
+        Scenario-2 deliberately disables it for stop-aim-fire checkpoints, so
+        its terminal condition additionally requires ballistic completion.
+        """
+        if self.current_pos is None or self.goal_pos is None:
+            return None
+        if get_distance(self.current_pos, self.goal_pos) >= self._effective_goal_stop_distance():
+            return None
+        if self.exit_on_goal_reached:
+            return "final_goal_reached"
+        if self.terminal_stop_on_turret_complete:
+            # SCENARIO2_TERMINAL_STOP_DEPARTURE_GUARD_V1
+            # Home == spawn in Scenario-2.  A stale `returned`/`complete`
+            # packet must never terminate the mission before the home goal has
+            # actually been approached from a non-home position.
+            if (
+                self.terminal_stop_require_goal_departure
+                and not self._terminal_goal_departure_armed
+            ):
+                return None
+            phase = self._fresh_terminal_turret_phase()
+            if phase is not None:
+                return f"final_turret_{phase}_at_goal"
+        return None
+
+    def _publish_terminal_goal_stop(self, reason: str) -> None:
+        """Publish an absolute all-axis STOP and bypass all later overrides.
+
+        This prevents sharp-turn/APF steering, recon turret homing, stale
+        overrides, and the previous action from making the vehicle spin after
+        it has already arrived.  The controller stays alive so the simulator
+        continually receives a neutral command instead of latching an old one.
+        """
+        self.mission_complete = True
+        self.is_escaping = False
+        self.escape_start_time = 0.0
+        self._ad_oscillation_hold_cmd = ""
+        self._ad_oscillation_hold_until = 0.0
+        self._sharp_turn_pivot_start = 0.0
+        self._apf_stop_pivot_start = 0.0
+
+        action = empty_action()
+        if self.pause_on_goal_reached:
+            action["control"] = "pause"
+        self.publish_command(action)
+
+        if self._terminal_stop_reason_latched != reason:
+            self._terminal_stop_reason_latched = reason
+            self.get_logger().info(
+                f"Final goal terminal STOP: {reason}; hull and turret commands neutralized"
+            )
+
+        self.publish_status({
+            "ok": True,
+            "mission_complete": True,
+            "terminal_stop": True,
+            "terminal_goal_departure_armed": self._terminal_goal_departure_armed,
+            "reason": reason,
+            "current": {"x": self.current_pos[0], "y": self.current_pos[1]},
+            "goal": {"x": self.goal_pos[0], "y": self.goal_pos[1]} if self.goal_pos else None,
+            "command": action,
+        })
+
     def timer_cb(self) -> None:
         if self._last_pose_wall_time > 0.0 and time.time() - self._last_pose_wall_time > 2.0:
             self.publish_command(empty_action())
@@ -1989,6 +2144,12 @@ class TeamPathControllerNode(Node):
             self.publish_command(empty_action())
             self.publish_status({"ok": False, "reason": "no_player_pose"})
             return
+
+        terminal_stop_reason = self._terminal_goal_stop_reason()
+        if terminal_stop_reason is not None:
+            self._publish_terminal_goal_stop(terminal_stop_reason)
+            return
+
         target, source = self.choose_target()
         if target is None:
             self.publish_command(empty_action())

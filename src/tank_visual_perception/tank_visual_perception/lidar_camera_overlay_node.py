@@ -9,7 +9,8 @@ ROS2 노드: LiDAR 포인트 -> 포탑 카메라 이미지 투영 오버레이.
 
 구독(Subscribe):
   /tank/camera/image_compressed     sensor_msgs/CompressedImage
-  /tank/api/info/raw                std_msgs/String
+  /tank/api/info/compact            std_msgs/String
+  /tank/sensor/lidar/detected_points_map sensor_msgs/PointCloud2
 
 발행(Publish):
   /tank/camera/lidar_projection/image       sensor_msgs/Image

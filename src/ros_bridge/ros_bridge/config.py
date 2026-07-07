@@ -258,6 +258,19 @@ YOLO_ASYNC_MAX_RESULT_AGE_MS = float(os.environ.get("TANK_YOLO_ASYNC_MAX_RESULT_
 YOLO_ASYNC_LOG_INTERVAL_SEC = float(os.environ.get("TANK_YOLO_ASYNC_LOG_INTERVAL_SEC", "2.0"))
 
 
+# Optional browser preview transport. This does not alter YOLO sync mode or ROS QoS depth.
+# mjpeg: raw JPEG only, webrtc: WebRTC only, auto: WebRTC first then MJPEG fallback.
+WEB_STREAM_MODE = os.environ.get("TANK_WEB_STREAM_MODE", "mjpeg").strip().lower()
+if WEB_STREAM_MODE not in {"mjpeg", "webrtc", "auto"}:
+    WEB_STREAM_MODE = "mjpeg"
+WEBRTC_ENABLED = os.environ.get("TANK_WEBRTC_ENABLED", "false").strip().lower() in ("1", "true", "yes", "y", "on")
+WEBRTC_FPS = float(os.environ.get("TANK_WEBRTC_FPS", "10"))
+WEBRTC_MAX_SIDE = int(os.environ.get("TANK_WEBRTC_MAX_SIDE", "640"))
+WEBRTC_SYNC_TO_YOLO = os.environ.get("TANK_WEBRTC_SYNC_TO_YOLO", "true").strip().lower() in ("1", "true", "yes", "y", "on")
+WEBRTC_PREFER_H264 = os.environ.get("TANK_WEBRTC_PREFER_H264", "true").strip().lower() in ("1", "true", "yes", "y", "on")
+WEBRTC_OFFER_TIMEOUT_SEC = float(os.environ.get("TANK_WEBRTC_OFFER_TIMEOUT_SEC", "12"))
+
+
 ############################################################
 # 6. /init 기본 시뮬레이터 시작 위치
 ############################################################
@@ -338,3 +351,31 @@ UNITY_FRAME = "tank_unity_raw"
 # - map.y = raw.z
 # - map.z = raw.y
 MAP_FRAME = "tank_map"
+
+
+############################################################
+# 9. LiDAR PointCloud2 ingress / metadata topics
+############################################################
+# /info 안의 대용량 lidarPoints JSON은 ROS String으로 재전송하지 않는다.
+# bridge가 isDetected hit만 Unity raw frame PointCloud2로 만들고,
+# lidar_processor_node가 이 토픽을 구독해 map-frame 분류 결과를 만든다.
+TOPIC_LIDAR_RAW_DETECTED = os.environ.get(
+    "TANK_TOPIC_LIDAR_RAW_DETECTED",
+    "/tank/sensor/lidar/raw_detected_points",
+)
+TOPIC_LIDAR_POINTS_COUNT = os.environ.get(
+    "TANK_TOPIC_LIDAR_POINTS_COUNT",
+    "/tank/sensor/lidar/points_count",
+)
+TOPIC_LIDAR_ORIGIN = os.environ.get(
+    "TANK_TOPIC_LIDAR_ORIGIN",
+    "/tank/sensor/lidar/origin",
+)
+TOPIC_LIDAR_ORIGIN_RAW = os.environ.get(
+    "TANK_TOPIC_LIDAR_ORIGIN_RAW",
+    "/tank/sensor/lidar/origin_raw",
+)
+TOPIC_LIDAR_ROTATION = os.environ.get(
+    "TANK_TOPIC_LIDAR_ROTATION",
+    "/tank/sensor/lidar/rotation",
+)
