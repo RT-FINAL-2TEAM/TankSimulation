@@ -46,6 +46,7 @@ DEFAULT_REPORT_DIR = os.path.join(PROJECT_ROOT, "recon_reports")
 DEFAULT_MAP = os.path.join(DEFAULT_REPORT_DIR, "recon_map", "scenario2_map.map")
 DEFAULT_ROUTES = os.path.join(PROJECT_ROOT, "src", "control", "config", "scenario2_routes.yaml")
 DEFAULT_RISK_FEATURES = os.path.join(DEFAULT_REPORT_DIR, "risk_features.json")
+DEFAULT_TERRAIN = os.path.join(DEFAULT_REPORT_DIR, "recon_map", "scenario2_terrain.json")
 
 # 무기 사거리(ballistic_turret_node: min_range_m 20 / max_range_m 130).
 MIN_RANGE_M = 20.0
@@ -57,7 +58,12 @@ DEFAULT_FINAL_ENEMY_XY = (135.46, 276.87)
 # 사격 위치 후보 탐색용 루트 densify 간격(m). 노출 profile(0.75)보다 성글어도 충분.
 CANDIDATE_STEP_M = 1.0
 # 점수 가중치(합 1.0). range=가까움 선호, exposure=은폐 선호.
-DEFAULT_WEIGHTS = {"range": 0.5, "exposure": 0.5}
+# TUNED: firing point selection prefers flat/stable firing pose over shortest range.
+# If terrain grid is unavailable, flatness is ignored and range/exposure remain valid.
+DEFAULT_WEIGHTS = {"range": 0.35, "exposure": 0.25, "flatness": 0.40}
+FIRE_FLAT_ROUGHNESS_MAX = float(os.getenv("TANK_FIRE_FLAT_ROUGHNESS_MAX", "0.08"))
+FIRE_REQUIRE_FLAT = os.getenv("TANK_FIRE_REQUIRE_FLAT", "true").strip().lower() in ("1", "true", "yes", "y", "on")
+SCENARIO2_PREFERRED_ROUTE = os.getenv("TANK_SCENARIO2_PREFERRED_ROUTE", "A").strip().upper()
 # 노출 밴드 임계.
 EXPOSURE_BANDS = ((0.2, "low"), (0.5, "medium"))  # 그 외 high
 
@@ -139,30 +145,122 @@ def point_exposure(px: float, py: float, exposure_threats: List[Dict[str, Any]],
     return worst
 
 
+def load_terrain_grid(path: str) -> Optional[Dict[str, Any]]:
+    """Load scenario2_terrain.json and build a nearest-cell index for flat firing checks."""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    cells = data.get("cells") if isinstance(data, dict) else None
+    if not isinstance(cells, list) or not cells:
+        return None
+    cell_size = float(data.get("cell_size") or 1.0)
+    by_key: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    for c in cells:
+        if not isinstance(c, dict):
+            continue
+        ix = c.get("ix")
+        iy = c.get("iy")
+        if ix is None or iy is None:
+            x = c.get("x")
+            y = c.get("y")
+            if x is None or y is None:
+                continue
+            ix = math.floor(float(x) / cell_size)
+            iy = math.floor(float(y) / cell_size)
+        try:
+            by_key[(int(ix), int(iy))] = c
+        except Exception:
+            continue
+    data["_by_key"] = by_key
+    data["_cell_size"] = cell_size
+    return data
+
+
+def terrain_roughness_at(terrain: Optional[Dict[str, Any]], x: float, y: float) -> Optional[float]:
+    if not terrain:
+        return None
+    cell_size = float(terrain.get("_cell_size") or terrain.get("cell_size") or 1.0)
+    by_key = terrain.get("_by_key") or {}
+    ix = math.floor(float(x) / cell_size)
+    iy = math.floor(float(y) / cell_size)
+    best = None
+    best_d = float("inf")
+    # Search a small neighborhood to tolerate route sample / cell-center mismatch.
+    for dx in range(-2, 3):
+        for dy in range(-2, 3):
+            c = by_key.get((ix + dx, iy + dy))
+            if not isinstance(c, dict):
+                continue
+            rough = c.get("roughness")
+            if rough is None:
+                continue
+            cx = float(c.get("x", (ix + dx + 0.5) * cell_size))
+            cy = float(c.get("y", (iy + dy + 0.5) * cell_size))
+            d = math.hypot(float(x) - cx, float(y) - cy)
+            if d < best_d:
+                best_d = d
+                best = float(rough)
+    return best
+
+
 def best_firing_position(target: Dict[str, Any], pts: List[Tuple[float, float]], arc: List[float],
                          bboxes: List[Dict[str, float]], exposure_threats: List[Dict[str, Any]],
-                         weights: Dict[str, float]) -> Optional[Dict[str, Any]]:
-    """표적 T에 대해 루트 점 중 사거리+LoS 만족하는 최고점수 사격 위치. 없으면 None(교전 불가)."""
+                         weights: Dict[str, float], terrain: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """표적 T에 대해 루트 점 중 사거리+LoS+평탄도를 만족하는 최고점수 사격 위치."""
     tx, ty = float(target["x"]), float(target["y"])
     span = MAX_RANGE_M - MIN_RANGE_M
-    best: Optional[Dict[str, Any]] = None
-    for idx, (px, py) in enumerate(pts):
-        d = math.hypot(px - tx, py - ty)
-        if d < MIN_RANGE_M or d > MAX_RANGE_M:
-            continue
-        if not tg.check_los(px, py, tx, ty, bboxes):
-            continue
-        range_score = 1.0 - (d - MIN_RANGE_M) / span if span > 0 else 1.0
-        exp = point_exposure(px, py, exposure_threats, bboxes, exclude_xy=(tx, ty))
-        score = weights["range"] * range_score + weights["exposure"] * (1.0 - exp)
-        if best is None or score > best["score"]:
-            best = {
-                "x": round(px, 2), "y": round(py, 2),
-                "distance_m": round(d, 2), "los": True,
-                "exposure": round(exp, 3), "exposure_band": exposure_band(exp),
-                "range_score": round(range_score, 3), "score": round(score, 4),
-                "route_arc_m": round(arc[idx], 2),
-            }
+
+    def scan(require_flat: bool) -> Optional[Dict[str, Any]]:
+        best: Optional[Dict[str, Any]] = None
+        for idx, (px, py) in enumerate(pts):
+            d = math.hypot(px - tx, py - ty)
+            if d < MIN_RANGE_M or d > MAX_RANGE_M:
+                continue
+            if not tg.check_los(px, py, tx, ty, bboxes):
+                continue
+            rough = terrain_roughness_at(terrain, px, py)
+            if rough is not None and require_flat and rough > FIRE_FLAT_ROUGHNESS_MAX:
+                continue
+            range_score = 1.0 - (d - MIN_RANGE_M) / span if span > 0 else 1.0
+            exp = point_exposure(px, py, exposure_threats, bboxes, exclude_xy=(tx, ty))
+            if rough is None:
+                flat_score = 1.0
+                flat_available = False
+            else:
+                flat_score = max(0.0, min(1.0, 1.0 - rough / max(1e-6, FIRE_FLAT_ROUGHNESS_MAX)))
+                flat_available = True
+            active_weights = dict(weights)
+            if rough is None:
+                active_weights["flatness"] = 0.0
+            wsum = sum(max(0.0, float(v)) for v in active_weights.values()) or 1.0
+            score = (
+                active_weights.get("range", 0.0) * range_score
+                + active_weights.get("exposure", 0.0) * (1.0 - exp)
+                + active_weights.get("flatness", 0.0) * flat_score
+            ) / wsum
+            if best is None or score > best["score"]:
+                best = {
+                    "x": round(px, 2), "y": round(py, 2),
+                    "distance_m": round(d, 2), "los": True,
+                    "exposure": round(exp, 3), "exposure_band": exposure_band(exp),
+                    "range_score": round(range_score, 3),
+                    "terrain_roughness": None if rough is None else round(float(rough), 4),
+                    "flat_score": round(flat_score, 4),
+                    "flat_filter_used": bool(require_flat and flat_available),
+                    "score": round(score, 4),
+                    "route_arc_m": round(arc[idx], 2),
+                }
+        return best
+
+    best = scan(FIRE_REQUIRE_FLAT and terrain is not None)
+    if best is None and terrain is not None:
+        best = scan(False)
+        if best is not None:
+            best["flat_filter_fallback"] = True
     return best
 
 
@@ -237,12 +335,12 @@ def load_exposure_threats(risk_features_path: str, rid: str) -> List[Dict[str, A
 
 def plan_route(rid: str, poly: List[Tuple[float, float]], targets: List[Dict[str, Any]],
                bboxes: List[Dict[str, float]], exposure_threats: List[Dict[str, Any]],
-               weights: Dict[str, float]) -> Dict[str, Any]:
+               weights: Dict[str, float], terrain: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """한 루트에 대해 표적별 최적 사격 위치 + 커버리지/점수 집계."""
     pts, arc = densify_polyline(poly, CANDIDATE_STEP_M)
     per_target: List[Dict[str, Any]] = []
     for t in targets:
-        fp = best_firing_position(t, pts, arc, bboxes, exposure_threats, weights)
+        fp = best_firing_position(t, pts, arc, bboxes, exposure_threats, weights, terrain)
         per_target.append({
             "id": t["id"], "class": t["class"],
             "pos": {"x": round(t["x"], 2), "y": round(t["y"], 2)},
@@ -282,10 +380,21 @@ def recommend_route(route_results: Dict[str, Dict[str, Any]]) -> Tuple[str, str]
         r = route_results[rid]
         return (1.0 if r["order_feasible"] else 0.0, r["coverage"], r["mean_score"], -r["mean_exposure"])
     best = max(route_results, key=key)
+    # Scenario-2 launch drives route A. Keep the mission plan on A whenever A
+    # can cover the same number of targets with a feasible order. This prevents
+    # a slightly flatter B route from producing an inconsistent mission plan.
+    pref = SCENARIO2_PREFERRED_ROUTE
+    if pref in route_results and pref != best:
+        pr = route_results[pref]
+        br = route_results[best]
+        if pr["order_feasible"] and pr["covered_count"] >= br["covered_count"] and pr["covered_count"] > 0:
+            best = pref
     r = route_results[best]
     reason = (f"route_{best} 추천 — 표적 {r['covered_count']}/{r['target_count']} 교전가능"
               f"(coverage {r['coverage']:.2f}), 평균 사격점수 {r['mean_score']:.3f}, 평균 노출 {r['mean_exposure']:.3f}"
-              f", 교전순서 {'실현가능' if r['order_feasible'] else '불가(' + ','.join(r['late_statics']) + ')'}.")
+              f", 교전순서 {'실현가능' if r['order_feasible'] else '불가(' + ','.join(r['late_statics']) + ')' }.")
+    if best == pref:
+        reason += f" Scenario-2 설계축 route_{pref} 우선 정책 적용."
     others = [rid for rid in route_results if rid != best]
     for o in others:
         ro = route_results[o]
@@ -315,7 +424,9 @@ def llm_narrate(plan: Dict[str, Any]) -> Dict[str, Any]:
         if not cp:
             return None
         return {"x": cp["x"], "y": cp["y"], "distance_m": cp["distance_m"],
-                "exposure_band": cp["exposure_band"]}
+                "exposure_band": cp["exposure_band"],
+                "terrain_roughness": cp.get("terrain_roughness"),
+                "flat_score": cp.get("flat_score")}
 
     ctx = {
         "route_recommended": plan["route_recommended"],
@@ -447,6 +558,7 @@ def main() -> int:
     ap.add_argument("--map", default=DEFAULT_MAP, help="scenario2_map.map 경로")
     ap.add_argument("--routes", default=DEFAULT_ROUTES, help="scenario2_routes.yaml 경로")
     ap.add_argument("--risk-features", default=DEFAULT_RISK_FEATURES, help="risk_features.json 경로(노출용, 선택)")
+    ap.add_argument("--terrain", default=DEFAULT_TERRAIN, help="scenario2_terrain.json 경로(평탄 사격점 우선)")
     ap.add_argument("--route", default=None, help="추천 대신 이 루트로 강제(A/B)")
     ap.add_argument("--final-enemy", nargs=2, type=float, metavar=("X", "Y"),
                     default=list(DEFAULT_FINAL_ENEMY_XY), help="최종 적전차 명목 좌표")
@@ -467,12 +579,13 @@ def main() -> int:
         return 2
     routes = load_route_polylines(args.routes)
     _, bboxes, _ = tg.load_map(args.map)  # LoS 차폐 = scenario2_map 전체 장애물 bbox
+    terrain_grid = load_terrain_grid(args.terrain)
 
     # 루트별 계획
     route_results: Dict[str, Dict[str, Any]] = {}
     for rid, poly in routes.items():
         exp_threats = load_exposure_threats(args.risk_features, rid)
-        route_results[rid] = plan_route(rid, poly, targets, bboxes, exp_threats, DEFAULT_WEIGHTS)
+        route_results[rid] = plan_route(rid, poly, targets, bboxes, exp_threats, DEFAULT_WEIGHTS, terrain_grid)
 
     # 추천(또는 강제)
     if args.route and args.route in route_results:

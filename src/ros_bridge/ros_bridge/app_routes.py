@@ -2030,6 +2030,54 @@ def route_detect():
     return jsonify([]),200
 
 
+@app.route("/internal/phone_detect", methods=["POST"])
+def route_internal_phone_detect():
+    """phone_sim2real 전용 공유 TensorRT 추론 endpoint.
+
+    phone gateway가 같은 PC에서 호출한다. 이 route는 ros_bridge의 단일 detector
+    singleton을 사용하므로 phone_sim2real이 두 번째 .engine/CUDA runtime을 만들지 않는다.
+    시뮬레이터의 공식 /detect 응답 형식에는 영향을 주지 않는다.
+    """
+    remote = str(request.remote_addr or "")
+    if remote not in {"127.0.0.1", "::1"}:
+        return jsonify({"ok": False, "error": "local_only"}), 403
+
+    image = request.files.get("image")
+    if image is None:
+        return jsonify({"ok": False, "error": "missing_image"}), 400
+    image_bytes = image.read()
+    if not image_bytes:
+        return jsonify({"ok": False, "error": "empty_image"}), 400
+    if not ENABLE_DETECT:
+        return jsonify({"ok": False, "error": "detect_disabled"}), 503
+    if get_detector is None:
+        return jsonify({"ok": False, "error": f"yolo_unavailable:{_YOLO_IMPORT_ERROR}"}), 503
+
+    started = time.perf_counter()
+    try:
+        detector = get_detector()
+        if not detector.loaded:
+            debug = detector.debug_state()
+            return jsonify({
+                "ok": False,
+                "error": "engine_not_loaded",
+                "model": debug,
+            }), 503
+        detections = detector.detect_bytes(image_bytes)
+        debug = detector.debug_state()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] /internal/phone_detect failed: {exc}")
+        return jsonify({"ok": False, "error": "phone_detect_failed", "detail": str(exc)}), 503
+
+    return jsonify({
+        "ok": True,
+        "source": "ros_bridge_shared_engine",
+        "detections": detections if isinstance(detections, list) else [],
+        "yolo_ms": (time.perf_counter() - started) * 1000.0,
+        "model": debug,
+    }), 200
+
+
 @app.route("/debug/yolo", methods=["GET"])
 def route_debug_yolo():
     """현재 내장 YOLO runtime/debug 상태를 반환한다."""

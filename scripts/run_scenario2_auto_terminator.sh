@@ -595,7 +595,7 @@ echo
 
 # 웹 3D용 rosbridge websocket은 시각화용 다른 PC에서 실행한다.
 # 이 PC에서는 자동 기동하지 않는다.
-ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET="${ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET:-false}"
+ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET="${ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET:-true}"
 
 if [[ "$ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET" == "true" ]]; then
   if ! pgrep -f rosbridge_websocket >/dev/null 2>&1; then

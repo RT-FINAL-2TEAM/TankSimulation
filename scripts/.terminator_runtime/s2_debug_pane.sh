@@ -9,7 +9,7 @@ echo "============================================================"
 echo "2초마다 핵심 node/topic/file을 표시합니다."
 echo "종료: Ctrl+C"
 echo
-echo "[LOG DIR] /home/tankcc/tankcc/logs/scenario2_terminator_20260701_123248"
+echo "[LOG DIR] /home/tankcc/tankcc/logs/scenario2_terminator_20260708_120036"
 echo
 
 sleep 4

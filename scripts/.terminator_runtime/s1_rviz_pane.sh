@@ -1,48 +1,24 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-printf '\033]0;S1-T2 RViz\007'
+printf '\033]0;S1-T2 Marker Publishers (remote RViz)\007'
 source "/home/tankcc/tankcc/scripts/.terminator_runtime/common_env.sh"
 
 echo "============================================================"
-echo "[T2] RViz"
+echo "[T2] Marker / Map / Terrain Publisher Only"
 echo "============================================================"
+echo "이 PC에서는 데스크톱 RViz2와 Web RViz를 실행하지 않습니다."
+echo "시각화 전용 다른 PC에서 같은 ROS_DOMAIN_ID / DDS 네트워크로"
+echo "RViz를 실행해 이 노드가 발행하는 토픽을 구독하세요."
+echo
 echo "Command:"
-echo "  ros2 launch rviz_visualization tank_rviz.launch.py"
+echo "  ros2 launch rviz_visualization tank_rviz.launch.py use_rviz:=false"
 echo
-echo "[LOG] /home/tankcc/tankcc/logs/scenario1_terminator_20260701_122729/rviz.log"
+echo "[LOG] /home/tankcc/tankcc/logs/scenario1_terminator_20260708_115330/rviz.log"
 echo
 
-ros2 launch rviz_visualization tank_rviz.launch.py 2>&1 | tee "/home/tankcc/tankcc/logs/scenario1_terminator_20260701_122729/rviz.log" &
-RVIZ_LAUNCH_PID=$!
-
-echo "[WAIT] RViz 창 감지 후 최대화 시도"
-for _ in $(seq 1 60); do
-  if command -v wmctrl >/dev/null 2>&1; then
-    WIN_ID="$(wmctrl -lx 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /rviz|rviz2/ {print $1; exit}')"
-    if [[ -n "${WIN_ID:-}" ]]; then
-      wmctrl -ir "$WIN_ID" -b add,maximized_vert,maximized_horz >/dev/null 2>&1 || true
-      wmctrl -ia "$WIN_ID" >/dev/null 2>&1 || true
-      echo "[OK] RViz window maximized"
-      break
-    fi
-  elif command -v xdotool >/dev/null 2>&1; then
-    WIN_ID="$(xdotool search --name 'RViz' 2>/dev/null | head -n 1 || true)"
-    if [[ -n "${WIN_ID:-}" ]]; then
-      xdotool windowactivate "$WIN_ID" >/dev/null 2>&1 || true
-      xdotool key F11 >/dev/null 2>&1 || true
-      echo "[OK] RViz window activated/fullscreen attempt"
-      break
-    fi
-  else
-    echo "[WARN] wmctrl/xdotool 없음. RViz 자동 최대화 생략."
-    echo "       설치 권장: sudo apt install -y wmctrl"
-    break
-  fi
-  sleep 0.5
-done
-
-wait "$RVIZ_LAUNCH_PID"
+# 실제 RViz2 창은 생략하고, 정적맵/객체/지형/차체 marker publisher만 실행한다.
+ros2 launch rviz_visualization tank_rviz.launch.py use_rviz:=false   2>&1 | tee "/home/tankcc/tankcc/logs/scenario1_terminator_20260708_115330/rviz.log"
 
 echo
-echo "[EXIT] RViz launch 종료됨. 창을 닫거나 Enter를 누르세요."
+echo "[EXIT] marker publisher 종료됨. 창을 닫거나 Enter를 누르세요."
 exec bash

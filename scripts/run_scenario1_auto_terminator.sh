@@ -179,10 +179,17 @@ echo
 echo "[LOG] $LOG_DIR/bridge.log"
 echo
 
+# set -e/pipefail 상태에서는 ros_bridge가 비정상 종료될 때 pane 자체도 즉시 닫힌다.
+# 종료 코드를 보존하면서 마지막 로그와 원인을 확인할 수 있도록 여기서만 errexit를 끈다.
+set +e
 TANK_MODE=auto TANK_EPISODE_CONTROL=true TANK_LIVE_VIEW=true ros2 run ros_bridge ros_bridge 2>&1 | tee "$LOG_DIR/bridge.log"
+BRIDGE_EXIT_CODE=\${PIPESTATUS[0]}
+set -e
 
 echo
-echo "[EXIT] ros_bridge 종료됨. 창을 닫거나 Enter를 누르세요."
+echo "[EXIT] ros_bridge 종료됨 (exit=\$BRIDGE_EXIT_CODE)."
+echo "[LOG] $LOG_DIR/bridge.log"
+echo "위 로그의 마지막 Traceback/ERROR를 확인한 뒤 Enter를 누르거나 창을 닫으세요."
 exec bash
 EOF
 chmod +x "$BRIDGE_SCRIPT"
@@ -598,7 +605,7 @@ echo
 
 # Web RViz용 rosbridge websocket(:9090)은 시각화 전용 다른 PC에서 실행한다.
 # 이 PC에서는 기본적으로 기동하지 않는다. 긴급 점검에서만 환경변수로 명시적으로 허용할 수 있다.
-ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET="${ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET:-false}"
+ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET="${ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET:-true}"
 
 if [[ "$ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET" == "true" ]]; then
   if ! pgrep -f rosbridge_websocket >/dev/null 2>&1; then

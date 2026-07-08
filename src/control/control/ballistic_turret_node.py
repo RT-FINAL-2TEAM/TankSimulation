@@ -187,6 +187,13 @@ class BallisticTurretNode(Node):
         self.declare_parameter("reposition_timeout_sec", 35.0)
         self.declare_parameter("reposition_max_attempts", 2)
         self.declare_parameter("reposition_goal_topic", TOPIC_REPOSITION_GOAL)
+        # Flat-fire guard.  The calibrated ballistic dataset was collected on
+        # level ground; if the hull is pitched/rolled beyond these limits, move
+        # to a configured flat fallback before aiming.
+        self.declare_parameter("require_flat_fire_pose", True)
+        self.declare_parameter("max_fire_body_pitch_deg", 3.0)
+        self.declare_parameter("max_fire_body_roll_deg", 3.0)
+        self.declare_parameter("flat_fire_pose_require_fresh_attitude", False)
 
         self.target_pose_ttl_sec = max(0.05, float(self.get_parameter("target_pose_ttl_sec").value))
         self.default_checkpoint_settle_sec = max(
@@ -360,6 +367,18 @@ class BallisticTurretNode(Node):
             self.get_parameter("reposition_max_attempts").value
         ))
         self.reposition_goal_topic = str(self.get_parameter("reposition_goal_topic").value)
+        self.require_flat_fire_pose = bool(
+            self.get_parameter("require_flat_fire_pose").value
+        )
+        self.max_fire_body_pitch_deg = max(
+            0.0, float(self.get_parameter("max_fire_body_pitch_deg").value)
+        )
+        self.max_fire_body_roll_deg = max(
+            0.0, float(self.get_parameter("max_fire_body_roll_deg").value)
+        )
+        self.flat_fire_pose_require_fresh_attitude = bool(
+            self.get_parameter("flat_fire_pose_require_fresh_attitude").value
+        )
 
         # Latest simulator state.
         self.player_pose: Optional[Tuple[float, float, float]] = None
@@ -453,6 +472,8 @@ class BallisticTurretNode(Node):
             f"pitch_feedback_world={self.turret_pitch_feedback_is_world}, "
             f"pitch_sign={self.body_pitch_sign:+.0f}, roll_sign={self.body_roll_sign:+.0f}, "
             f"reposition_on_pitch_limit={self.reposition_on_unreachable_pitch}, "
+            f"flat_fire_pose={self.require_flat_fire_pose} "
+            f"(|pitch|<={self.max_fire_body_pitch_deg:.1f}, |roll|<={self.max_fire_body_roll_deg:.1f}), "
             f"center_after_fire={self.center_turret_after_engagement}"
         )
 
@@ -1092,6 +1113,57 @@ class BallisticTurretNode(Node):
             return normalize_180(self.turret_yaw_deg - self.body_yaw_deg)
         return normalize_180(self.turret_yaw_deg)
 
+    def _fire_pose_tilt_status(self, now: Optional[float] = None) -> Dict[str, Any]:
+        """Return whether the current hull attitude is acceptable for firing.
+
+        This is a policy guard, not a ballistic model.  The measured hull pitch
+        and roll must be small because the available firing dataset was taken
+        on level ground.
+        """
+        if now is None:
+            now = time.monotonic()
+        age = now - self.body_attitude_wall
+        fresh = age <= self.body_attitude_ttl_sec
+        pitch_abs = abs(float(self.body_pitch_deg))
+        roll_abs = abs(float(self.body_roll_deg))
+        enabled = bool(self.require_flat_fire_pose)
+        known = fresh or not self.flat_fire_pose_require_fresh_attitude
+        ok = (not enabled) or (known and pitch_abs <= self.max_fire_body_pitch_deg and roll_abs <= self.max_fire_body_roll_deg)
+        if not enabled:
+            reason = "disabled"
+        elif not fresh and self.flat_fire_pose_require_fresh_attitude:
+            reason = "attitude_stale"
+        elif pitch_abs > self.max_fire_body_pitch_deg or roll_abs > self.max_fire_body_roll_deg:
+            reason = "hull_tilt_exceeds_flat_fire_limit"
+        else:
+            reason = "flat_enough"
+        return {
+            "enabled": enabled,
+            "ok": bool(ok),
+            "reason": reason,
+            "pitch_deg": self.body_pitch_deg,
+            "roll_deg": self.body_roll_deg,
+            "abs_pitch_deg": round(pitch_abs, 3),
+            "abs_roll_deg": round(roll_abs, 3),
+            "max_pitch_deg": self.max_fire_body_pitch_deg,
+            "max_roll_deg": self.max_fire_body_roll_deg,
+            "attitude_age_sec": round(max(0.0, age), 3),
+            "attitude_fresh": bool(fresh),
+        }
+
+    def _start_reposition_for_flat_fire_pose(self, now: float) -> bool:
+        """Reposition before aiming if the current fire stop is on a slope."""
+        status = self._fire_pose_tilt_status(now)
+        if status.get("ok", True):
+            return False
+        reason = (
+            "flat_fire_pose_guard:"
+            f"pitch={status['pitch_deg']:.2f},roll={status['roll_deg']:.2f},"
+            f"limit_pitch={status['max_pitch_deg']:.2f},limit_roll={status['max_roll_deg']:.2f}"
+        )
+        return self._start_reposition_for_pitch_limit(status, reason, now)
+
+
     def _stage_reposition_config(self) -> Dict[str, Any]:
         raw = self.stage.get("reposition", {})
         raw = raw if isinstance(raw, dict) else {}
@@ -1633,6 +1705,7 @@ class BallisticTurretNode(Node):
             "completed_engagements": self.stage_results,
             "target_locked": self.engagement_target is not None,
             "body_attitude": self._body_attitude_debug(),
+            "flat_fire_pose": self._fire_pose_tilt_status(),
             "pitch_feedback_frame": (
                 "world" if self.turret_pitch_feedback_is_world else "hull_relative"
             ),
@@ -1812,6 +1885,37 @@ class BallisticTurretNode(Node):
                 status.update({
                     "phase": "settling",
                     "settle_remaining_sec": round(max(0.0, settle_sec - elapsed), 3),
+                })
+                self._publish_override(
+                    active=True, hold_motion=True,
+                    turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                    fire=False, status=status,
+                )
+                return
+            if self._start_reposition_for_flat_fire_pose(now):
+                status = self._stage_status_base(active=False)
+                status.update({
+                    "phase": "reposition_for_shot",
+                    "reason": self.reposition_reason,
+                    "aim_axis": "flat_fire_pose_guard",
+                    "flat_fire_pose": self._fire_pose_tilt_status(now),
+                    "reposition": self._reposition_status(now),
+                })
+                self._publish_override(
+                    active=False, hold_motion=False,
+                    turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                    fire=False, status=status,
+                )
+                return
+            flat_status = self._fire_pose_tilt_status(now)
+            if self.require_flat_fire_pose and not flat_status.get("ok", True):
+                self.phase = "aim_error"
+                status = self._stage_status_base(active=True)
+                status.update({
+                    "phase": "aim_error",
+                    "reason": "no_flat_fire_pose_fallback",
+                    "aim_axis": "flat_fire_pose_guard",
+                    "flat_fire_pose": flat_status,
                 })
                 self._publish_override(
                     active=True, hold_motion=True,
@@ -2053,6 +2157,37 @@ class BallisticTurretNode(Node):
             return
 
         # Closed-loop aiming stage.
+        flat_status = self._fire_pose_tilt_status(now)
+        if self.require_flat_fire_pose and not flat_status.get("ok", True):
+            if self._start_reposition_for_flat_fire_pose(now):
+                status = self._stage_status_base(active=False)
+                status.update({
+                    "phase": "reposition_for_shot",
+                    "reason": self.reposition_reason,
+                    "aim_axis": "flat_fire_pose_guard",
+                    "flat_fire_pose": flat_status,
+                    "reposition": self._reposition_status(now),
+                })
+                self._publish_override(
+                    active=False, hold_motion=False,
+                    turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                    fire=False, status=status,
+                )
+                return
+            self.phase = "aim_error"
+            status = self._stage_status_base(active=True)
+            status.update({
+                "phase": "aim_error",
+                "reason": "no_flat_fire_pose_fallback",
+                "aim_axis": "flat_fire_pose_guard",
+                "flat_fire_pose": flat_status,
+            })
+            self._publish_override(
+                active=True, hold_motion=True,
+                turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                fire=False, status=status,
+            )
+            return
         #
         # Axis order is intentional:
         #   1) Q/E must align yaw first.

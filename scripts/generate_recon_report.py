@@ -54,7 +54,9 @@ GOAL_XY = (110.0, 276.5)
 #  노출(은밀성)/근접 = 경로가 적 시야·반경을 지나는 정도(1차).
 #  threat(확정 위협 수)/obstacle(장애물 밀도) = 그 지역의 적·장애물 양(사용자 직관 반영).
 #  terrain(험지 σ) = 주행 불안정/돌파 난이도(작은 비중). 시간/거리/우회는 여전히 '효율'이라 제외.
-DEFAULT_WEIGHTS = {"stealth": 0.30, "proximity": 0.15, "threat": 0.25, "obstacle": 0.15, "terrain": 0.15}
+# TUNED: route choice should be dominated by enemy exposure/threat, not terrain roughness.
+# Terrain is still reported, but its decision contribution is intentionally small.
+DEFAULT_WEIGHTS = {"stealth": 0.34, "proximity": 0.18, "threat": 0.30, "obstacle": 0.13, "terrain": 0.05}
 
 # YOLO 위협클래스별 가중(정보 섹션 표기용 — 위험도 점수엔 미반영).
 # YOLO 고카운트는 중복 탐지라, 위치 위험도는 센서퓨전 확정 발견객체로만 산정한다.
@@ -67,7 +69,7 @@ PERCEIVED_THREAT_RADII = {"house": tg.HOUSE_RADIUS_M, "tank": tg.TANK_RADIUS_M}
 
 # reference 정규화 기준값(은밀성/근접은 이미 0~1 길이비라 제외). 이 값이면 norm=1.0.
 REFS = {
-    "terrain": 16.0,    # 험지 σPitch+σRoll(deg) — 8→16(실측 11~14가 항상 포화하던 것 해소)
+    "terrain": 30.0,    # TUNED: terrain decision pressure reduced; keep as caution, not route winner.
     "threat": 5.0,      # 확정 위협 수가 이만큼이면 위협밀도 최대
     "obstacle": 400.0,  # 장애물 밀도(/100m)가 이만큼이면 최대
 }
@@ -77,6 +79,12 @@ MIN_VALID_DISTANCE = 5.0   # m 미만 이동이면 무효 런(멈춤/미완주)
 COLLISION_WARN = 10        # 초과 시 충돌 과다 경고
 PERCEPTION_MATCH_TOL = 3.0  # m, LiDAR 탐지↔GT 객체 최근접 매칭 허용오차
 THREAT_MATCH_TOL = 10.0     # m, 발견 위협↔GT 위협 매칭 허용오차(초소/전차는 큰 객체라 centroid 오차 큼)
+
+# Scenario-2 mission doctrine: Route A is the designed mission corridor.
+# Route B may win only when it is materially safer, not merely slightly flatter.
+ROUTE_A_PREFERRED = os.getenv("TANK_ROUTE_A_PREFERRED", "true").strip().lower() in ("1", "true", "yes", "y", "on")
+ROUTE_A_PREFERENCE_EPS = float(os.getenv("TANK_ROUTE_A_PREFERENCE_EPS", "0.08"))
+
 
 # YOLO 클래스 → GT prefab 접두사 매핑(센서 정확도 비교용)
 YOLO_TO_GT_PREFAB = {"person": "Human", "tank": "Tank", "rock": "Rock", "house": "House", "car": "Car"}
@@ -639,9 +647,29 @@ def recommend(scored: Dict[str, dict], gt_validation: Optional[Dict[str, dict]] 
                 "reason": "유효 런 없음 — 모든 루트가 무효(멈춤/미완주). 깨끗한 A/B 재주행 필요."}
     ranked = sorted(valid.items(), key=lambda kv: kv[1]["risk_total"])
     winner = ranked[0][0]
+    preferred_applied = False
+    preferred_delta = None
+    # Route A is the intended Scenario-2 corridor.  A slight B advantage caused
+    # by rough terrain alone must not switch the mission route.  Keep B only
+    # when it is materially safer by more than ROUTE_A_PREFERENCE_EPS.
+    if ROUTE_A_PREFERRED and "A" in valid and winner != "A" and len(valid) > 1:
+        best_score = float(ranked[0][1]["risk_total"])
+        a_score = float(valid["A"]["risk_total"])
+        preferred_delta = a_score - best_score
+        if preferred_delta <= ROUTE_A_PREFERENCE_EPS:
+            winner = "A"
+            preferred_applied = True
+
     if len(valid) == 1:
         result = {"winner": winner, "confidence": "low",
                   "reason": f"유효 루트가 route_{winner} 하나뿐 — 비교군 부재(상대 루트 무효)로 단독 평가."}
+    elif preferred_applied:
+        best_route, best_node = ranked[0]
+        result = {"winner": "A", "confidence": "medium",
+                  "reason": (f"route_A 우선 정책 적용 — route_A 위험도 {valid['A']['risk_total']:.3f}, "
+                             f"최저 route_{best_route} {best_node['risk_total']:.3f}, "
+                             f"차 {preferred_delta:.3f} ≤ {ROUTE_A_PREFERENCE_EPS:.3f}. "
+                             "B가 약간 평탄하더라도 적 노출·위협 차이가 결정적이지 않으면 설계 임무축 A를 유지.")}
     else:
         second = ranked[1]
         gap = second[1]["risk_total"] - ranked[0][1]["risk_total"]

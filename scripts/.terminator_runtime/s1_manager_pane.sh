@@ -18,7 +18,7 @@ echo "  8) python3 scripts/analyze_run.py"
 echo "  9) python3 scripts/build_scenario2_map.py"
 echo " 10) scenario2_map.map / scenario2_terrain.npz 검증"
 echo
-echo "[LOG DIR] /home/tankcc/tankcc/logs/scenario1_terminator_20260701_122729"
+echo "[LOG DIR] /home/tankcc/tankcc/logs/scenario1_terminator_20260708_115330"
 echo "[POSTPROCESS_ONLY] false"
 echo "[KEEP_OLD_OUTPUT]  false"
 echo
@@ -34,13 +34,13 @@ run_step() {
   echo "Command: $*"
   echo
 
-  "$@" 2>&1 | tee "/home/tankcc/tankcc/logs/scenario1_terminator_20260701_122729/$name.log"
+  "$@" 2>&1 | tee "/home/tankcc/tankcc/logs/scenario1_terminator_20260708_115330/$name.log"
   local code="${PIPESTATUS[0]}"
 
   if [[ "$code" -ne 0 ]]; then
     echo
     echo "[ERROR] $name failed with exit code $code"
-    echo "로그: /home/tankcc/tankcc/logs/scenario1_terminator_20260701_122729/$name.log"
+    echo "로그: /home/tankcc/tankcc/logs/scenario1_terminator_20260708_115330/$name.log"
     exec bash
   fi
 
@@ -53,8 +53,8 @@ wait_for_bridge() {
 
   for _ in $(seq 1 60); do
     if command -v curl >/dev/null 2>&1; then
-      if curl -fsS "http://127.0.0.1:5000/health" >"/home/tankcc/tankcc/logs/scenario1_terminator_20260701_122729/bridge_health.json" 2>/dev/null; then
-        echo "[OK] bridge health: $(cat "/home/tankcc/tankcc/logs/scenario1_terminator_20260701_122729/bridge_health.json")"
+      if curl -fsS "http://127.0.0.1:5000/health" >"/home/tankcc/tankcc/logs/scenario1_terminator_20260708_115330/bridge_health.json" 2>/dev/null; then
+        echo "[OK] bridge health: $(cat "/home/tankcc/tankcc/logs/scenario1_terminator_20260708_115330/bridge_health.json")"
         return 0
       fi
     else
@@ -84,7 +84,7 @@ request_simulator_reset() {
   for i in 1 2 3; do
     echo "        publish reset attempt $i/3"
     timeout 6s ros2 topic pub --once /tank/episode/control std_msgs/msg/String "{data: 'reset'}" \
-      2>&1 | tee "/home/tankcc/tankcc/logs/scenario1_terminator_20260701_122729/reset_attempt_${i}.log" || true
+      2>&1 | tee "/home/tankcc/tankcc/logs/scenario1_terminator_20260708_115330/reset_attempt_${i}.log" || true
     sleep 0.5
   done
 }
@@ -218,7 +218,7 @@ PY
     echo
     echo "[ERROR] scenario2 output 검증 실패"
     echo "        build_scenario2_map.py 로그를 확인하세요:"
-    echo "        /home/tankcc/tankcc/logs/scenario1_terminator_20260701_122729/build_scenario2_map.log"
+    echo "        /home/tankcc/tankcc/logs/scenario1_terminator_20260708_115330/build_scenario2_map.log"
     exec bash
   fi
 
@@ -264,7 +264,7 @@ echo "다음 단계:"
 echo "  ./scripts/run_scenario2_auto_terminator.sh"
 echo
 echo "로그:"
-echo "  /home/tankcc/tankcc/logs/scenario1_terminator_20260701_122729"
+echo "  /home/tankcc/tankcc/logs/scenario1_terminator_20260708_115330"
 echo
 echo "이 창은 확인용으로 유지됩니다. 닫아도 됩니다."
 exec bash

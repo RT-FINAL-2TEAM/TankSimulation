@@ -9,14 +9,8 @@ echo "============================================================"
 echo "2초마다 핵심 node/topic/file을 표시합니다."
 echo "종료: Ctrl+C"
 echo
-echo "[LOG DIR] /home/tankcc/tankcc/logs/scenario1_terminator_20260701_122729"
+echo "[LOG DIR] /home/tankcc/tankcc/logs/scenario1_terminator_20260708_115330"
 echo
-if [[ "false" == "true" ]]; then
-  echo "rviz_web URL 예시:"
-  echo "  http://127.0.0.1:5055/rviz3d?frame=tank_map&cloud=off&rays=0&vectors=0"
-  echo
-fi
-
 sleep 4
 
 watch -n 2 "

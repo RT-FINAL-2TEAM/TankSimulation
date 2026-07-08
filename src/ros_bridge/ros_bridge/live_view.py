@@ -828,7 +828,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                                 <div id="rosGraph" style="position:absolute;inset:0;"></div>
                                 <div id="rosGraphTools" style="position:absolute;top:6px;right:8px;z-index:5;display:flex;gap:5px;align-items:center;">
                                     <span style="color:var(--muted);font-size:10px">보기</span>
-                                    <button id="rosFlowBtn" class="rosbtn on" type="button" onclick="toggleRosFlow()" title="노드↔노드 / 흐름 / 전체 전환">노드</button>
+                                    <button id="rosFlowBtn" class="rosbtn on" type="button" onclick="toggleRosFlow()" title="핵심 파이프라인 / 노드↔노드 / 흐름 / 전체 전환">핵심</button>
                                     <button class="rosbtn" type="button" onclick="cyRosFit()">FIT</button>
                                 </div>
                                 <div id="rosEdgeInfo" style="display:none;position:absolute;left:8px;bottom:8px;max-width:46%;max-height:62%;overflow:auto;z-index:6;background:rgba(8,19,40,0.96);border:1px solid var(--line);padding:8px 10px;font-size:10px;line-height:1.6;"></div>
@@ -893,8 +893,8 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 updateLeftPanel(latestState || {});
             }
             let cyRos = null, cyRosSig = "", cyDashTimer = null;
-            let rosGraphMode = "node";  // node(노드↔노드, 토픽 접음) | flow(노드↔노드 토픽) | all(전체)
-            const ROS_MODES = ["node", "flow", "all"], ROS_MODE_LABEL = { node: "노드", flow: "흐름", all: "전체" };
+            let rosGraphMode = "key";  // key(핵심 파이프라인) | node(노드↔노드) | flow(토픽 흐름) | all(전체)
+            const ROS_MODES = ["key", "node", "flow", "all"], ROS_MODE_LABEL = { key: "핵심", node: "노드", flow: "흐름", all: "전체" };
             function cyRosFit() { if (cyRos) { try { cyRos.resize(); cyRos.fit(undefined, 12); } catch (e) {} } }
             function toggleRosFlow() {
                 rosGraphMode = ROS_MODES[(ROS_MODES.indexOf(rosGraphMode) + 1) % ROS_MODES.length];
@@ -945,12 +945,77 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 }
                 return cyRos;
             }
+            function rosNameList(items) {
+                return (items || []).map((x) => String(x.name || x.id || x.node || "")).filter(Boolean);
+            }
+            function rosTopicAlive(g, patterns) {
+                const topics = g?.topics || [];
+                const pats = patterns.map((p) => p instanceof RegExp ? p : new RegExp(p));
+                for (const t of topics) {
+                    const name = String(t.name || t.id || "").replace(/^t:/, "");
+                    if (pats.some((p) => p.test(name))) {
+                        const hz = Number(t.hz || 0);
+                        return { ok: hz > 0, hz, name };
+                    }
+                }
+                return { ok: false, hz: 0, name: patterns[0]?.toString?.() || "-" };
+            }
+            function rosNodeAlive(g, patterns) {
+                const nodes = g?.nodes || [];
+                const pats = patterns.map((p) => p instanceof RegExp ? p : new RegExp(p));
+                for (const n of nodes) {
+                    const name = String(n.name || n.id || "");
+                    if (pats.some((p) => p.test(name))) return { ok: true, name };
+                }
+                return { ok: false, name: "-" };
+            }
+            function renderRosPipelineHtml(state) {
+                const g = state?.rosGraph || {};
+                const stages = [
+                    { title: "BRIDGE", nodes: [/ros_bridge/, /tank_ros_bridge/], topics: [/\/tank\/api\/info/, /\/tank\/control\/command/] },
+                    { title: "PERCEPTION", nodes: [/vision/, /yolo/, /lidar/, /dbscan/, /perception/], topics: [/\/tank\/perception\/detections/, /\/tank\/perception\/fused_objects/, /\/tank\/.*lidar/] },
+                    { title: "MAP / RECON", nodes: [/map/, /terrain/, /rviz/], topics: [/\/tank\/rviz\//, /\/tank\/terrain\//, /\/tank\/map\//] },
+                    { title: "PLANNING", nodes: [/astar/, /path/, /potential/, /local_path/], topics: [/\/tank\/global_path/, /\/tank\/local_target\/pose/, /\/tank\/path\//] },
+                    { title: "MISSION / LLM", nodes: [/ballistic/, /sudden/, /decision/, /risk/], topics: [/\/tank\/decision\/status/, /\/tank\/risk\/route_report/, /\/tank\/mission\//] },
+                    { title: "CONTROL", nodes: [/controller/, /control/], topics: [/\/tank\/control\/command/, /\/tank\/goal\//] },
+                ];
+                let html = '<div style="position:absolute;inset:0;overflow:auto;padding:10px;background:radial-gradient(circle at 50% 0%,rgba(42,83,154,0.18),transparent 42%),var(--bg);">';
+                html += '<div style="font-size:12px;font-weight:800;color:#9ec5f0;margin-bottom:8px;">핵심 ROS 파이프라인 <span style="font-size:10px;color:#7a8aa0;">복잡한 rqt_graph 대신 임무 흐름 기준으로 요약</span></div>';
+                html += '<div style="display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:7px;align-items:stretch;">';
+                stages.forEach((st, idx) => {
+                    const n = rosNodeAlive(g, st.nodes);
+                    const topicStats = st.topics.map((p) => rosTopicAlive(g, [p])).filter((x) => x.name !== "-");
+                    const activeTopics = topicStats.filter((x) => x.ok);
+                    const ok = n.ok || activeTopics.length > 0;
+                    const col = ok ? '#36d17a' : '#5a6b62';
+                    html += `<div style="border:1px solid ${ok ? 'var(--line)' : 'var(--line-dim)'};background:rgba(8,19,40,0.65);padding:8px;min-height:125px;position:relative;">`;
+                    html += `<div style="font-size:11px;font-weight:900;color:${col};margin-bottom:6px;">${idx + 1}. ${escapeHtml(st.title)}</div>`;
+                    html += `<div style="font-size:10px;color:var(--muted);margin-bottom:4px;">node</div><div style="font-size:10.5px;color:#dbe6ff;min-height:18px;overflow-wrap:anywhere;">${escapeHtml(n.ok ? rosShort(n.name) : '대기')}</div>`;
+                    html += `<div style="font-size:10px;color:var(--muted);margin-top:6px;">topics</div>`;
+                    if (topicStats.length) {
+                        html += topicStats.slice(0,4).map((t) => `<div style="font-size:10px;color:${t.ok ? '#5ac8ff' : '#61708a'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(rosShort('t:' + t.name))} ${t.ok ? Number(t.hz).toFixed(1) + 'Hz' : ''}</div>`).join('');
+                    } else {
+                        html += '<div style="font-size:10px;color:#61708a;">no key topic</div>';
+                    }
+                    html += '</div>';
+                });
+                html += '</div>';
+                html += '<div style="font-size:10px;color:#7a8aa0;margin-top:8px;line-height:1.55;">버튼을 누르면 핵심 → 노드 → 흐름 → 전체 순서로 전환된다. 발표/시연은 핵심 모드, 디버깅은 노드/흐름/전체 모드를 권장.</div>';
+                html += '</div>';
+                return html;
+            }
+
             function renderRosGraph(state) {
                 const cont = byId("rosGraph");
                 const g = state && state.rosGraph;
                 if (!g || !g.available) {
                     if (cyRos) { cyRos.destroy(); cyRos = null; cyRosSig = ""; }
                     cont.innerHTML = '<div style="color:#5a6b62;font-size:12px;padding:14px">ROS 그래프 대기 — 자율 스택 실행 시 노드/토픽 표시</div>';
+                    return;
+                }
+                if (rosGraphMode === "key") {
+                    if (cyRos) { cyRos.destroy(); cyRos = null; cyRosSig = ""; }
+                    cont.innerHTML = renderRosPipelineHtml(state);
                     return;
                 }
                 const cy = ensureCyRos();
@@ -2010,7 +2075,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
                 return { x, y, z: Number.isFinite(z) ? z : 0, radius: Number(p.radius_m ?? p.radius ?? 0) };
             }
-            function missionEngagementRows(mp) {
+            function missionEngagementRowsRaw(mp) {
                 if (!mp) return [];
                 const planTargets = Array.isArray(mp?.plan?.targets) ? mp.plan.targets : [];
                 const engs = Array.isArray(mp.engagements) ? mp.engagements : [];
@@ -2043,6 +2108,51 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     };
                 });
             }
+            function normalizedMissionRows(mp) {
+                const rows = missionEngagementRowsRaw(mp);
+                if (!rows.length) return [];
+                let final = rows.find((r) => String(r.id).toLowerCase() === 'enemy_final') || rows.find((r) => r.target_from_enemy_pose === true);
+                if (!final) final = rows[rows.length - 1];
+                const finalTarget = final?.target;
+                const nonFinal = rows.filter((r) => r !== final && r.target_from_enemy_pose !== true);
+                const staticCandidates = nonFinal.filter((r) => {
+                    const d = dist2d(r.target, finalTarget);
+                    return !(Number.isFinite(d) && d < 25.0);
+                });
+                let first = null;
+                if (staticCandidates.length) {
+                    first = [...staticCandidates].sort((a, b) => Number(a.range_m ?? 9999) - Number(b.range_m ?? 9999))[0];
+                } else if (nonFinal.length) {
+                    first = [...nonFinal].sort((a, b) => Number(a.range_m ?? 9999) - Number(b.range_m ?? 9999))[0];
+                }
+                const out = [];
+                if (first) {
+                    out.push({
+                        ...first,
+                        index: 1,
+                        source_id: String(first.id || ''),
+                        id: 'enemy_mid',
+                        tactical_name: '1차 사격 · 차폐물 뒤 고정 전차',
+                        tactical_detail: '정찰로 추가된 object tank1을 먼저 제거해 최종 목표 접근 전 측면 위협을 줄인다.',
+                    });
+                }
+                if (final) {
+                    out.push({
+                        ...final,
+                        index: out.length + 1,
+                        source_id: String(final.id || ''),
+                        id: 'enemy_final',
+                        target_from_enemy_pose: true,
+                        tactical_name: '2차 사격 · 목적지 기동 전차',
+                        tactical_detail: '피가 닳는 실제 목적지 전차를 마지막에 교전하고, 명중 후 복귀한다.',
+                    });
+                }
+                return out.map((r, i) => ({ ...r, index: i + 1 }));
+            }
+            function missionEngagementRows(mp) {
+                return normalizedMissionRows(mp);
+            }
+
             function missionCurrentRow(state, mp) {
                 const rows = missionEngagementRows(mp);
                 if (!rows.length) return null;
@@ -2067,12 +2177,14 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 const latest = latestBridge(state);
                 const sim = latest.sim_status || {};
                 const ps = latest.player_state || {};
+                const body = ps.body || {};
                 const pose = readPoint(latest.player_pose_map || latest.get_action_pose_map || latest.info_compact?.player_pose_map);
                 const mp = state?.missionPlan;
                 const cur = missionCurrentRow(state, mp);
                 const t = Number(sim.sim_time ?? state?.serverTime ?? Date.now() / 1000);
                 if (!Number.isFinite(t)) return;
                 const speed = Number(ps.speed ?? sim.player_speed);
+                const health = Number(ps.health ?? sim.player_health);
                 const turret = ps.turret || {};
                 const cpDist = pose && cur?.checkpoint ? dist2d(pose, cur.checkpoint) : null;
                 const targetDist = pose && cur?.target ? dist2d(pose, cur.target) : null;
@@ -2080,10 +2192,14 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 const item = {
                     t,
                     speed: Number.isFinite(speed) ? speed : null,
+                    health: Number.isFinite(health) ? health : null,
                     cpDist,
                     targetDist,
                     turretYaw: Number(turret.x),
                     turretPitch: Number(turret.y),
+                    bodyPitch: normDeg(body.z),
+                    bodyRoll: normDeg(body.y),
+                    fireValue: fire ? 1 : 0,
                     currentId: cur?.id || null,
                     action: state?.suddenDecision?.action || "NONE",
                     risk: Number(state?.suddenDecision?.max_risk),
@@ -2092,19 +2208,20 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 const last = missionSeries[missionSeries.length - 1];
                 if (!last || Math.abs(last.t - item.t) > 0.20 || last.currentId !== item.currentId || last.fire !== item.fire) {
                     missionSeries.push(item);
-                    while (missionSeries.length > 180) missionSeries.shift();
+                    while (missionSeries.length > 240) missionSeries.shift();
                 }
                 const sd = state?.suddenDecision;
                 if (sd) {
                     const risk = Number(sd.max_risk ?? 0);
                     const prev = suddenSeries[suddenSeries.length - 1];
-                    const si = { t, action: sd.action || "NONE", risk: Number.isFinite(risk) ? risk : 0, nNew: Number(sd.n_new ?? 0), nEngageable: Number(sd.n_engageable ?? 0) };
+                    const si = { t, action: sd.action || "NONE", risk: Number.isFinite(risk) ? risk : 0, nNew: Number(sd.n_new ?? 0), nEngageable: Number(sd.n_engageable ?? 0), cpDist };
                     if (!prev || Math.abs(prev.t - si.t) > 0.20 || prev.action !== si.action || prev.risk !== si.risk) {
                         suddenSeries.push(si);
-                        while (suddenSeries.length > 180) suddenSeries.shift();
+                        while (suddenSeries.length > 240) suddenSeries.shift();
                     }
                 }
             }
+
             function sparklineSvg(series, key, title, unit = "", color = "#5ac8ff", maxHint = null) {
                 const vals = series.map((p) => Number(p[key])).filter(Number.isFinite);
                 if (vals.length < 2) return `<div style="font-size:10px;color:#5a6b62;border:1px dashed var(--line-dim);padding:7px;">${escapeHtml(title)} 데이터 대기</div>`;
@@ -2136,6 +2253,37 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     <div style="font-size:10.5px;line-height:1.55;color:#b9c8e8;">${body}</div>
                 </div>`;
             }
+            function renderMissionAlert(state, current, pose) {
+                const latest = latestBridge(state);
+                const sim = latest.sim_status || {};
+                const ps = latest.player_state || {};
+                const cmd = latest.get_action_response?.command || {};
+                const speed = Number(ps.speed ?? sim.player_speed);
+                const cpDist = pose && current?.checkpoint ? dist2d(pose, current.checkpoint) : null;
+                const targetDist = pose && current?.target ? dist2d(pose, current.target) : null;
+                const fire = !!cmd.fire;
+                const sd = state?.suddenDecision || {};
+                const risk = Number(sd.max_risk ?? 0);
+                let level = 'INFO', col = '#5ac8ff', msg = '사격 지점 접근 중';
+                if (fire) { level = 'FIRE'; col = '#ff3448'; msg = '발사 명령 발생 — 포탑 안정/명중 판정 확인'; }
+                else if (current && Number.isFinite(cpDist) && cpDist <= Number(current.checkpoint?.radius || 10)) { level = 'AIM'; col = '#ffd34d'; msg = '사격 checkpoint 도달 — 정지·포탑 조준 단계'; }
+                else if (Number.isFinite(risk) && risk >= 70) { level = 'CAUTION'; col = '#ff8a3d'; msg = '실시간 위협도 상승 — 우회/복귀 판단 감시'; }
+                else if (Number.isFinite(targetDist) && targetDist <= 130) { level = 'RANGE'; col = '#36d17a'; msg = '사거리 내 표적 — LoS와 포탑각 조건 확인'; }
+                return `<div style="border:1px solid ${col};background:linear-gradient(90deg,rgba(255,68,68,0.16),rgba(8,19,40,0.72));padding:8px 10px;font-size:12px;line-height:1.55;box-shadow:0 0 14px rgba(255,68,68,0.12);">
+                    <b style="color:${col};">${escapeHtml(level)}</b> · ${escapeHtml(msg)}<br>
+                    <span style="color:#b9c8e8;font-size:10.5px;">현재 표적 ${escapeHtml(safe(current?.id, '-'))} · 속도 ${numberText(speed,2)}m/s · checkpoint ${Number.isFinite(cpDist) ? numberText(cpDist,1)+'m' : '-'} · target ${Number.isFinite(targetDist) ? numberText(targetDist,1)+'m' : '-'}</span>
+                </div>`;
+            }
+            function renderScenarioNarrative(rows) {
+                const first = rows[0], second = rows[1];
+                return `<div style="border:1px solid var(--line-dim);background:rgba(4,12,8,0.72);padding:8px;font-size:11px;line-height:1.7;">
+                    <b style="color:#9ec5f0;">상황 구체화</b><br>
+                    <b>1차 사격</b>은 정찰 중 확인된 object tank1을 제거하는 단계다. 지도상 Tank001_3 계열 표적은 최종 전차 접근로의 북측 차폐/측면 위협이므로, 직접 근접하지 않고 사거리·LoS·노출 조건이 맞는 checkpoint에서 처리한다.<br>
+                    <b>2차 사격</b>은 피가 닳는 실제 목적지 전차를 제거하는 단계다. 목적지 전차 주변에는 시야 장애물과 경사 조건이 있어 최종 전차 바로 앞까지 접근하지 않고, 약 (50,260) 계열 사격 지점에서 포탑 조준 가능성을 확보한 뒤 교전한다.<br>
+                    <span style="color:#ffd34d;">실행 순서:</span> ${escapeHtml(rows.map((r) => r.id).join(' → ') || '대기')} · <span style="color:#7a8aa0;">중복 final 탐지는 제거하고 object tank → enemy_final 2발 구조로 표시/실행한다.</span>
+                </div>`;
+            }
+
             function renderMissionPlan(state) {
                 // build_mission_plan.py 산출을 "입력→전처리→LLM→시나리오2 실행" 형태로 표시한다.
                 const mp = state?.missionPlan;
@@ -2148,14 +2296,15 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 const current = missionCurrentRow(state, mp);
                 const latest = latestBridge(state);
                 const pose = readPoint(latest.player_pose_map || latest.get_action_pose_map || latest.info_compact?.player_pose_map);
-                const order = (plan.engage_order || rows.map((r) => r.id)).join(" → ") || "—";
+                const order = rows.map((r) => r.id).join(" → ") || "—";
                 const ver = mp.verification || {};
                 let html = '<div style="display:grid;gap:10px;">';
 
                 html += `<div style="background:#0d2e1a;border:1px solid ${ver.ok === false ? '#ff3448' : '#ffd34d'};border-radius:5px;padding:8px 10px;">
                     <div style="font-size:13px;font-weight:800;color:#fff;">Scenario 2 사격 미션 계획 · Route <span style="color:#ffd34d">${escapeHtml(safe(mp.route_recommended || plan.route, 'A'))}</span></div>
-                    <div style="font-size:11px;color:#b9c8e8;margin-top:3px;">교전 순서: <b style="color:#e8eefc">${escapeHtml(order)}</b> · 현재 추적: <b style="color:#5ac8ff">${escapeHtml(safe(current?.id, '대기'))}</b></div>
+                    <div style="font-size:11px;color:#b9c8e8;margin-top:3px;">실행 교전 순서: <b style="color:#e8eefc">${escapeHtml(order)}</b> · 현재 추적: <b style="color:#5ac8ff">${escapeHtml(safe(current?.id, '대기'))}</b></div>
                 </div>`;
+                html += renderMissionAlert(state, current, pose);
 
                 html += `<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;">
                     ${ioStep('INPUT', '정찰 합본맵 <b>scenario2_map.map</b><br>지형 비용 <b>scenario2_terrain.json</b><br>위험 feature <b>risk_features.json</b><br>후보 루트 <b>scenario2_routes.yaml</b>')}
@@ -2163,12 +2312,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     ${ioStep('OUTPUT', '시나리오2 실행 입력 <b>mission_plan.json</b><br>포탑 노드 입력 <b>engagements_json</b><br>LLM 서술 <b>llm_guidance</b>', g.available ? 'LLM ON' : 'LLM OFF')}
                 </div>`;
 
-                html += `<div style="border:1px solid var(--line-dim);background:rgba(4,12,8,0.72);padding:8px;font-size:11px;line-height:1.6;">
-                    <b style="color:#9ec5f0;">상황 구체화</b><br>
-                    1차 사격은 정찰 중 확인된 중간 위협 또는 차폐 뒤 표적을 사거리·시야·노출 조건이 맞는 checkpoint에서 처리한다.<br>
-                    2차 사격은 목적지 전차(enemy_final)를 대상으로 하며, 주변 시야 장애물과 지형 경사 때문에 직접 접근이 아니라 포탑 조준 가능 위치를 선택해 교전한다.<br>
-                    <span style="color:#ffd34d;">주의:</span> 현재 좌표 산출은 LLM이 임의 생성하는 값이 아니라, 기하 전처리 결과를 LLM이 수행 지침으로 설명하는 구조다.
-                </div>`;
+                html += renderScenarioNarrative(rows);
 
                 html += '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;">';
                 for (const r of rows) {
@@ -2177,9 +2321,11 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     const tgtDist = pose && r.target ? dist2d(pose, r.target) : null;
                     const band = String(r.exposure_band || 'unknown').toUpperCase();
                     const bandColor = band.includes('HIGH') ? '#ff8a3d' : band.includes('LOW') ? '#39ff88' : '#ffd34d';
-                    const perText = g?.per_target?.[r.id] || r.rawTarget?.note || '';
+                    const perText = g?.per_target?.[r.id] || g?.per_target?.[r.source_id] || r.rawTarget?.note || '';
                     html += `<div style="border:1px solid ${isCurrent ? '#5ac8ff' : 'var(--line-dim)'};background:rgba(8,19,40,0.58);padding:8px;min-width:0;">
-                        <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:5px;"><b style="color:${isCurrent ? '#5ac8ff' : '#e8eefc'};">${r.index}차 사격 · ${escapeHtml(r.id)}</b><span style="font-size:10px;color:${bandColor};border:1px solid ${bandColor};padding:1px 5px;">${escapeHtml(band)}</span></div>
+                        <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:5px;"><b style="color:${isCurrent ? '#5ac8ff' : '#e8eefc'};">${escapeHtml(r.tactical_name || (r.index + '차 사격 · ' + r.id))}</b><span style="font-size:10px;color:${bandColor};border:1px solid ${bandColor};padding:1px 5px;">${escapeHtml(band)}</span></div>
+                        ${r.tactical_detail ? `<div style="font-size:10.5px;color:#b9c8e8;line-height:1.45;margin-bottom:5px;">${escapeHtml(r.tactical_detail)}</div>` : ''}
+                        ${r.source_id && r.source_id !== r.id ? kvLine('원본 탐지 ID', r.source_id, '#9ec5f0') : ''}
                         ${kvLine('사격 checkpoint', r.checkpoint ? `(${numberText(r.checkpoint.x, 1)}, ${numberText(r.checkpoint.y, 1)}) R=${numberText(r.checkpoint.radius, 1)}m` : '없음')}
                         ${kvLine('표적 좌표', r.target ? `(${numberText(r.target.x, 1)}, ${numberText(r.target.y, 1)}, z=${numberText(r.target.z, 1)})` : '없음')}
                         ${kvLine('사격거리', Number.isFinite(r.range_m) ? `${numberText(r.range_m, 1)}m` : '—')}
@@ -2195,9 +2341,13 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     <div style="font-size:11px;font-weight:800;color:#9ec5f0;margin-bottom:4px;">시계열 로그</div>
                     <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;">
                         ${sparklineSvg(missionSeries, 'speed', '전차 속도', 'm/s', '#5ac8ff')}
+                        ${sparklineSvg(missionSeries, 'health', '전차 체력', '', '#36d17a', 100)}
                         ${sparklineSvg(missionSeries, 'cpDist', '현재 checkpoint까지 거리', 'm', '#ffd34d')}
                         ${sparklineSvg(missionSeries, 'targetDist', '현재 target까지 거리', 'm', '#ff8a3d')}
+                        ${sparklineSvg(missionSeries, 'turretYaw', '포탑 yaw feedback', '°', '#9ec5f0')}
                         ${sparklineSvg(missionSeries, 'turretPitch', '포탑 pitch feedback', '°', '#b084ff')}
+                        ${sparklineSvg(missionSeries, 'bodyPitch', '차체 pitch', '°', '#44d9ff')}
+                        ${sparklineSvg(missionSeries, 'fireValue', '발사 명령', '', '#ff3448', 1)}
                     </div>
                 </div>`;
 
@@ -2228,6 +2378,10 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     <div style="font-size:13px;font-weight:800;color:#fff;">실시간 판단 · <span style="color:${col};">${escapeHtml(act)}</span></div>
                     <div style="font-size:11px;color:#b9c8e8;margin-top:3px;">신규 ${safe(sd?.n_new, 0)} · 교전가능 ${safe(sd?.n_engageable, 0)} · 최대위험 ${safe(sd?.max_risk, 0)} · YOLO/Fusion 객체 ${detections.length}</div>
                 </div>`;
+                if (act === 'RETURN' || act === 'ENGAGE' || Number(sd?.max_risk ?? 0) >= 70) {
+                    const warnMsg = act === 'RETURN' ? '복귀/임무중단 조건 감지' : act === 'ENGAGE' ? '돌발 위협 교전 후보 발생' : '위협도 상승';
+                    html += `<div style="border:1px solid ${col};background:rgba(255,68,68,0.12);padding:8px 10px;font-size:12px;font-weight:800;color:${col};box-shadow:0 0 16px rgba(255,68,68,0.16);">⚠ ${escapeHtml(warnMsg)} · 운용자 확인 필요</div>`;
+                }
                 html += `<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;">
                     ${ioStep('LIVE INPUT', `현재 pose / 속도 / 포탑각<br>YOLO·fusion detections ${detections.length}개<br>정찰 합본맵 scenario2_map.map`)}
                     ${ioStep('PREPROCESS', '새 위협 판정 → 사거리/LoS/위험점수 → hysteresis 통과 확인 → RETURN/ENGAGE/BYPASS 후보화')}
@@ -2259,7 +2413,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                         ${sparklineSvg(suddenSeries, 'risk', 'max_risk', '', '#ff8a3d', 100)}
                         ${sparklineSvg(suddenSeries, 'nNew', '신규 위협 수', '', '#ffd34d')}
                         ${sparklineSvg(suddenSeries, 'nEngageable', '교전 가능 수', '', '#5ac8ff')}
-                        ${sparklineSvg(missionSeries, 'cpDist', 'checkpoint 거리', 'm', '#39ff88')}
+                        ${sparklineSvg(suddenSeries, 'cpDist', 'checkpoint 거리', 'm', '#39ff88')}
                     </div>
                 </div>`;
                 html += '</div>';

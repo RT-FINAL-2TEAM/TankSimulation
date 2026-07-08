@@ -58,12 +58,12 @@ def _clear_stale_scenario2_completion_files(project_root: str) -> None:
 _DEFAULT_ENGAGEMENTS_JSON = (
     '[{'
     '"id":"enemy_mid",'
-    '"checkpoint":{"x":48.0,"y":224.0,"radius_m":10.0},'
+    '"checkpoint":{"x":50.0,"y":260.0,"radius_m":10.0},'
     '"checkpoint_settle_sec":0.8,'
     '"target":{"x":50.0,"y":285.0,"z":8.5},'
     '"target_from_enemy_pose":false,'
     '"target_height_offset_m":0.0,'
-    '"reposition":{"enabled":true,"fallback_goals":[{"x":55.0,"y":230.0}],"arrival_radius_m":3.0,"min_travel_m":2.0,"timeout_sec":45.0,"max_attempts":1}'
+    '"reposition":{"enabled":true,"fallback_goals":[{"x":50.0,"y":260.0}],"arrival_radius_m":10.0,"min_travel_m":0.0,"timeout_sec":20.0,"max_attempts":1}'
     '},{'
     '"id":"enemy_final",'
     '"checkpoint":{"x":50.0,"y":260.0,"radius_m":10.0},'
@@ -82,6 +82,164 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _standoff_point() -> tuple[float, float]:
+    # This is the empirically flatter Scenario-2 fire base.  The target is not
+    # here; the tank stops here, then rotates the turret for both shots.
+    return (
+        _env_float("TANK_S2_STANDOFF_X", 50.0),
+        _env_float("TANK_S2_STANDOFF_Y", 260.0),
+    )
+
+
+def _standoff_radius() -> float:
+    return max(2.0, _env_float("TANK_S2_STANDOFF_RADIUS_M", 10.0))
+
+
+def _mid_target_anchor() -> tuple[float, float]:
+    # Static/object tank1 in final_v5.map is near (50, 286).  Use this anchor
+    # only to choose the correct detected tank when multiple detections exist.
+    return (
+        _env_float("TANK_S2_MID_TARGET_X", 50.0),
+        _env_float("TANK_S2_MID_TARGET_Y", 285.0),
+    )
+
+
+def _eng_point_xy(eng: dict, key: str = "target") -> tuple[float, float] | None:
+    """Return x/y from an engagement target/checkpoint dict.
+
+    Mission-plan files can use Unity x/z or map x/y naming.  Scenario-2
+    ballistic_turret_node expects x/y, but older plan files sometimes preserve z.
+    """
+    if not isinstance(eng, dict):
+        return None
+    obj = eng.get(key)
+    if not isinstance(obj, dict):
+        return None
+    try:
+        x = float(obj.get("x"))
+        y = float(obj.get("y", obj.get("z")))
+    except (TypeError, ValueError):
+        return None
+    if not (x == x and y == y):
+        return None
+    return (x, y)
+
+
+def _xy_dist(a: tuple[float, float] | None, b: tuple[float, float] | None) -> float | None:
+    if a is None or b is None:
+        return None
+    dx = float(a[0]) - float(b[0])
+    dy = float(a[1]) - float(b[1])
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def _eng_range_m(eng: dict) -> float:
+    d = _xy_dist(_eng_point_xy(eng, "checkpoint"), _eng_point_xy(eng, "target"))
+    return float("inf") if d is None else d
+
+
+def _default_engagements_list() -> list[dict]:
+    import json
+    return json.loads(_DEFAULT_ENGAGEMENTS_JSON)
+
+
+def _normalize_scenario2_engagements(raw_engs: list[dict]) -> list[dict]:
+    """Force Scenario-2 into the intended two-shot story.
+
+    Intended sequence:
+      1) static/object tank discovered during recon, e.g. Tank001_3 near (50, 286)
+      2) simulator health-bearing final enemy tank, enemy_final near (135.46, 276.87)
+
+    build_mission_plan.py can also include a detected tank that is spatially the
+    same as enemy_final.  If that duplicate is passed directly to the ballistic
+    FSM, the vehicle fires final enemy first, then static tank, then final enemy
+    again.  This normalizer removes final-enemy duplicates and returns exactly
+    two engagements whenever possible.
+    """
+    if not isinstance(raw_engs, list) or not raw_engs:
+        return []
+    engs = [e for e in raw_engs if isinstance(e, dict)]
+    if not engs:
+        return []
+
+    fallback = _default_engagements_list()
+
+    # Prefer explicit enemy_final as the true health-bearing simulator tank.
+    final = next((e for e in engs if str(e.get("id", "")).lower() == "enemy_final"), None)
+    if final is None:
+        final = next((e for e in engs if e.get("target_from_enemy_pose") is True), None)
+    if final is None:
+        final = fallback[1]
+    final_xy = _eng_point_xy(final, "target") or (135.46, 276.87)
+
+    # Candidate for first shot: a discovered/static tank, not the final enemy.
+    static_candidates: list[dict] = []
+    for e in engs:
+        eid = str(e.get("id", "")).lower()
+        if eid == "enemy_final" or e.get("target_from_enemy_pose") is True:
+            continue
+        target_xy = _eng_point_xy(e, "target")
+        # Drop duplicate detections of the real final enemy.
+        d_final = _xy_dist(target_xy, final_xy)
+        if d_final is not None and d_final < 25.0:
+            continue
+        static_candidates.append(e)
+
+    # If there are multiple static tanks, choose the one nearest the known
+    # object-tank anchor around (50, 285), not the one with the shortest range
+    # from a possibly hilly mission-plan checkpoint.
+    anchor = _mid_target_anchor()
+    static = min(static_candidates, key=lambda e: (_xy_dist(_eng_point_xy(e, "target"), anchor) or float("inf"))) if static_candidates else fallback[0]
+
+    # Stabilize IDs shown in logs/MFD while keeping target coordinates from mission plan.
+    # Force the firing checkpoint to the flat standoff point for both shots.
+    sx, sy = _standoff_point()
+    cp = {"x": sx, "y": sy, "radius_m": _standoff_radius()}
+
+    static = dict(static)
+    static.setdefault("id", "enemy_mid")
+    if str(static.get("id", "")).startswith("detected_"):
+        static["source_id"] = static.get("id")
+        static["id"] = "enemy_mid"
+    static["checkpoint"] = dict(cp)
+    static["target_from_enemy_pose"] = False
+    static["checkpoint_settle_sec"] = float(static.get("checkpoint_settle_sec", 0.8) or 0.8)
+    static["reposition"] = {
+        "enabled": True,
+        "fallback_goals": [{"x": sx, "y": sy}],
+        "arrival_radius_m": _standoff_radius(),
+        "min_travel_m": 0.0,
+        "timeout_sec": 20.0,
+        "max_attempts": 1,
+    }
+
+    final = dict(final)
+    final["id"] = "enemy_final"
+    final["checkpoint"] = dict(cp)
+    final["target_from_enemy_pose"] = True
+    final["checkpoint_settle_sec"] = float(final.get("checkpoint_settle_sec", 0.8) or 0.8)
+    final["reposition"] = {
+        "enabled": True,
+        "fallback_goals": [{"x": sx, "y": sy}],
+        "arrival_radius_m": _standoff_radius(),
+        "min_travel_m": 0.0,
+        "timeout_sec": 20.0,
+        "max_attempts": 1,
+    }
+
+    return [static, final]
 
 
 def _scenario2_engagements(project_root: str) -> str:
@@ -112,10 +270,18 @@ def _scenario2_engagements(project_root: str) -> str:
             data = json.load(f)
         engs = data.get("engagements")
         if isinstance(engs, list) and engs:
-            print(f"[scenario2] mission_plan 사격 시퀀스 사용: {mp_file} (표적 {len(engs)}개)")
-            print(f"[scenario2] route_recommended={data.get('route_recommended', '-')} order={data.get('plan', {}).get('engage_order', '-')}")
-            return json.dumps(engs, ensure_ascii=False)
-        print(f"[scenario2] mission_plan에 engagements 없음 → 기본 사격 시퀀스 사용: {mp_file}")
+            normalized = _normalize_scenario2_engagements(engs)
+            if len(normalized) == 2:
+                print(
+                    f"[scenario2] mission_plan 사격 시퀀스 사용: {mp_file} "
+                    f"(원본 {len(engs)}개 → 실행 2개: "
+                    f"{normalized[0].get('id')} -> {normalized[1].get('id')})"
+                )
+                print(f"[scenario2] route_recommended={data.get('route_recommended', '-')} order={data.get('plan', {}).get('engage_order', '-')}")
+                return json.dumps(normalized, ensure_ascii=False)
+            print(f"[scenario2] mission_plan 정규화 실패 → 기본 사격 시퀀스 사용: {mp_file}")
+        else:
+            print(f"[scenario2] mission_plan에 engagements 없음 → 기본 사격 시퀀스 사용: {mp_file}")
     except FileNotFoundError:
         print(f"[scenario2] mission_plan 파일 없음 → 기본 사격 시퀀스 사용: {mp_file}")
     except Exception as exc:  # noqa: BLE001 - 어떤 오류든 기본값 폴백
@@ -200,7 +366,7 @@ def generate_launch_description():
             parameters=[{
                 # 기본=cheol 검증 하드코딩값. TANK_USE_MISSION_PLAN=true면 정찰→자동도출(mission_plan.json)로 교체.
                 "engagements_json": engagements_json,
-                # SCENARIO2_FIXED_FALLBACK_55_230: enemy_mid fixed fallback is (55, 230); no north-offset fallback.
+                # SCENARIO2_FLAT_FIRE_FALLBACK: enemy_mid/final fallback is the flat standoff point (default 50,260).
         # Dataset-based ballistic and turret-feedback convention.
                 "ballistic_k": 0.001520,
                 "muzzle_height_m": 3.199,
@@ -257,6 +423,12 @@ def generate_launch_description():
                 # At a slope-induced pitch limit, request a short direct A*
                 # reposition instead of repeatedly pressing F/R at the stop.
                 "reposition_on_unreachable_pitch": True,
+                # Flat-fire guard: ballistic data is reliable on level ground.
+                # If the hull is tilted at a firing stop, the turret node will
+                # request the stage fallback standoff point instead of aiming forever.
+                "require_flat_fire_pose": True,
+                "max_fire_body_pitch_deg": 3.0,
+                "max_fire_body_roll_deg": 3.0,
                 "reposition_goal_offset_m": 16.0,
                 "reposition_min_travel_m": 3.0,
                 "reposition_arrival_radius_m": 10.5,
