@@ -41,9 +41,9 @@
       parent = vpaned_right
       order = 0
       command = bash -lc '/home/tankcc/tankcc/scripts/.terminator_runtime/s2_rviz_pane.sh'
-    [[[terminal_debug]]]
+    [[[terminal_phone]]]
       type = Terminal
       parent = vpaned_right
       order = 1
-      command = bash -lc '/home/tankcc/tankcc/scripts/.terminator_runtime/s2_debug_pane.sh'
+      command = bash -lc '/home/tankcc/tankcc/scripts/.terminator_runtime/s2_phone_sim2real_pane.sh'
 [plugins]

@@ -1170,7 +1170,28 @@ def _load_json_dict_safe(path: Path) -> Optional[Dict[str, Any]]:
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    """Resolve ~/tankcc robustly for source, symlink-install, and install-tree runs."""
+    env_path = os.environ.get("TANK_PROJECT_ROOT", "").strip()
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        # Source-tree case: ~/tankcc/src/ros_bridge/ros_bridge/app_routes.py
+        if (parent / "src").exists() and (
+            (parent / "scripts").exists()
+            or (parent / "recon_reports").exists()
+            or (parent / "tank_discovered_maps").exists()
+        ):
+            return parent
+
+    # Normal bootcamp layout fallback. This matters when ros_bridge is run from
+    # an installed copy instead of a symlinked source tree.
+    home_project = Path.home() / "tankcc"
+    if home_project.exists():
+        return home_project.resolve()
+
+    return here.parents[3]
 
 
 def _resolve_recon_report_dir() -> Path:
@@ -1337,6 +1358,202 @@ def _windows_recon_status_payload() -> Dict[str, Any]:
         },
     }
 
+
+
+_REPORT_TEXT_SUFFIXES = {".json", ".txt", ".md", ".map", ".yaml", ".yml", ".csv", ".log"}
+_REPORT_BINARY_SUFFIXES = {".npz", ".png", ".jpg", ".jpeg"}
+_REPORT_PREVIEW_MAX_BYTES = int(os.environ.get("TANK_REPORT_PREVIEW_MAX_BYTES", "262144"))
+
+
+def _resolve_report_dir_env(env_name: str, default_name: str) -> Path:
+    env_path = os.environ.get(env_name, "").strip()
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+    return (_project_root() / default_name).resolve()
+
+
+def _report_roots() -> Dict[str, Path]:
+    """Folders exposed to /view report browser.
+
+    The keys are stable API identifiers. Values default to the bootcamp layout:
+    ~/tankcc/recon_reports, ~/tankcc/tank_discovered_maps, ~/tankcc/tank_terrain_maps.
+    """
+    return {
+        "recon_reports": _resolve_report_dir_env("TANK_RECON_REPORT_DIR", "recon_reports"),
+        "tank_discovered_maps": _resolve_report_dir_env("TANK_DISCOVERED_MAP_DIR", "tank_discovered_maps"),
+        "tank_terrain_maps": _resolve_report_dir_env("TANK_TERRAIN_MAP_DIR", "tank_terrain_maps"),
+    }
+
+
+def _safe_report_path(root_key: str, rel_name: str) -> tuple[Path, Path]:
+    roots = _report_roots()
+    if root_key not in roots:
+        raise ValueError(f"unknown report root: {root_key}")
+    root = roots[root_key].resolve()
+    rel = Path(str(rel_name or "").replace("\\", "/"))
+    if rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
+        raise ValueError("invalid report file name")
+    path = (root / rel).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(str(path))
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("report file is outside allowed directory") from exc
+    return root, path
+
+
+def _json_route_brief(data: Any) -> Dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    brief: Dict[str, Any] = {}
+    result = data.get("result") if isinstance(data.get("result"), dict) else {}
+    if "route" in data:
+        brief["route"] = data.get("route")
+    if isinstance(result, dict):
+        for src, dst in (("reached", "reached"), ("distance_m", "distanceM"), ("sim_time_s", "simTimeS")):
+            if src in result:
+                brief[dst] = result.get(src)
+    if "winner" in data:
+        brief["winner"] = data.get("winner")
+    if "selected_route" in result:
+        brief["selectedRoute"] = result.get("selected_route")
+    if "route_recommended" in data:
+        brief["routeRecommended"] = data.get("route_recommended")
+    return brief
+
+
+def _report_file_entry(root_key: str, root: Path, path: Path) -> Dict[str, Any]:
+    rel = path.relative_to(root).as_posix()
+    stat = path.stat()
+    suffix = path.suffix.lower()
+    entry: Dict[str, Any] = {
+        "id": f"{root_key}:{rel}",
+        "root": root_key,
+        "name": path.name,
+        "relativePath": rel,
+        "suffix": suffix,
+        "size": int(stat.st_size),
+        "mtime": float(stat.st_mtime),
+        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "previewable": suffix in _REPORT_TEXT_SUFFIXES or suffix == ".npz",
+        "downloadUrl": f"/api/reports/file?root={root_key}&name={rel}&download=1",
+    }
+    if suffix == ".json" and stat.st_size <= _REPORT_PREVIEW_MAX_BYTES:
+        try:
+            data = _load_json_dict_safe(path)
+            if isinstance(data, dict):
+                entry["jsonValid"] = True
+                entry["topKeys"] = list(data.keys())[:12]
+                entry["brief"] = _json_route_brief(data)
+            else:
+                entry["jsonValid"] = False
+        except Exception as exc:
+            entry["jsonValid"] = False
+            entry["jsonError"] = str(exc)
+    return entry
+
+
+def _reports_state_payload() -> Dict[str, Any]:
+    roots = _report_roots()
+    out: Dict[str, Any] = {
+        "projectRoot": str(_project_root()),
+        "roots": {},
+        "totalFiles": 0,
+        "latestMtime": None,
+        "latestModified": None,
+    }
+    latest_mtime: Optional[float] = None
+    for key, root in roots.items():
+        root_state: Dict[str, Any] = {
+            "path": str(root),
+            "exists": root.exists(),
+            "files": [],
+            "count": 0,
+        }
+        if root.exists() and root.is_dir():
+            files = []
+            for p in root.rglob("*"):
+                if not p.is_file():
+                    continue
+                if p.name.startswith(".") or "__pycache__" in p.parts:
+                    continue
+                suffix = p.suffix.lower()
+                if suffix and suffix not in _REPORT_TEXT_SUFFIXES and suffix not in _REPORT_BINARY_SUFFIXES:
+                    continue
+                try:
+                    files.append(_report_file_entry(key, root, p))
+                except Exception:
+                    continue
+            files.sort(key=lambda item: (float(item.get("mtime") or 0.0), item.get("relativePath") or ""), reverse=True)
+            root_state["files"] = files
+            root_state["count"] = len(files)
+            out["totalFiles"] += len(files)
+            if files:
+                root_latest = float(files[0].get("mtime") or 0.0)
+                if latest_mtime is None or root_latest > latest_mtime:
+                    latest_mtime = root_latest
+        out["roots"][key] = root_state
+    if latest_mtime is not None:
+        out["latestMtime"] = latest_mtime
+        out["latestModified"] = datetime.fromtimestamp(latest_mtime).isoformat(timespec="seconds")
+    return out
+
+
+def _npz_report_preview(path: Path) -> Dict[str, Any]:
+    try:
+        import numpy as np  # local import keeps Flask startup light
+    except Exception as exc:  # pragma: no cover - optional dependency guard
+        return {"kind": "npz", "error": f"numpy unavailable: {exc}"}
+    arrays = []
+    with np.load(path, allow_pickle=False) as data:
+        for name in data.files:
+            arr = data[name]
+            item: Dict[str, Any] = {
+                "name": name,
+                "shape": list(arr.shape),
+                "dtype": str(arr.dtype),
+                "size": int(arr.size),
+            }
+            if arr.size and np.issubdtype(arr.dtype, np.number):
+                finite = arr[np.isfinite(arr)] if np.issubdtype(arr.dtype, np.floating) else arr
+                if finite.size:
+                    item.update({
+                        "min": float(np.min(finite)),
+                        "max": float(np.max(finite)),
+                        "mean": float(np.mean(finite)),
+                    })
+            arrays.append(item)
+    return {"kind": "npz", "arrays": arrays}
+
+
+def _report_file_preview(root_key: str, rel_name: str) -> Dict[str, Any]:
+    root, path = _safe_report_path(root_key, rel_name)
+    entry = _report_file_entry(root_key, root, path)
+    suffix = path.suffix.lower()
+    payload: Dict[str, Any] = {"ok": True, "file": entry}
+    if suffix == ".npz":
+        payload["preview"] = _npz_report_preview(path)
+        return payload
+    if suffix in _REPORT_TEXT_SUFFIXES:
+        raw = path.read_bytes()
+        truncated = len(raw) > _REPORT_PREVIEW_MAX_BYTES
+        if truncated:
+            raw = raw[:_REPORT_PREVIEW_MAX_BYTES]
+        text = raw.decode("utf-8", errors="replace")
+        payload["preview"] = {
+            "kind": "json" if suffix == ".json" else "text",
+            "text": text,
+            "truncated": truncated,
+        }
+        if suffix == ".json":
+            try:
+                payload["preview"]["json"] = json.loads(text)
+            except Exception as exc:
+                payload["preview"]["jsonError"] = str(exc)
+        return payload
+    payload["preview"] = {"kind": "binary", "message": "preview unavailable; use downloadUrl"}
+    return payload
 
 def _load_route_risk_result_file(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     result_path = path or _resolve_route_risk_result_path()
@@ -2231,6 +2448,7 @@ def _build_dashboard_payload() -> Dict[str, Any]:
         "riskFeatures": None,
         "missionPlan": None,
         "suddenDecision": None,
+        "reportFiles": {},
         "rosGraph": None,
     }
 
@@ -2380,6 +2598,13 @@ def _build_dashboard_payload() -> Dict[str, Any]:
     # 돌발 결정(sudden_advisor_node) — 라이브 토픽 /tank/decision/status → bridge latest → 패널.
     payload["suddenDecision"] = latest.get("sudden_decision") if isinstance(latest, dict) else None
 
+    # 시나리오1 후처리 산출물(recon_reports / discovered maps / terrain maps) 파일 목록.
+    # 본문은 큰 파일일 수 있으므로 /api/reports/file에서 사용자가 열 때만 읽는다.
+    try:
+        payload["reportFiles"] = _reports_state_payload()
+    except Exception as exc:  # noqa: BLE001
+        payload["reportFiles"] = {"ok": False, "error": str(exc)}
+
     # ROS 계산 그래프(노드↔토픽 + Hz) — ② 패널 ROS 탭(Cytoscape) 실시간 렌더용.
     try:
         graph_mon = getattr(bridge, "ros_graph", None) if bridge is not None else None
@@ -2389,6 +2614,29 @@ def _build_dashboard_payload() -> Dict[str, Any]:
 
     return payload
 
+
+
+@app.route("/api/reports/state", methods=["GET"])
+def route_reports_state():
+    """List scenario report/map artifacts under ~/tankcc for the web dashboard."""
+    return jsonify(_reports_state_payload())
+
+
+@app.route("/api/reports/file", methods=["GET"])
+def route_reports_file():
+    """Preview or download a report artifact with path traversal protection."""
+    root_key = str(request.args.get("root") or "").strip()
+    rel_name = str(request.args.get("name") or "").strip()
+    try:
+        _, path = _safe_report_path(root_key, rel_name)
+        download = str(request.args.get("download") or "").strip().lower() in ("1", "true", "yes", "y")
+        if download:
+            return send_file(path, as_attachment=True, download_name=path.name)
+        return jsonify(_report_file_preview(root_key, rel_name))
+    except FileNotFoundError as exc:
+        return jsonify({"ok": False, "error": "report file not found", "detail": str(exc)}), 404
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
 @app.route("/api/llm/route-risk/status", methods=["GET"])
 def route_llm_route_risk_status():

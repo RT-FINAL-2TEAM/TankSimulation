@@ -63,7 +63,7 @@ _DEFAULT_ENGAGEMENTS_JSON = (
     '"target":{"x":50.0,"y":285.0,"z":8.5},'
     '"target_from_enemy_pose":false,'
     '"target_height_offset_m":0.0,'
-    '"reposition":{"enabled":true,"fallback_goals":[{"x":50.0,"y":260.0}],"arrival_radius_m":10.0,"min_travel_m":0.0,"timeout_sec":20.0,"max_attempts":1}'
+    '"reposition":{"enabled":true,"fallback_goals":[{"x":48.0,"y":208.0}],"arrival_radius_m":10.0,"min_travel_m":0.0,"timeout_sec":20.0,"max_attempts":1}'
     '},{'
     '"id":"enemy_final",'
     '"checkpoint":{"x":50.0,"y":260.0,"radius_m":10.0},'
@@ -98,13 +98,23 @@ def _standoff_point() -> tuple[float, float]:
     # This is the empirically flatter Scenario-2 fire base.  The target is not
     # here; the tank stops here, then rotates the turret for both shots.
     return (
-        _env_float("TANK_S2_STANDOFF_X", 50.0),
-        _env_float("TANK_S2_STANDOFF_Y", 260.0),
+        _env_float("TANK_S2_STANDOFF_X", 48.0),
+        _env_float("TANK_S2_STANDOFF_Y", 208.0),
     )
 
 
 def _standoff_radius() -> float:
-    return max(2.0, _env_float("TANK_S2_STANDOFF_RADIUS_M", 10.0))
+    return max(1.0, _env_float("TANK_S2_STANDOFF_RADIUS_M", 1.5))
+
+
+def _static_firebase_point() -> tuple[float, float]:
+    # Verified from the current recon terrain: far enough for stage-1 standoff,
+    # flat enough for the level-ground ballistic dataset, and on the route-A
+    # centerline so the hull approaches facing the target.
+    return (
+        _env_float("TANK_S2_STATIC_FIREBASE_X", _env_float("TANK_FIRE_STATIC_FIREBASE_X", 49.42)),
+        _env_float("TANK_S2_STATIC_FIREBASE_Y", _env_float("TANK_FIRE_STATIC_FIREBASE_Y", 164.5)),
+    )
 
 
 def _mid_target_anchor() -> tuple[float, float]:
@@ -143,6 +153,16 @@ def _xy_dist(a: tuple[float, float] | None, b: tuple[float, float] | None) -> fl
     dx = float(a[0]) - float(b[0])
     dy = float(a[1]) - float(b[1])
     return (dx * dx + dy * dy) ** 0.5
+
+
+def _append_unique_goal(goals: list[dict], x: float, y: float, min_sep_m: float = 1.0) -> None:
+    for g in goals:
+        try:
+            if _xy_dist((float(g.get("x")), float(g.get("y"))), (x, y)) < min_sep_m:
+                return
+        except Exception:
+            continue
+    goals.append({"x": float(x), "y": float(y)})
 
 
 def _eng_range_m(eng: dict) -> float:
@@ -203,41 +223,116 @@ def _normalize_scenario2_engagements(raw_engs: list[dict]) -> list[dict]:
     anchor = _mid_target_anchor()
     static = min(static_candidates, key=lambda e: (_xy_dist(_eng_point_xy(e, "target"), anchor) or float("inf"))) if static_candidates else fallback[0]
 
-    # Stabilize IDs shown in logs/MFD while keeping target coordinates from mission plan.
-    # Force the firing checkpoint to the flat standoff point for both shots.
+    # Stabilize IDs shown in logs/MFD while keeping target coordinates and
+    # firing checkpoints from mission_plan.  Previous versions forced both
+    # shots to a single standoff point near (50,260), which could put stage 1
+    # directly in front of the recon tank.  The mission planner now selects
+    # per-target flat standoff checkpoints; preserve them by default.  Operators
+    # can still force a fixed fallback with TANK_S2_FORCE_STANDOFF=true.
+    force_standoff = _env_bool("TANK_S2_FORCE_STANDOFF", default=False)
     sx, sy = _standoff_point()
-    cp = {"x": sx, "y": sy, "radius_m": _standoff_radius()}
+    static_fx, static_fy = _static_firebase_point()
+    force_static_firebase = _env_bool("TANK_S2_FORCE_STATIC_FIREBASE", default=True)
+
+    def _checkpoint_for(e: dict, fallback_xy: tuple[float, float]) -> dict:
+        src_xy = _eng_point_xy(e, "checkpoint")
+        if force_standoff or src_xy is None:
+            src_xy = fallback_xy
+        raw = e.get("checkpoint") if isinstance(e.get("checkpoint"), dict) else {}
+        radius = raw.get("radius_m", _standoff_radius()) if isinstance(raw, dict) else _standoff_radius()
+        try:
+            radius = float(radius)
+        except (TypeError, ValueError):
+            radius = _standoff_radius()
+        fire_radius = _env_float("TANK_S2_FIRE_CHECKPOINT_RADIUS_M", _env_float("TANK_FIRE_CHECKPOINT_RADIUS_M", 1.0))
+        radius = min(max(1.0, radius), max(1.0, fire_radius))
+        return {"x": float(src_xy[0]), "y": float(src_xy[1]), "radius_m": radius}
+
+    def _reposition_for(e: dict, cp: dict) -> dict:
+        # Use mission-plan fallback fire bases only after sanitizing them.
+        # Never allow a slope fallback to move the first shot toward the enemy
+        # nose; a fallback must preserve roughly the same tactical standoff as
+        # the selected checkpoint.
+        target_xy = _eng_point_xy(e, "target")
+        cp_xy = (float(cp["x"]), float(cp["y"]))
+        cp_d = _xy_dist(cp_xy, target_xy)
+        raw_rep = e.get("reposition") if isinstance(e.get("reposition"), dict) else {}
+        raw_goals = raw_rep.get("fallback_goals", []) if isinstance(raw_rep, dict) else []
+        goals: list[dict] = []
+        if force_standoff:
+            raw_goals = [{"x": sx, "y": sy}]
+        if isinstance(raw_goals, list):
+            for g in raw_goals:
+                if not isinstance(g, dict):
+                    continue
+                try:
+                    gx = float(g.get("x")); gy = float(g.get("y"))
+                except (TypeError, ValueError):
+                    continue
+                if target_xy is not None and cp_d is not None:
+                    gd = _xy_dist((gx, gy), target_xy)
+                    if gd is not None and gd < max(20.0, cp_d - 5.0):
+                        print(
+                            f"[scenario2] reject target-side fallback for {e.get('id')}: "
+                            f"({gx:.1f},{gy:.1f}) dist={gd:.1f}m < checkpoint_dist={cp_d:.1f}m"
+                        )
+                        continue
+                if (gx, gy) == cp_xy:
+                    continue
+                goals.append({"x": gx, "y": gy})
+
+        # Final safety fallback for stage-1 only: if the far, flat standoff still
+        # fails the runtime hull-pitch guard, move to the empirically stable
+        # final fire base instead of stalling forever.  This is deliberately the
+        # last fallback, not the primary tactical plan.
+        if bool(e.get("_allow_stage1_close_emergency_fallback", False)):
+            ex = _env_float("TANK_S2_STATIC_EMERGENCY_FALLBACK_X", 50.0)
+            ey = _env_float("TANK_S2_STATIC_EMERGENCY_FALLBACK_Y", 260.0)
+            if target_xy is not None:
+                ed = _xy_dist((ex, ey), target_xy)
+            else:
+                ed = None
+            if ed is None or ed >= _env_float("TANK_S2_STATIC_EMERGENCY_MIN_RANGE_M", 20.0):
+                _append_unique_goal(goals, ex, ey)
+        enabled = bool(goals)
+        return {
+            "enabled": enabled,
+            "fallback_goals": goals,
+            "arrival_radius_m": float(cp.get("radius_m", _standoff_radius())),
+            "min_travel_m": 0.0,
+            "timeout_sec": _env_float("TANK_S2_REPOSITION_TIMEOUT_SEC", 55.0),
+            "max_attempts": len(goals),
+        }
 
     static = dict(static)
     static.setdefault("id", "enemy_mid")
     if str(static.get("id", "")).startswith("detected_"):
         static["source_id"] = static.get("id")
         static["id"] = "enemy_mid"
-    static["checkpoint"] = dict(cp)
+    static_cp = _checkpoint_for(static, (static_fx, static_fy) if force_static_firebase else (sx, sy))
+    if force_static_firebase:
+        fire_radius = _env_float("TANK_S2_FIRE_CHECKPOINT_RADIUS_M", _env_float("TANK_FIRE_CHECKPOINT_RADIUS_M", 1.0))
+        static_cp = {"x": float(static_fx), "y": float(static_fy), "radius_m": max(1.0, fire_radius)}
+    static["checkpoint"] = static_cp
     static["target_from_enemy_pose"] = False
+    # Do not let stage 1 fall forward to the enemy nose. If the verified
+    # firebase somehow fails, ballistic_turret_node's aim-error timeout advances
+    # the mission instead of blocking the whole scenario.
+    static["_allow_stage1_close_emergency_fallback"] = _env_bool("TANK_S2_ENABLE_STATIC_EMERGENCY_FALLBACK", default=False)
     static["checkpoint_settle_sec"] = float(static.get("checkpoint_settle_sec", 0.8) or 0.8)
-    static["reposition"] = {
-        "enabled": True,
-        "fallback_goals": [{"x": sx, "y": sy}],
-        "arrival_radius_m": _standoff_radius(),
-        "min_travel_m": 0.0,
-        "timeout_sec": 20.0,
-        "max_attempts": 1,
-    }
+    static["reposition"] = _reposition_for(static, static_cp)
 
     final = dict(final)
     final["id"] = "enemy_final"
-    final["checkpoint"] = dict(cp)
+    if _env_bool("TANK_S2_FORCE_FINAL_STABLE_FIREBASE", default=True):
+        fire_radius = _env_float("TANK_S2_FIRE_CHECKPOINT_RADIUS_M", _env_float("TANK_FIRE_CHECKPOINT_RADIUS_M", 1.0))
+        final_cp = {"x": 50.0, "y": 260.0, "radius_m": max(1.0, fire_radius)}
+    else:
+        final_cp = _checkpoint_for(final, (50.0, 260.0))
+    final["checkpoint"] = final_cp
     final["target_from_enemy_pose"] = True
     final["checkpoint_settle_sec"] = float(final.get("checkpoint_settle_sec", 0.8) or 0.8)
-    final["reposition"] = {
-        "enabled": True,
-        "fallback_goals": [{"x": sx, "y": sy}],
-        "arrival_radius_m": _standoff_radius(),
-        "min_travel_m": 0.0,
-        "timeout_sec": 20.0,
-        "max_attempts": 1,
-    }
+    final["reposition"] = _reposition_for(final, final_cp)
 
     return [static, final]
 
@@ -429,10 +524,17 @@ def generate_launch_description():
                 "require_flat_fire_pose": True,
                 "max_fire_body_pitch_deg": 3.0,
                 "max_fire_body_roll_deg": 3.0,
+                "align_hull_before_fire": True,
+                "max_fire_body_yaw_error_deg": 35.0,
+                "hull_alignment_backoff_m": 8.0,
+                "hull_alignment_arrival_radius_m": 1.5,
+                "hull_alignment_timeout_sec": 35.0,
+                "hull_alignment_max_attempts": 1,
+                "aim_error_skip_after_sec": 12.0,
                 "reposition_goal_offset_m": 16.0,
                 "reposition_min_travel_m": 3.0,
-                "reposition_arrival_radius_m": 10.5,
-                "reposition_timeout_sec": 35.0,
+                "reposition_arrival_radius_m": 1.5,
+                "reposition_timeout_sec": 55.0,
                 "reposition_max_attempts": 2,
                 # Only after engagement 2 is complete does the node issue home.
                 "return_enabled": True,

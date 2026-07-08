@@ -57,13 +57,73 @@ EXPOSURE_DECAY_MULT = 2.0
 DEFAULT_FINAL_ENEMY_XY = (135.46, 276.87)
 # 사격 위치 후보 탐색용 루트 densify 간격(m). 노출 profile(0.75)보다 성글어도 충분.
 CANDIDATE_STEP_M = 1.0
-# 점수 가중치(합 1.0). range=가까움 선호, exposure=은폐 선호.
-# TUNED: firing point selection prefers flat/stable firing pose over shortest range.
-# If terrain grid is unavailable, flatness is ignored and range/exposure remain valid.
-DEFAULT_WEIGHTS = {"range": 0.35, "exposure": 0.25, "flatness": 0.40}
+# 점수 가중치(합 1.0). range=전술 사거리 대역 선호, exposure=은폐, flatness=평탄 사격 자세.
+# 중요: ballistic_turret_node는 평지 사격 데이터 기반이므로 “가까운 사거리”보다
+#       “정찰로 위치를 알고 있는 표적을 이전 평탄지에서 안정적으로 타격”하는 것을 우선한다.
+DEFAULT_WEIGHTS = {"range": 0.20, "exposure": 0.20, "flatness": 0.45, "advance": 0.15}
 FIRE_FLAT_ROUGHNESS_MAX = float(os.getenv("TANK_FIRE_FLAT_ROUGHNESS_MAX", "0.08"))
 FIRE_REQUIRE_FLAT = os.getenv("TANK_FIRE_REQUIRE_FLAT", "true").strip().lower() in ("1", "true", "yes", "y", "on")
 SCENARIO2_PREFERRED_ROUTE = os.getenv("TANK_SCENARIO2_PREFERRED_ROUTE", "A").strip().upper()
+
+# Tactical standoff policy.  The weapon model can technically shoot from 20m,
+# but Scenario-2 should not drive to the enemy tank's nose.  Recon has already
+# fixed target coordinates, so camera visibility at the checkpoint is optional.
+# Pick an earlier, flat, LoS-capable fire base instead.
+FIRE_STATIC_MIN_RANGE_M = float(os.getenv("TANK_FIRE_STATIC_MIN_RANGE_M", "70.0"))
+FIRE_STATIC_PREFERRED_RANGE_M = float(os.getenv("TANK_FIRE_STATIC_PREFERRED_RANGE_M", "115.0"))
+FIRE_FINAL_MIN_RANGE_M = float(os.getenv("TANK_FIRE_FINAL_MIN_RANGE_M", "70.0"))
+FIRE_FINAL_PREFERRED_RANGE_M = float(os.getenv("TANK_FIRE_FINAL_PREFERRED_RANGE_M", "95.0"))
+# Prefer a checkpoint that is not too late on the route when scores are similar.
+# This prevents the planner from choosing the last possible close-range point.
+FIRE_ADVANCE_ARC_SCALE_M = float(os.getenv("TANK_FIRE_ADVANCE_ARC_SCALE_M", "80.0"))
+# Local terrain patch stability around the tank footprint.  roughness alone can
+# mark a single cell flat while the surrounding hull footprint is tilted.
+FIRE_FLAT_PATCH_RADIUS_M = float(os.getenv("TANK_FIRE_FLAT_PATCH_RADIUS_M", "3.0"))
+FIRE_FLAT_PATCH_Z_RANGE_MAX = float(os.getenv("TANK_FIRE_FLAT_PATCH_Z_RANGE_MAX", "1.00"))
+# Minimum vertical clearance between the estimated ground profile and the straight
+# muzzle-to-target sight/fire corridor.  This prevents selecting a very distant
+# flat point if an intervening hill is likely to sit in front of the gun.
+FIRE_TERRAIN_LOS_CLEARANCE_M = float(os.getenv("TANK_FIRE_TERRAIN_LOS_CLEARANCE_M", "0.50"))
+FIRE_MUZZLE_HEIGHT_M = float(os.getenv("TANK_FIRE_MUZZLE_HEIGHT_M", "3.20"))
+FIRE_CHECKPOINT_RADIUS_M = float(os.getenv("TANK_FIRE_CHECKPOINT_RADIUS_M", "1.0"))
+# Mission planner must be stricter than ballistic_turret_node's runtime 3deg guard.
+# Smooth hills can have low roughness but still pitch the hull; reject those
+# before Scenario-2 starts instead of driving into fallback positions near target.
+FIRE_FLAT_BODY_PITCH_MAX_DEG = float(os.getenv("TANK_FIRE_FLAT_BODY_PITCH_MAX_DEG", "2.2"))
+FIRE_FLAT_BODY_ROLL_MAX_DEG = float(os.getenv("TANK_FIRE_FLAT_BODY_ROLL_MAX_DEG", "2.2"))
+FIRE_FALLBACK_GOAL_COUNT = int(os.getenv("TANK_FIRE_FALLBACK_GOAL_COUNT", "3"))
+# Ballistic planning uses the same low-arc model as ballistic_turret_node.
+# The old straight-line terrain corridor could reject far fire bases behind a
+# hill even though the actual shell arc clears the terrain.  That made the
+# planner drift toward the target-side slope.  Use the ballistic arc instead.
+FIRE_BALLISTIC_K = float(os.getenv("TANK_FIRE_BALLISTIC_K", "0.001520"))
+FIRE_WORLD_PITCH_MIN_DEG = float(os.getenv("TANK_FIRE_WORLD_PITCH_MIN_DEG", "-4.5"))
+FIRE_WORLD_PITCH_MAX_DEG = float(os.getenv("TANK_FIRE_WORLD_PITCH_MAX_DEG", "9.0"))
+# Diagnostic stop-footprint sampling.  This is written into mission_plan.json
+# so we can see whether a checkpoint is robust to controller stop error.  The
+# radius is intentionally smaller than before because the checkpoint radius is
+# now 1.5m; if the vehicle is allowed to stop 3~10m away, the plan is not a
+# firing checkpoint anymore.
+FIRE_RUNTIME_STOP_SIDE_ERROR_M = float(os.getenv("TANK_FIRE_RUNTIME_STOP_SIDE_ERROR_M", "1.5"))
+FIRE_RUNTIME_STOP_ALONG_ERROR_M = float(os.getenv("TANK_FIRE_RUNTIME_STOP_ALONG_ERROR_M", "1.5"))
+FIRE_RUNTIME_BODY_PITCH_MAX_DEG = float(os.getenv("TANK_FIRE_RUNTIME_BODY_PITCH_MAX_DEG", "999.0"))
+FIRE_RUNTIME_BODY_ROLL_MAX_DEG = float(os.getenv("TANK_FIRE_RUNTIME_BODY_ROLL_MAX_DEG", "999.0"))
+# Deterministic Scenario-2 stage-1 firebase.  Terrain analysis of the current
+# recon map shows the route-A point near (49.4,164.5) is the most robust first
+# shot position: long standoff, ballistic pitch inside +10/-5 deg, and a flat
+# local tank footprint.  Keep it deterministic by default instead of letting a
+# small scoring change move stage 1 back onto the hill near y≈208.
+FIRE_FORCE_STATIC_FIREBASE = os.getenv("TANK_FIRE_FORCE_STATIC_FIREBASE", "true").strip().lower() in ("1", "true", "yes", "y", "on")
+FIRE_STATIC_FIREBASE_X = float(os.getenv("TANK_FIRE_STATIC_FIREBASE_X", "49.42"))
+FIRE_STATIC_FIREBASE_Y = float(os.getenv("TANK_FIRE_STATIC_FIREBASE_Y", "164.5"))
+FIRE_STATIC_FIREBASE_FALLBACKS = [
+    (float(x), float(y))
+    for x, y in (
+        item.split(":", 1)
+        for item in os.getenv("TANK_FIRE_STATIC_FIREBASE_FALLBACKS", "49.42:163.5,49.42:165.0").split(",")
+        if ":" in item
+    )
+]
 # 노출 밴드 임계.
 EXPOSURE_BANDS = ((0.2, "low"), (0.5, "medium"))  # 그 외 high
 
@@ -120,6 +180,30 @@ def exposure_band(value: float) -> str:
         if value < thr:
             return name
     return "high"
+
+
+def target_range_policy(target: Dict[str, Any]) -> Tuple[float, float]:
+    """Return (minimum tactical range, preferred standoff range) for a target.
+
+    The ballistic model's hard minimum remains MIN_RANGE_M.  This policy adds a
+    scenario-level tactical minimum so a known recon target is engaged from a
+    safer earlier fire base rather than from immediately in front of it.
+    """
+    cls = str(target.get("class", ""))
+    if cls == "final_enemy":
+        return max(MIN_RANGE_M, FIRE_FINAL_MIN_RANGE_M), min(MAX_RANGE_M, FIRE_FINAL_PREFERRED_RANGE_M)
+    return max(MIN_RANGE_M, FIRE_STATIC_MIN_RANGE_M), min(MAX_RANGE_M, FIRE_STATIC_PREFERRED_RANGE_M)
+
+
+def preferred_range_score(distance_m: float, min_allowed_m: float, preferred_m: float) -> float:
+    """0..1 score peaked at preferred standoff, not at closest possible range."""
+    if distance_m < min_allowed_m or distance_m > MAX_RANGE_M:
+        return 0.0
+    left = max(1.0, preferred_m - min_allowed_m)
+    right = max(1.0, MAX_RANGE_M - preferred_m)
+    if distance_m <= preferred_m:
+        return max(0.0, 1.0 - (preferred_m - distance_m) / left)
+    return max(0.0, 1.0 - (distance_m - preferred_m) / right)
 
 
 def point_exposure(px: float, py: float, exposure_threats: List[Dict[str, Any]],
@@ -207,60 +291,506 @@ def terrain_roughness_at(terrain: Optional[Dict[str, Any]], x: float, y: float) 
     return best
 
 
+def terrain_cell_at(terrain: Optional[Dict[str, Any]], x: float, y: float) -> Optional[Dict[str, Any]]:
+    if not terrain:
+        return None
+    cell_size = float(terrain.get("_cell_size") or terrain.get("cell_size") or 1.0)
+    by_key = terrain.get("_by_key") or {}
+    ix = math.floor(float(x) / cell_size)
+    iy = math.floor(float(y) / cell_size)
+    best = None
+    best_d = float("inf")
+    for dx in range(-2, 3):
+        for dy in range(-2, 3):
+            c = by_key.get((ix + dx, iy + dy))
+            if not isinstance(c, dict):
+                continue
+            cx = float(c.get("x", (ix + dx + 0.5) * cell_size))
+            cy = float(c.get("y", (iy + dy + 0.5) * cell_size))
+            d = math.hypot(float(x) - cx, float(y) - cy)
+            if d < best_d:
+                best_d = d
+                best = c
+    return best
+
+
+def terrain_z_at(terrain: Optional[Dict[str, Any]], x: float, y: float) -> Optional[float]:
+    c = terrain_cell_at(terrain, x, y)
+    if not isinstance(c, dict) or c.get("z_median") is None:
+        return None
+    return float(c["z_median"])
+
+
+def terrain_fire_corridor_clearance(terrain: Optional[Dict[str, Any]], px: float, py: float,
+                                    tx: float, ty: float, target_z: float,
+                                    samples: int = 80) -> Optional[Dict[str, float]]:
+    """Estimate whether an intervening terrain ridge blocks the shot corridor."""
+    if not terrain:
+        return None
+    start_z = terrain_z_at(terrain, px, py)
+    if start_z is None:
+        return None
+    muzzle_z = start_z + FIRE_MUZZLE_HEIGHT_M
+    min_clearance = float("inf")
+    worst_x = px
+    worst_y = py
+    checked = 0
+    for i in range(1, max(2, samples)):
+        t = i / float(samples)
+        x = px + (tx - px) * t
+        y = py + (ty - py) * t
+        ground_z = terrain_z_at(terrain, x, y)
+        if ground_z is None:
+            continue
+        line_z = muzzle_z + (float(target_z) - muzzle_z) * t
+        clearance = line_z - ground_z
+        checked += 1
+        if clearance < min_clearance:
+            min_clearance = clearance
+            worst_x = x
+            worst_y = y
+    if checked <= 0 or min_clearance == float("inf"):
+        return None
+    return {
+        "min_clearance_m": float(min_clearance),
+        "worst_x": float(worst_x),
+        "worst_y": float(worst_y),
+        "muzzle_z_m": float(muzzle_z),
+        "samples": float(checked),
+    }
+
+
+
+def solve_low_arc_pitch_rad(horizontal_range: float, height_delta: float) -> Optional[float]:
+    """Same low-arc ballistic solver used by ballistic_turret_node."""
+    if horizontal_range <= 1e-6:
+        return None
+    r2 = horizontal_range * horizontal_range
+    discriminant = r2 - 4.0 * FIRE_BALLISTIC_K * r2 * (FIRE_BALLISTIC_K * r2 + height_delta)
+    if discriminant < 0.0:
+        return None
+    tan_theta = (horizontal_range - math.sqrt(discriminant)) / (2.0 * FIRE_BALLISTIC_K * r2)
+    return math.atan(tan_theta)
+
+
+def terrain_ballistic_corridor_clearance(
+    terrain: Optional[Dict[str, Any]],
+    px: float, py: float, tx: float, ty: float, target_z: float,
+    samples: int = 80,
+) -> Optional[Dict[str, float]]:
+    """Estimate terrain clearance along the shell's low arc, not a straight ray."""
+    if not terrain:
+        return None
+    start_z = terrain_z_at(terrain, px, py)
+    if start_z is None:
+        return None
+    muzzle_z = start_z + FIRE_MUZZLE_HEIGHT_M
+    horizontal = math.hypot(tx - px, ty - py)
+    theta = solve_low_arc_pitch_rad(horizontal, float(target_z) - muzzle_z)
+    if theta is None:
+        return None
+    pitch_deg = math.degrees(theta)
+    if pitch_deg < FIRE_WORLD_PITCH_MIN_DEG or pitch_deg > FIRE_WORLD_PITCH_MAX_DEG:
+        return {
+            "min_clearance_m": -999.0,
+            "worst_x": px,
+            "worst_y": py,
+            "muzzle_z_m": muzzle_z,
+            "samples": 0.0,
+            "target_world_pitch_deg": pitch_deg,
+            "pitch_limit_reject": 1.0,
+        }
+    cos2 = max(1e-6, math.cos(theta) ** 2)
+    min_clearance = float("inf")
+    worst_x = px
+    worst_y = py
+    checked = 0
+    for i in range(1, max(2, samples)):
+        t = i / float(samples)
+        x = px + (tx - px) * t
+        y = py + (ty - py) * t
+        ground_z = terrain_z_at(terrain, x, y)
+        if ground_z is None:
+            continue
+        s = horizontal * t
+        arc_z = muzzle_z + s * math.tan(theta) - FIRE_BALLISTIC_K * s * s / cos2
+        clearance = arc_z - ground_z
+        checked += 1
+        if clearance < min_clearance:
+            min_clearance = clearance
+            worst_x = x
+            worst_y = y
+    if checked <= 0 or min_clearance == float("inf"):
+        return None
+    return {
+        "min_clearance_m": float(min_clearance),
+        "worst_x": float(worst_x),
+        "worst_y": float(worst_y),
+        "muzzle_z_m": float(muzzle_z),
+        "samples": float(checked),
+        "target_world_pitch_deg": float(pitch_deg),
+        "pitch_limit_reject": 0.0,
+    }
+
+
+def route_tangent_at(pts: List[Tuple[float, float]], idx: int, span: int = 3) -> Tuple[float, float]:
+    """Approximate local route forward unit vector at densified point idx."""
+    if not pts:
+        return (0.0, 1.0)
+    i0 = max(0, int(idx) - span)
+    i1 = min(len(pts) - 1, int(idx) + span)
+    if i0 == i1 and len(pts) > 1:
+        i0 = max(0, int(idx) - 1)
+        i1 = min(len(pts) - 1, int(idx) + 1)
+    dx = float(pts[i1][0]) - float(pts[i0][0])
+    dy = float(pts[i1][1]) - float(pts[i0][1])
+    n = math.hypot(dx, dy)
+    if n <= 1e-6:
+        return (0.0, 1.0)
+    return (dx / n, dy / n)
+
+
+def _solve_3x3(a: List[List[float]], b: List[float]) -> Optional[Tuple[float, float, float]]:
+    """Small Gaussian solver for the normal equation of z=ax+by+c."""
+    m = [list(row) + [float(bi)] for row, bi in zip(a, b)]
+    for col in range(3):
+        pivot = max(range(col, 3), key=lambda r: abs(m[r][col]))
+        if abs(m[pivot][col]) < 1e-9:
+            return None
+        if pivot != col:
+            m[col], m[pivot] = m[pivot], m[col]
+        div = m[col][col]
+        for j in range(col, 4):
+            m[col][j] /= div
+        for r in range(3):
+            if r == col:
+                continue
+            factor = m[r][col]
+            for j in range(col, 4):
+                m[r][j] -= factor * m[col][j]
+    return (m[0][3], m[1][3], m[2][3])
+
+
+def enrich_patch_with_body_tilt(patch: Optional[Dict[str, float]], forward: Tuple[float, float]) -> Optional[Dict[str, float]]:
+    """Add expected hull pitch/roll from fitted terrain plane and route heading."""
+    if not patch or patch.get("plane_slope_x") is None or patch.get("plane_slope_y") is None:
+        return patch
+    out = dict(patch)
+    gx = float(out["plane_slope_x"])
+    gy = float(out["plane_slope_y"])
+    fx, fy = forward
+    # right vector in map ground plane. Sign is not important for flatness guard.
+    rx, ry = fy, -fx
+    pitch = math.degrees(math.atan(gx * fx + gy * fy))
+    roll = math.degrees(math.atan(gx * rx + gy * ry))
+    out["estimated_body_pitch_deg"] = float(pitch)
+    out["estimated_body_roll_deg"] = float(roll)
+    out["abs_estimated_body_pitch_deg"] = abs(float(pitch))
+    out["abs_estimated_body_roll_deg"] = abs(float(roll))
+    return out
+
+
+
+def terrain_runtime_pose_safety_at(
+    terrain: Optional[Dict[str, Any]],
+    pts: List[Tuple[float, float]],
+    idx: int,
+    x: float,
+    y: float,
+) -> Optional[Dict[str, float]]:
+    """Sample the small expected stop footprint around a firing checkpoint."""
+    if not terrain:
+        return None
+    fx, fy = route_tangent_at(pts, idx)
+    rx, ry = fy, -fx
+    along_values = (-FIRE_RUNTIME_STOP_ALONG_ERROR_M, 0.0, FIRE_RUNTIME_STOP_ALONG_ERROR_M)
+    side_values = (-FIRE_RUNTIME_STOP_SIDE_ERROR_M, -0.5 * FIRE_RUNTIME_STOP_SIDE_ERROR_M,
+                   0.0, 0.5 * FIRE_RUNTIME_STOP_SIDE_ERROR_M, FIRE_RUNTIME_STOP_SIDE_ERROR_M)
+    max_pitch = 0.0
+    max_roll = 0.0
+    max_z_range = 0.0
+    max_rough = 0.0
+    valid = 0
+    missing = 0
+    for along in along_values:
+        for side in side_values:
+            sx = float(x) + fx * along + rx * side
+            sy = float(y) + fy * along + ry * side
+            patch = terrain_patch_stats_at(terrain, sx, sy, FIRE_FLAT_PATCH_RADIUS_M)
+            patch = enrich_patch_with_body_tilt(patch, (fx, fy))
+            rough = terrain_roughness_at(terrain, sx, sy)
+            if not patch:
+                missing += 1
+                continue
+            valid += 1
+            max_pitch = max(max_pitch, abs(float(patch.get("estimated_body_pitch_deg") or 0.0)))
+            max_roll = max(max_roll, abs(float(patch.get("estimated_body_roll_deg") or 0.0)))
+            if patch.get("z_range_m") is not None:
+                max_z_range = max(max_z_range, abs(float(patch.get("z_range_m") or 0.0)))
+            if rough is not None:
+                max_rough = max(max_rough, abs(float(rough)))
+            if patch.get("roughness_max") is not None:
+                max_rough = max(max_rough, abs(float(patch.get("roughness_max") or 0.0)))
+    if valid <= 0:
+        return None
+    return {
+        "sample_count": float(valid),
+        "missing_count": float(missing),
+        "max_abs_body_pitch_deg": float(max_pitch),
+        "max_abs_body_roll_deg": float(max_roll),
+        "max_z_range_m": float(max_z_range),
+        "max_roughness": float(max_rough),
+        "side_error_m": FIRE_RUNTIME_STOP_SIDE_ERROR_M,
+        "along_error_m": FIRE_RUNTIME_STOP_ALONG_ERROR_M,
+    }
+
+
+def terrain_patch_stats_at(terrain: Optional[Dict[str, Any]], x: float, y: float,
+                           radius_m: float = FIRE_FLAT_PATCH_RADIUS_M) -> Optional[Dict[str, float]]:
+    """Summarize the local ground patch under/around the hull footprint."""
+    if not terrain:
+        return None
+    cell_size = float(terrain.get("_cell_size") or terrain.get("cell_size") or 1.0)
+    by_key = terrain.get("_by_key") or {}
+    ix = math.floor(float(x) / cell_size)
+    iy = math.floor(float(y) / cell_size)
+    r_cells = max(1, int(math.ceil(radius_m / max(1e-6, cell_size))))
+    zs: List[float] = []
+    roughs: List[float] = []
+    pts3: List[Tuple[float, float, float]] = []
+    for dx in range(-r_cells, r_cells + 1):
+        for dy in range(-r_cells, r_cells + 1):
+            c = by_key.get((ix + dx, iy + dy))
+            if not isinstance(c, dict):
+                continue
+            cx = float(c.get("x", (ix + dx + 0.5) * cell_size))
+            cy = float(c.get("y", (iy + dy + 0.5) * cell_size))
+            if math.hypot(float(x) - cx, float(y) - cy) > radius_m:
+                continue
+            if c.get("z_median") is not None:
+                z = float(c["z_median"])
+                zs.append(z)
+                pts3.append((cx, cy, z))
+            if c.get("roughness") is not None:
+                roughs.append(float(c["roughness"]))
+    if not zs and not roughs:
+        return None
+    z_range = (max(zs) - min(zs)) if zs else None
+    z_mean = (sum(zs) / len(zs)) if zs else None
+    z_std = (sum((z - z_mean) ** 2 for z in zs) / len(zs)) ** 0.5 if zs and z_mean is not None else None
+    rough_max = max(roughs) if roughs else None
+    rough_mean = sum(roughs) / len(roughs) if roughs else None
+    out = {
+        "cell_count": float(max(len(zs), len(roughs))),
+        "z_range_m": None if z_range is None else float(z_range),
+        "z_std_m": None if z_std is None else float(z_std),
+        "roughness_max": None if rough_max is None else float(rough_max),
+        "roughness_mean": None if rough_mean is None else float(rough_mean),
+        "plane_slope_x": None,
+        "plane_slope_y": None,
+        "plane_slope_deg": None,
+    }
+    if len(pts3) >= 3:
+        sx = sum(x for x, _, _ in pts3)
+        sy = sum(y for _, y, _ in pts3)
+        sz = sum(z for _, _, z in pts3)
+        sxx = sum(x * x for x, _, _ in pts3)
+        syy = sum(y * y for _, y, _ in pts3)
+        sxy = sum(x * y for x, y, _ in pts3)
+        sxz = sum(x * z for x, _, z in pts3)
+        syz = sum(y * z for _, y, z in pts3)
+        n = float(len(pts3))
+        sol = _solve_3x3([[sxx, sxy, sx], [sxy, syy, sy], [sx, sy, n]], [sxz, syz, sz])
+        if sol is not None:
+            a, b, _ = sol
+            out["plane_slope_x"] = float(a)
+            out["plane_slope_y"] = float(b)
+            out["plane_slope_deg"] = math.degrees(math.atan(math.hypot(a, b)))
+    return out
+
+
+def terrain_flat_score(rough: Optional[float], patch: Optional[Dict[str, float]]) -> Tuple[float, bool]:
+    """Return 0..1 flatness score and whether terrain information was available."""
+    if rough is None and not patch:
+        return 1.0, False
+    penalties: List[float] = []
+    if rough is not None:
+        penalties.append(float(rough) / max(1e-6, FIRE_FLAT_ROUGHNESS_MAX))
+    if patch:
+        z_range = patch.get("z_range_m")
+        if z_range is not None:
+            penalties.append(float(z_range) / max(1e-6, FIRE_FLAT_PATCH_Z_RANGE_MAX))
+        rough_max = patch.get("roughness_max")
+        if rough_max is not None:
+            penalties.append(float(rough_max) / max(1e-6, FIRE_FLAT_ROUGHNESS_MAX * 4.0))
+        est_pitch = patch.get("abs_estimated_body_pitch_deg")
+        if est_pitch is not None:
+            penalties.append(float(est_pitch) / max(1e-6, FIRE_FLAT_BODY_PITCH_MAX_DEG))
+        est_roll = patch.get("abs_estimated_body_roll_deg")
+        if est_roll is not None:
+            penalties.append(float(est_roll) / max(1e-6, FIRE_FLAT_BODY_ROLL_MAX_DEG))
+    penalty = max(penalties) if penalties else 0.0
+    return max(0.0, min(1.0, 1.0 - penalty)), True
+
+
 def best_firing_position(target: Dict[str, Any], pts: List[Tuple[float, float]], arc: List[float],
                          bboxes: List[Dict[str, float]], exposure_threats: List[Dict[str, Any]],
                          weights: Dict[str, float], terrain: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """표적 T에 대해 루트 점 중 사거리+LoS+평탄도를 만족하는 최고점수 사격 위치."""
     tx, ty = float(target["x"]), float(target["y"])
-    span = MAX_RANGE_M - MIN_RANGE_M
+    raw_target_z = float(target.get("z_height", 0.0) or 0.0)
+    terrain_target_z = terrain_z_at(terrain, tx, ty)
+    # Discovered tanks often carry a measured object height.  The final enemy
+    # uses live /tank/enemy/pose at firing time and may have z=0 in the plan,
+    # so for terrain-corridor screening use an estimated turret/body center
+    # above local terrain rather than ground level.
+    target_z = raw_target_z if raw_target_z > 0.5 else (float(terrain_target_z) + 3.0 if terrain_target_z is not None else 3.0)
+    min_allowed, preferred_range = target_range_policy(target)
+    total_arc = max(arc) if arc else 0.0
 
-    def scan(require_flat: bool) -> Optional[Dict[str, Any]]:
+    def scan(require_flat: bool, require_tactical_min: bool = True) -> Optional[Dict[str, Any]]:
         best: Optional[Dict[str, Any]] = None
+        candidates: List[Dict[str, Any]] = []
         for idx, (px, py) in enumerate(pts):
             d = math.hypot(px - tx, py - ty)
-            if d < MIN_RANGE_M or d > MAX_RANGE_M:
+            hard_min = min_allowed if require_tactical_min else MIN_RANGE_M
+            if d < hard_min or d > MAX_RANGE_M:
                 continue
             if not tg.check_los(px, py, tx, ty, bboxes):
                 continue
+            corridor = terrain_ballistic_corridor_clearance(terrain, px, py, tx, ty, target_z)
+            if (
+                corridor is not None
+                and corridor.get("min_clearance_m") is not None
+                and float(corridor["min_clearance_m"]) < FIRE_TERRAIN_LOS_CLEARANCE_M
+            ):
+                continue
             rough = terrain_roughness_at(terrain, px, py)
+            patch = terrain_patch_stats_at(terrain, px, py)
+            forward = route_tangent_at(pts, idx)
+            patch = enrich_patch_with_body_tilt(patch, forward)
+            runtime_safety = terrain_runtime_pose_safety_at(terrain, pts, idx, px, py)
+            flat_score, flat_available = terrain_flat_score(rough, patch)
+            # Keep runtime safety diagnostic in the plan, but do not let a wide
+            # assumed stop error reject a point.  The actual stop radius is now
+            # clamped to 1.5m in the launch file; the center-cell flatness and
+            # ballistic pitch limit are the hard constraints.
+            if runtime_safety is not None:
+                runtime_pitch_ratio = runtime_safety.get("max_abs_body_pitch_deg", 0.0) / max(1e-6, FIRE_RUNTIME_BODY_PITCH_MAX_DEG)
+                runtime_roll_ratio = runtime_safety.get("max_abs_body_roll_deg", 0.0) / max(1e-6, FIRE_RUNTIME_BODY_ROLL_MAX_DEG)
+                runtime_rough_ratio = runtime_safety.get("max_roughness", 0.0) / max(1e-6, FIRE_FLAT_ROUGHNESS_MAX * 4.0)
+                runtime_penalty = max(runtime_pitch_ratio, runtime_roll_ratio, runtime_rough_ratio)
+                flat_score = min(flat_score, max(0.0, 1.0 - runtime_penalty))
             if rough is not None and require_flat and rough > FIRE_FLAT_ROUGHNESS_MAX:
                 continue
-            range_score = 1.0 - (d - MIN_RANGE_M) / span if span > 0 else 1.0
+            if (
+                patch is not None
+                and require_flat
+                and patch.get("z_range_m") is not None
+                and float(patch["z_range_m"]) > FIRE_FLAT_PATCH_Z_RANGE_MAX
+            ):
+                continue
+            if (
+                patch is not None
+                and require_flat
+                and patch.get("abs_estimated_body_pitch_deg") is not None
+                and float(patch["abs_estimated_body_pitch_deg"]) > FIRE_FLAT_BODY_PITCH_MAX_DEG
+            ):
+                continue
+            if (
+                patch is not None
+                and require_flat
+                and patch.get("abs_estimated_body_roll_deg") is not None
+                and float(patch["abs_estimated_body_roll_deg"]) > FIRE_FLAT_BODY_ROLL_MAX_DEG
+            ):
+                continue
+            if (
+                corridor is not None
+                and corridor.get("pitch_limit_reject") is not None
+                and float(corridor.get("pitch_limit_reject") or 0.0) > 0.5
+            ):
+                continue
+            range_score = preferred_range_score(d, min_allowed if require_tactical_min else MIN_RANGE_M, preferred_range)
             exp = point_exposure(px, py, exposure_threats, bboxes, exclude_xy=(tx, ty))
-            if rough is None:
-                flat_score = 1.0
-                flat_available = False
-            else:
-                flat_score = max(0.0, min(1.0, 1.0 - rough / max(1e-6, FIRE_FLAT_ROUGHNESS_MAX)))
-                flat_available = True
+            # Earlier route-arc bonus.  If two candidates are similarly flat and in range,
+            # choose the one before the target instead of the last close point.
+            advance_score = 1.0 if total_arc <= 1e-6 else max(0.0, min(1.0, 1.0 - arc[idx] / max(total_arc, FIRE_ADVANCE_ARC_SCALE_M)))
             active_weights = dict(weights)
-            if rough is None:
+            if not flat_available:
                 active_weights["flatness"] = 0.0
             wsum = sum(max(0.0, float(v)) for v in active_weights.values()) or 1.0
             score = (
                 active_weights.get("range", 0.0) * range_score
                 + active_weights.get("exposure", 0.0) * (1.0 - exp)
                 + active_weights.get("flatness", 0.0) * flat_score
+                + active_weights.get("advance", 0.0) * advance_score
             ) / wsum
+            candidate = {
+                "x": round(px, 2), "y": round(py, 2),
+                "distance_m": round(d, 2), "los": True,
+                "exposure": round(exp, 3), "exposure_band": exposure_band(exp),
+                "range_score": round(range_score, 3),
+                "preferred_range_m": round(preferred_range, 2),
+                "tactical_min_range_m": round(min_allowed, 2),
+                "advance_score": round(advance_score, 3),
+                "terrain_roughness": None if rough is None else round(float(rough), 4),
+                "terrain_patch": None if patch is None else {
+                    k: (None if v is None else round(float(v), 4)) for k, v in patch.items()
+                },
+                "terrain_fire_corridor": None if corridor is None else {
+                    k: (None if v is None else round(float(v), 4)) for k, v in corridor.items()
+                },
+                "runtime_pose_safety": None if runtime_safety is None else {
+                    k: (None if v is None else round(float(v), 4)) for k, v in runtime_safety.items()
+                },
+                "target_world_pitch_deg": None if corridor is None or corridor.get("target_world_pitch_deg") is None else round(float(corridor["target_world_pitch_deg"]), 4),
+                "flat_score": round(flat_score, 4),
+                "flat_filter_used": bool(require_flat and flat_available),
+                "score": round(score, 4),
+                "route_arc_m": round(arc[idx], 2),
+                "selection_policy": "flat_standoff_recon_target",
+            }
+            candidates.append(candidate)
             if best is None or score > best["score"]:
-                best = {
-                    "x": round(px, 2), "y": round(py, 2),
-                    "distance_m": round(d, 2), "los": True,
-                    "exposure": round(exp, 3), "exposure_band": exposure_band(exp),
-                    "range_score": round(range_score, 3),
-                    "terrain_roughness": None if rough is None else round(float(rough), 4),
-                    "flat_score": round(flat_score, 4),
-                    "flat_filter_used": bool(require_flat and flat_available),
-                    "score": round(score, 4),
-                    "route_arc_m": round(arc[idx], 2),
-                }
+                best = candidate
+        if best is not None and candidates:
+            candidates.sort(key=lambda c: (-float(c.get("score", 0.0)), float(c.get("exposure", 1.0)), float(c.get("route_arc_m", 0.0))))
+            alts: List[Dict[str, float]] = []
+            for c in candidates:
+                if math.hypot(float(c["x"]) - float(best["x"]), float(c["y"]) - float(best["y"])) < 1.0:
+                    continue
+                # Do not provide fallback goals that move materially closer to
+                # the target than the selected tactical standoff.  That was the
+                # cause of Scenario-2 driving to y≈255 for the first shot.
+                if float(c.get("distance_m", 0.0)) < max(min_allowed, float(best.get("distance_m", 0.0)) - 5.0):
+                    continue
+                alts.append({
+                    "x": float(c["x"]),
+                    "y": float(c["y"]),
+                    "distance_m": float(c.get("distance_m", 0.0)),
+                    "score": float(c.get("score", 0.0)),
+                    "estimated_body_pitch_deg": float((c.get("terrain_patch") or {}).get("estimated_body_pitch_deg", 0.0) or 0.0),
+                    "estimated_body_roll_deg": float((c.get("terrain_patch") or {}).get("estimated_body_roll_deg", 0.0) or 0.0),
+                    "runtime_max_pitch_deg": float((c.get("runtime_pose_safety") or {}).get("max_abs_body_pitch_deg", 0.0) or 0.0),
+                    "runtime_max_roll_deg": float((c.get("runtime_pose_safety") or {}).get("max_abs_body_roll_deg", 0.0) or 0.0),
+                })
+                if len(alts) >= FIRE_FALLBACK_GOAL_COUNT:
+                    break
+            best["fallback_goals"] = alts
         return best
 
-    best = scan(FIRE_REQUIRE_FLAT and terrain is not None)
+    best = scan(FIRE_REQUIRE_FLAT and terrain is not None, require_tactical_min=True)
     if best is None and terrain is not None:
-        best = scan(False)
+        # Relax the patch flatness requirement first, but keep tactical standoff.
+        best = scan(False, require_tactical_min=True)
         if best is not None:
             best["flat_filter_fallback"] = True
+    if best is None:
+        # Last resort: keep the original ballistic range only.  This is marked so
+        # the operator knows the checkpoint is a fallback, not the preferred plan.
+        best = scan(False, require_tactical_min=False)
+        if best is not None:
+            best["tactical_range_fallback"] = True
     return best
 
 
@@ -387,7 +917,12 @@ def recommend_route(route_results: Dict[str, Dict[str, Any]]) -> Tuple[str, str]
     if pref in route_results and pref != best:
         pr = route_results[pref]
         br = route_results[best]
-        if pr["order_feasible"] and pr["covered_count"] >= br["covered_count"] and pr["covered_count"] > 0:
+        # Scenario-2 launch normalizes the raw plan into exactly two shots
+        # (nearest recon static tank + final enemy).  Therefore route_A should
+        # remain the execution route whenever it covers the same number of
+        # targets; do not switch to route_B just because duplicate final-area
+        # detections make the raw multi-target order look infeasible.
+        if pr["covered_count"] >= br["covered_count"] and pr["covered_count"] > 0:
             best = pref
     r = route_results[best]
     reason = (f"route_{best} 추천 — 표적 {r['covered_count']}/{r['target_count']} 교전가능"
@@ -468,16 +1003,40 @@ def build_engagements_json(plan: Dict[str, Any]) -> str:
     """추천 루트의 사격 계획 → ballistic_turret_node engagements_json 스니펫(제안용, 자동적용 안 함)."""
     engs = []
     id_to_target = {e["id"]: e for e in plan["plan"]["targets"]}
-    for tid in plan["plan"]["engage_order"]:
+    for order_index, tid in enumerate(plan["plan"]["engage_order"]):
         e = id_to_target[tid]
-        cp = e["firing_checkpoint"]
+        cp = dict(e["firing_checkpoint"])
+        fallback_goals = [
+            {"x": float(g["x"]), "y": float(g["y"])}
+            for g in (cp.get("fallback_goals") or [])
+            if isinstance(g, dict) and g.get("x") is not None and g.get("y") is not None
+        ]
+        # Stage 1 is the recon/static tank.  Use the verified route-A firebase
+        # by default.  This prevents minor terrain-score changes from selecting
+        # the hillside stop around y≈208 or any target-side close fallback.
+        if FIRE_FORCE_STATIC_FIREBASE and order_index == 0 and e.get("class") != "final_enemy":
+            cp["x"] = FIRE_STATIC_FIREBASE_X
+            cp["y"] = FIRE_STATIC_FIREBASE_Y
+            cp["selection_policy"] = "forced_static_ballistic_firebase"
+            fallback_goals = [
+                {"x": float(x), "y": float(y)}
+                for x, y in FIRE_STATIC_FIREBASE_FALLBACKS
+            ]
         engs.append({
             "id": tid,
-            "checkpoint": {"x": cp["x"], "y": cp["y"], "radius_m": 10.0},
-            "checkpoint_settle_sec": 0.8,
+            "checkpoint": {"x": cp["x"], "y": cp["y"], "radius_m": FIRE_CHECKPOINT_RADIUS_M},
+            "checkpoint_settle_sec": 1.2,
             "target": {"x": e["pos"]["x"], "y": e["pos"]["y"], "z": e.get("z_height", 0.0)},
             "target_from_enemy_pose": e["class"] == "final_enemy",
             "target_height_offset_m": 0.0,
+            "reposition": {
+                "enabled": bool(fallback_goals),
+                "fallback_goals": fallback_goals,
+                "arrival_radius_m": FIRE_CHECKPOINT_RADIUS_M,
+                "min_travel_m": 0.0,
+                "timeout_sec": 55.0,
+                "max_attempts": len(fallback_goals),
+            },
         })
     return json.dumps(engs, ensure_ascii=False)
 
@@ -612,6 +1171,18 @@ def main() -> int:
     # ballistic_turret_node engagements 형식(자동 연결용) — 사격가능 표적만, 교전순서대로.
     # tank_scenario2.launch.py가 TANK_USE_MISSION_PLAN=true일 때 이 필드를 읽어 사격 시퀀스로 쓴다.
     plan["engagements"] = json.loads(build_engagements_json(plan))
+    # Keep the human-readable plan/MFD in sync with the actual engagements
+    # consumed by tank_scenario2.launch.py.
+    engagement_by_id = {str(e.get("id")): e for e in plan["engagements"] if isinstance(e, dict)}
+    for item in plan["plan"].get("targets", []):
+        eid = str(item.get("id"))
+        eng = engagement_by_id.get(eid)
+        if eng and isinstance(item.get("firing_checkpoint"), dict):
+            item["firing_checkpoint"]["x"] = float(eng["checkpoint"]["x"])
+            item["firing_checkpoint"]["y"] = float(eng["checkpoint"]["y"])
+            item["firing_checkpoint"]["selection_policy"] = item["firing_checkpoint"].get("selection_policy", "")
+            if eid == plan["plan"].get("engage_order", [None])[0] and FIRE_FORCE_STATIC_FIREBASE:
+                item["firing_checkpoint"]["selection_policy"] = "forced_static_ballistic_firebase"
 
     # 검증
     problems = verify_plan(plan, bboxes)

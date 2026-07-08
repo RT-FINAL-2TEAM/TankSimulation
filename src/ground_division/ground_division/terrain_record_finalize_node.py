@@ -132,6 +132,10 @@ class TerrainRecordFinalizeNode(Node):
         self.declare_parameter("surface_mesh_enabled", True)
         self.declare_parameter("surface_fill_gaps", True)       # 관측 안 된 셀을 이웃 보간으로 메움
         self.declare_parameter("surface_max_gap_cells", 2)      # 보간 확장 한계(과한 외삽 방지)
+        # 새 시나리오/RViz 시작 직후 이전 final terrain marker/cloud가 보이지 않도록
+        # 일정 시간 DELETEALL + empty cloud를 반복 발행한다.
+        self.declare_parameter("startup_clear_duration_sec", 6.0)
+        self.declare_parameter("startup_clear_period_sec", 0.25)
 
         # 장애물 제거용 local low-surface prefilter.
         self.declare_parameter("terrain_prefilter_enabled", True)
@@ -172,6 +176,8 @@ class TerrainRecordFinalizeNode(Node):
         self.surface_mesh_enabled = bool(self.get_parameter("surface_mesh_enabled").value)
         self.surface_fill_gaps = bool(self.get_parameter("surface_fill_gaps").value)
         self.surface_max_gap_cells = int(self.get_parameter("surface_max_gap_cells").value)
+        self.startup_clear_duration_sec = float(self.get_parameter("startup_clear_duration_sec").value)
+        self.startup_clear_period_sec = max(0.05, float(self.get_parameter("startup_clear_period_sec").value))
         self.terrain_prefilter_enabled = bool(self.get_parameter("terrain_prefilter_enabled").value)
         self.terrain_cell_size = float(self.get_parameter("terrain_cell_size").value)
         self.terrain_low_percentile = float(self.get_parameter("terrain_low_percentile").value)
@@ -199,6 +205,7 @@ class TerrainRecordFinalizeNode(Node):
         self._final_wireframe_markers: Optional[MarkerArray] = None
         self._recording_enable = self.recording_enabled_on_start
         self._last_summary = "아직 finalize되지 않았습니다."
+        self._startup_clear_until = time.time() + max(0.0, self.startup_clear_duration_sec)
 
         # -----------------------------
         # ROS interfaces
@@ -231,7 +238,11 @@ class TerrainRecordFinalizeNode(Node):
         self.create_service(Trigger, "/tank/terrain/reset_map", self.on_reset_service)
 
         self.create_timer(self.publish_period_sec, self.on_publish_timer)
+        self.create_timer(self.startup_clear_period_sec, self.on_startup_clear_timer)
         self.create_timer(1.0, self.on_watchdog_timer)
+
+        # RViz가 먼저 떠 있던 경우를 위해 시작 즉시 한 번 지운다.
+        self.publish_clear_outputs()
 
         if self.load_saved_map_on_start:
             ok, msg = self.load_saved_outputs(self.current_map_file())
@@ -326,7 +337,7 @@ class TerrainRecordFinalizeNode(Node):
         self._final_wireframe_markers = self.make_delete_all_markers("final_terrain_wireframe")
         self._last_summary = "reset 완료"
 
-        self.publish_final_outputs()
+        self.publish_clear_outputs()
         response.success = True
         response.message = "기록된 LiDAR와 최종 지도 결과를 초기화했습니다."
         self.get_logger().info(response.message)
@@ -510,6 +521,33 @@ class TerrainRecordFinalizeNode(Node):
     def on_publish_timer(self) -> None:
         if self._finalized:
             self.publish_final_outputs()
+
+    def on_startup_clear_timer(self) -> None:
+        """노드 시작 직후 RViz에 남아 있을 수 있는 이전 final terrain을 반복 삭제."""
+        if self.startup_clear_duration_sec <= 0.0:
+            return
+        if time.time() <= self._startup_clear_until and not self.load_saved_map_on_start:
+            self.publish_clear_outputs()
+
+    def publish_clear_outputs(self) -> None:
+        """Final terrain marker/cloud display를 빈 상태로 만든다.
+
+        MarkerArray는 DELETEALL을 보내고, PointCloud2 display는 빈 cloud를 보내
+        이전 실행의 final_ground/final_non_ground가 RViz에 남지 않게 한다.
+        """
+        now = self.get_clock().now().to_msg()
+        empty = np.empty((0, 3), dtype=np.float32)
+        self.pub_final_accumulated.publish(self.to_cloud_msg(empty, now))
+        self.pub_final_ground.publish(self.to_cloud_msg(empty, now))
+        self.pub_final_non_ground.publish(self.to_cloud_msg(empty, now))
+        markers = self.make_delete_all_markers("final_elevation_grid")
+        for m in markers.markers:
+            m.header.stamp = now
+        self.pub_final_markers.publish(markers)
+        wire = self.make_delete_all_markers("final_terrain_wireframe")
+        for m in wire.markers:
+            m.header.stamp = now
+        self.pub_final_wireframe_markers.publish(wire)
 
     def publish_final_outputs(self) -> None:
         now = self.get_clock().now().to_msg()

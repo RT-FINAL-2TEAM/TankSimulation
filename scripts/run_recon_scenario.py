@@ -45,8 +45,8 @@ REPORT_DIR = os.path.join(PROJECT_ROOT, "recon_reports")
 # 정찰 종료 시 여기로 루트별 복사해 보존한다(다음 루트가 latest를 덮어써도 유지).
 RECON_MAP_DIR = os.path.join(REPORT_DIR, "recon_map")
 TERRAIN_DIR = os.path.join(REPORT_DIR, "terrain_maps")
-DISCOVERED_LATEST = os.path.expanduser("~/tankcc/tank_discovered_maps/discovered_objects_latest.map")
-TERRAIN_LATEST = os.path.expanduser("~/tankcc/tank_terrain_maps/terrain_map_latest.npz")
+DISCOVERED_LATEST = os.path.join(PROJECT_ROOT, "tank_discovered_maps", "discovered_objects_latest.map")
+TERRAIN_LATEST = os.path.join(PROJECT_ROOT, "tank_terrain_maps", "terrain_map_latest.npz")
 
 # 출발지(map 좌표). BLUE_START raw (60, 8, 30) → map (x=60, y=z=30)
 START = (60.0, 30.0)
@@ -192,13 +192,22 @@ def finalize_recon_artifacts(route_id: str) -> None:
     else:
         print(f"  [Route {route_id}] [참고] /tank/terrain/finalize_map 서비스 없음 — 지형 노드 미기동(지형 없이 진행)")
 
-    # 3) 발견맵 복사(존재+비어있지 않음 검증)
+    # 3) 발견맵 복사(존재+비어있지 않음+이번 route에서 새로 저장됨 검증)
+    #    기존에는 discovered_objects_latest.map의 mtime을 보지 않아, B route 저장 실패 시
+    #    A route latest가 B map으로 복사될 수 있었다. 시나리오1→2 상태 꼬임의 핵심 원인이라
+    #    terrain NPZ와 동일하게 freshness gate를 둔다.
     disc_dst = os.path.join(RECON_MAP_DIR, f"discovered_objects_route_{route_id}.map")
-    if os.path.exists(DISCOVERED_LATEST) and os.path.getsize(DISCOVERED_LATEST) > 0:
+    disc_exists = os.path.exists(DISCOVERED_LATEST)
+    disc_fresh = disc_exists and os.path.getmtime(DISCOVERED_LATEST) >= t_start - 1.0
+    if disc_exists and os.path.getsize(DISCOVERED_LATEST) > 0 and disc_fresh:
         _atomic_copy(DISCOVERED_LATEST, disc_dst)
         print(f"  [Route {route_id}] 발견맵 → {disc_dst}")
+    elif disc_exists and not disc_fresh:
+        print(f"  [Route {route_id}] [경고] 발견맵 저장 실패 — 이전 route latest로 판단되어 복사 생략: {DISCOVERED_LATEST}")
+        _safe_remove(disc_dst)
     else:
         print(f"  [Route {route_id}] [경고] 발견맵 미생성/0바이트: {DISCOVERED_LATEST}")
+        _safe_remove(disc_dst)
 
     # 4) 지형 NPZ 검증 → 원자적 복사 (0바이트/미완성/이전루트 잔재 차단)
     terr_dst = os.path.join(TERRAIN_DIR, f"terrain_map_route_{route_id}.npz")
@@ -226,6 +235,18 @@ def finalize_recon_artifacts(route_id: str) -> None:
         _safe_remove(terr_dst)  # 과거 0바이트 잔재 제거(build가 깨진 파일 안 만나게)
 
 
+def prepare_route_runtime_files(route_id: str) -> None:
+    """Route별 latest 파일을 선제 삭제해 A/B 정찰 결과가 서로 섞이지 않게 한다.
+
+    local_path_node와 terrain_record_finalize_node는 latest 파일명을 공유한다.
+    서비스 저장이 실패하거나 node가 늦게 뜬 경우 이전 route의 latest가 남아 있으면,
+    finalize 단계에서 잘못된 route 파일로 복사될 수 있으므로 route 시작 전에 제거한다.
+    """
+    for path in (DISCOVERED_LATEST, TERRAIN_LATEST):
+        _safe_remove(path)
+    print(f"  [Route {route_id}] runtime latest 파일 초기화(discovered/terrain)")
+
+
 def reset_terrain_recording(route_id: str) -> None:
     """각 루트 시작 시 지형 노드를 reset(점 clear + 녹화 재개)한다.
 
@@ -241,6 +262,42 @@ def reset_terrain_recording(route_id: str) -> None:
         print(f"  [Route {route_id}] 지형 녹화 reset(clear+재개)")
     except Exception as e:
         print(f"  [Route {route_id}] [참고] 지형 reset 생략(노드 없을 수 있음): {e}")
+
+
+def reset_to_start(watcher: PoseWatcher, label: str = "initial", timeout: float = 180.0) -> bool:
+    """시나리오 시작/루트 전환 시 전차가 START 근처에 올 때까지 reset을 반복 요청한다.
+
+    기존 sh의 one-shot reset은 시뮬레이터가 아직 /info를 호출하지 않거나, 오래된 bridge가
+    5000 포트를 잡고 있으면 무시될 수 있다. 여기서는 실제 /tank/player/pose가 START_TOL 안으로
+    들어온 것을 확인한 뒤에만 자율 스택을 시작한다. 자동 reset이 안 먹으면 사용자가 Unity에서
+    RESTART를 눌러도 pose로 감지하고 계속 진행한다.
+    """
+    print(f"\n★ [{label}] 시뮬레이터 시작 위치 reset 확인 중 — START={START}, tol={START_TOL}m")
+    print("   자동 reset을 반복 요청합니다. 안 먹으면 Unity/시뮬레이터 RESTART를 눌러도 됩니다.")
+    t0 = time.time()
+    last_reset = 0.0
+    last_beat = 0.0
+    while time.time() - t0 < timeout:
+        now = time.time()
+        if watcher.pos is not None:
+            d = dist(watcher.pos, START)
+            if d < START_TOL:
+                print(f"  [OK] START 복귀 확인: d={d:.1f}m, pos=({watcher.pos[0]:.1f}, {watcher.pos[1]:.1f})")
+                return True
+        if now - last_reset >= RESET_REPUBLISH_SEC:
+            watcher.request_reset()
+            last_reset = now
+        if now - last_beat >= 5.0:
+            last_beat = now
+            if watcher.pos is None:
+                print("  [WAIT] player pose 수신 대기 + reset 재요청")
+            else:
+                print(f"  [WAIT] START까지 {dist(watcher.pos, START):.1f}m "
+                      f"(현재 {watcher.pos[0]:.1f}, {watcher.pos[1]:.1f}) — reset 재요청")
+        time.sleep(0.5)
+    print(f"[ERROR] {timeout:.0f}s 안에 START 복귀를 확인하지 못했습니다.")
+    print("        bridge가 새로 뜬 것인지(T1 log, /health episode_control=true), 시뮬레이터가 /info를 호출 중인지 확인하세요.")
+    return False
 
 
 def launch_route(route_id: str, side: str) -> subprocess.Popen:
@@ -298,6 +355,27 @@ def cleanup_stack() -> None:
     for path in AUTONOMY_PKG_PATHS:
         subprocess.run(["pkill", "-9", "-f", path], check=False)
     time.sleep(2.0)
+
+
+def clear_rviz_runtime_state(label: str, duration: float = 2.0) -> None:
+    """시나리오 시작/루트 전환 직전에 RViz runtime marker/cloud를 정리한다."""
+    script = os.path.join(PROJECT_ROOT, "scripts", "clear_rviz_runtime_state.py")
+    if not os.path.exists(script):
+        return
+    try:
+        subprocess.run(
+            [
+                "python3", script,
+                "--duration", f"{duration:.1f}",
+                "--rate", "8",
+                "--include-static",
+            ],
+            cwd=PROJECT_ROOT, check=False, timeout=max(5, int(duration + 4)),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        print(f"[RViz Clear] {label}: runtime marker/cloud 초기화 완료")
+    except Exception as e:
+        print(f"[RViz Clear] {label}: 초기화 생략({e})")
 
 
 def check_bridge_auto() -> None:
@@ -373,6 +451,14 @@ def main() -> int:
     print("기존 자율 스택(orphan) 노드 정리 중...")
     cleanup_stack()
     clear_stale_reports()
+    clear_rviz_runtime_state("scenario1 pre-start", duration=3.0)
+
+    # 첫 번째 Route A도 반드시 START에서 시작해야 한다.
+    # 이전 실행의 위치/속도/시뮬 상태가 남은 채로 시작하면 RViz path와 실제 주행이 어긋나고,
+    # route A/B 정찰 결과 및 scenario2 인계 map/terrain이 섞인다.
+    if not reset_to_start(watcher, label="scenario1 initial", timeout=180.0):
+        return 1
+
 
     try:
         for idx, (route_id, side) in enumerate(ROUTES):
@@ -382,9 +468,12 @@ def main() -> int:
             except FileNotFoundError:
                 pass
 
-            # 지형 노드를 루트별로 reset(점 clear + 녹화 재개). 이전 루트 finalize가 녹화를 꺼두므로
-            # 안 하면 B 지형이 안 쌓이고, 이전 점 위에 누적됨. (지형 노드 없으면 graceful 무시)
+            # route별 latest 파일과 지형 recorder를 모두 초기화.
+            # 발견객체 latest와 지형 latest가 이전 route/이전 실행에서 남아 있으면
+            # scenario2_map.map에 stale 장애물·지형이 섞인다.
+            prepare_route_runtime_files(route_id)
             reset_terrain_recording(route_id)
+            clear_rviz_runtime_state(f"Route {route_id} start", duration=1.5)
 
             print(f"\n=== [Route {route_id}] 자율주행 시작 (side={side}) ===")
             current_proc = launch_route(route_id, side)

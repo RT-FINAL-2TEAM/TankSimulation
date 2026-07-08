@@ -71,6 +71,7 @@
 # 1. Python 기본 모듈 import
 ############################################################
 import math
+import time
 import zlib
 
 # ros_bridge에서 들어오는 장애물/LiDAR 정보는 std_msgs/String 안에
@@ -396,6 +397,13 @@ class RvizVisualizerNode(Node):
         # path_planning의 JSON payload를 그대로 보관한다. 여기서는 좌표를 재보정하지 않는다.
         self.latest_fused_objects_payload: Dict[str, Any] = {"objects": []}
         self.latest_discovered_objects_payload: Dict[str, Any] = {"objects": []}
+        self._received_fused_objects_payload = False
+        self._received_discovered_objects_payload = False
+        # fused_objects는 순간 관측 스트림이라 다음 프레임에서 0개가 되면 LIVE marker가 사라진다.
+        # 하지만 local_path가 stable_object_id/is_confirmed를 붙인 객체는 이미 runtime map에
+        # 확정된 장애물이므로, dynamic/error boundary renderer에서 별도 cache로 보존한다.
+        self.dynamic_avoidance_memory: Dict[str, Dict[str, Any]] = {}
+        self.dynamic_avoidance_candidate_ttl_sec = 2.0
 
 
         ########################################################
@@ -607,6 +615,9 @@ class RvizVisualizerNode(Node):
             1.0 / VISUALIZATION_HZ,
             self.timer_callback,
         )
+        self._startup_clear_until = time.time() + 5.0
+        self.clear_timer = self.create_timer(0.25, self.startup_clear_callback)
+        self.publish_runtime_clear_markers()
 
         # node 시작 로그.
         self.get_logger().info("tank_rviz_visualizer_node started")
@@ -832,6 +843,7 @@ class RvizVisualizerNode(Node):
             self.latest_fused_objects_payload = payload if isinstance(payload, dict) else {"objects": []}
         except Exception:
             self.latest_fused_objects_payload = {"objects": []}
+        self._received_fused_objects_payload = True
 
     def discovered_objects_callback(self, msg: String) -> None:
         try:
@@ -839,11 +851,41 @@ class RvizVisualizerNode(Node):
             self.latest_discovered_objects_payload = payload if isinstance(payload, dict) else {"objects": []}
         except Exception:
             self.latest_discovered_objects_payload = {"objects": []}
+        self._received_discovered_objects_payload = True
+
+
+    def _delete_all_marker_array(self) -> MarkerArray:
+        """현재 publisher topic의 이전 marker를 RViz에서 즉시 제거하는 MarkerArray."""
+        clear = Marker()
+        clear.header.frame_id = MAP_FRAME
+        clear.header.stamp = self.get_clock().now().to_msg()
+        clear.action = Marker.DELETEALL
+        arr = MarkerArray()
+        arr.markers.append(clear)
+        return arr
 
 
     ############################################################
     # 7. Timer callback
     ############################################################
+
+    def publish_runtime_clear_markers(self) -> None:
+        """이전 실행에서 RViz에 남은 runtime marker를 지운다."""
+        clear = self._delete_all_marker_array()
+        for pub in (
+            self.object_marker_pub,
+            self.obstacle_marker_pub,
+            self.lidar_marker_pub,
+            self.risk_marker_pub,
+            self.potential_marker_pub,
+            self.dynamic_avoidance_marker_pub,
+        ):
+            pub.publish(clear)
+
+    def startup_clear_callback(self) -> None:
+        if time.time() <= self._startup_clear_until:
+            self.publish_runtime_clear_markers()
+
 
     def timer_callback(self) -> None:
         """
@@ -895,7 +937,13 @@ class RvizVisualizerNode(Node):
         return int(zlib.crc32(key.encode("utf-8")) & 0x3FFFFFFF) * 2
 
     def publish_dynamic_avoidance_markers(self) -> None:
-        """fusion/discovered의 회피반경을 위치 재계산 없이 그대로 표현한다."""
+        """fusion/discovered의 회피반경을 위치 재계산 없이 그대로 표현한다.
+
+        LIVE fused object는 순간 관측이므로 YOLO/LiDAR 매칭이 끊기는 프레임에서 사라진다.
+        반대로 is_confirmed/stable_object_id가 붙었거나 /tank/map/discovered/objects에
+        들어온 객체는 runtime map에 남는 장애물이다. 이런 객체는 별도 cache에 보존해
+        fused 순간 이후에도 error/avoidance boundary가 계속 보이게 한다.
+        """
         msg = MarkerArray()
         stamp = self.get_clock().now().to_msg()
         clear = Marker()
@@ -904,22 +952,48 @@ class RvizVisualizerNode(Node):
         clear.action = Marker.DELETEALL
         msg.markers.append(clear)
 
+        now_wall = time.time()
         merged: Dict[str, Dict[str, Any]] = {}
+
         discovered = self.latest_discovered_objects_payload.get("objects", [])
-        if isinstance(discovered, list):
+        if self._received_discovered_objects_payload and isinstance(discovered, list):
+            if len(discovered) == 0 and int(self.latest_discovered_objects_payload.get("count", 0) or 0) == 0:
+                # local_path clear/reset이 들어오면 이전 runtime map boundary도 같이 비운다.
+                self.dynamic_avoidance_memory.clear()
             for idx, obj in enumerate(discovered):
                 if not isinstance(obj, dict):
                     continue
                 key = str(obj.get("stable_object_id", obj.get("object_id", f"discovered_{idx}")))
-                merged[key] = obj
+                cached = dict(obj)
+                cached["_last_seen_wall"] = now_wall
+                cached["_dynamic_source"] = "discovered"
+                self.dynamic_avoidance_memory[key] = cached
+
         fused = self.latest_fused_objects_payload.get("objects", [])
+        current_fused: Dict[str, Dict[str, Any]] = {}
         if isinstance(fused, list):
             for idx, obj in enumerate(fused):
                 if not isinstance(obj, dict):
                     continue
                 key = str(obj.get("stable_object_id", obj.get("object_id", f"fused_{idx}")))
-                # 현재 프레임 fused가 동일 stable id이면 position_map은 이미 local_path가 안정화한 값이다.
-                merged[key] = obj
+                current_fused[key] = obj
+                if bool(obj.get("is_confirmed", False)) or obj.get("stable_object_id") is not None:
+                    cached = dict(obj)
+                    cached["_last_seen_wall"] = now_wall
+                    cached["_dynamic_source"] = "confirmed_fused"
+                    self.dynamic_avoidance_memory[key] = cached
+
+        # candidate성 cache는 짧게만 유지하고, confirmed/frozen/discovered map 객체는 계속 유지한다.
+        for key in list(self.dynamic_avoidance_memory.keys()):
+            obj = self.dynamic_avoidance_memory[key]
+            persistent = bool(obj.get("is_confirmed", False)) or str(obj.get("position_state", "")).lower() == "frozen" or obj.get("_dynamic_source") == "discovered"
+            last_seen = float(obj.get("_last_seen_wall", now_wall))
+            if not persistent and now_wall - last_seen > self.dynamic_avoidance_candidate_ttl_sec:
+                self.dynamic_avoidance_memory.pop(key, None)
+
+        merged.update(self.dynamic_avoidance_memory)
+        # 현재 프레임 fused는 최신 위치가 우선이다.
+        merged.update(current_fused)
 
         for key, obj in merged.items():
             xyz = self._dynamic_object_position(obj)
@@ -1311,7 +1385,7 @@ class RvizVisualizerNode(Node):
         """
 
         # MarkerArray는 여러 Marker를 담는 컨테이너 메시지.
-        markers = MarkerArray()
+        markers = self._delete_all_marker_array()
 
         # MarkerArray 내부 marker ID.
         marker_id = 0
@@ -1554,7 +1628,7 @@ class RvizVisualizerNode(Node):
             - risk 값이 없으면 기본 risk=0.5로 표시
         """
 
-        markers = MarkerArray()
+        markers = self._delete_all_marker_array()
 
         for idx, obs in enumerate(self.obstacles):
             # 장애물 하나는 dict 형태여야 한다.
@@ -1616,7 +1690,7 @@ class RvizVisualizerNode(Node):
         이전 ray 선분 marker는 명시적으로 DELETE해서 RViz에 남지 않게 한다.
         """
 
-        markers = MarkerArray()
+        markers = self._delete_all_marker_array()
 
         # 이전 버전에서 쓰던 옛 ray/origin marker를 삭제한다.
         for ns, mid in (("lidar_live_rays", 10), ("lidar_origin", 11)):
@@ -1700,7 +1774,7 @@ class RvizVisualizerNode(Node):
             - LiDAR point 밀집도 기반 rough terrain 영역
         """
 
-        markers = MarkerArray()
+        markers = self._delete_all_marker_array()
 
         for idx, obs in enumerate(self.obstacles):
             if not isinstance(obs, dict):
@@ -1758,7 +1832,7 @@ class RvizVisualizerNode(Node):
 
     def publish_potential_markers(self) -> None:
         """Potential Field 벡터를 RViz2 ARROW marker로 표시한다."""
-        markers = MarkerArray()
+        markers = self._delete_all_marker_array()
 
         if not SHOW_POTENTIAL_MARKERS:
             self.potential_marker_pub.publish(markers)

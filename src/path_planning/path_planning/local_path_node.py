@@ -2092,11 +2092,47 @@ class LocalPathNode(Node):
             x = obj.map_x
             y = obj.map_y
             z = obj.map_z + self.discovered_z_offset
-            base_id = idx * 3
-            markers.markers.append(self._cube_marker("discovered_object", base_id, x, y, z, self.discovered_cube_scale, color))
+            # 0: error disk, 1: error ring, 2: object cube, 3: label, 4: saved badge
+            # DELETEALL을 매번 같이 보내므로 idx 기반 id도 안전하지만, id 폭을 넉넉히 둬
+            # boundary/cube/text가 서로 덮어쓰지 않게 한다.
+            base_id = idx * 6
+
+            radius = max(0.1, float(obj.avoidance_radius_m or self._avoidance_radius_for_class(obj.class_name)))
+            disk_alpha = 0.20 if obj.is_confirmed else 0.08
+            ring_alpha = 0.95 if obj.is_confirmed else 0.35
+            disk_color = self._color_for_class(obj.class_name, disk_alpha)
+            ring_color = self._color_for_class(obj.class_name, ring_alpha)
+            # fusion 확정 후에도 map에 남는 discovered object가 자신의 error/avoidance
+            # boundary를 직접 갖게 한다. live fused marker의 lifetime이 끝나도 저장된
+            # 객체의 반경은 계속 보인다.
+            markers.markers.append(
+                self._cylinder_marker(
+                    "discovered_error_boundary_disk",
+                    base_id,
+                    x,
+                    y,
+                    obj.map_z + 0.08,
+                    radius,
+                    disk_color,
+                )
+            )
+            markers.markers.append(
+                self._circle_marker(
+                    "discovered_error_boundary_ring",
+                    base_id + 1,
+                    x,
+                    y,
+                    obj.map_z + 0.16,
+                    radius,
+                    ring_color,
+                    72,
+                )
+            )
+
+            markers.markers.append(self._cube_marker("discovered_object", base_id + 2, x, y, z, self.discovered_cube_scale, color))
             status = "SAVED" if obj.is_confirmed else "CANDIDATE"
             label = f"{status} {obj.class_name} r={obj.avoidance_radius_m:.1f}m\nobs={obj.observation_count} conf={obj.confidence:.2f} [{obj.position_state}]"
-            markers.markers.append(self._text_marker("discovered_object_label", base_id + 1, x, y, z + 2.0, label, self._color_for_class(obj.class_name, 1.0), 0.0))
+            markers.markers.append(self._text_marker("discovered_object_label", base_id + 3, x, y, z + 2.0, label, self._color_for_class(obj.class_name, 1.0), 0.0))
 
             if obj.is_confirmed:
                 saved_color = ColorRGBA()
@@ -2107,7 +2143,7 @@ class LocalPathNode(Node):
                 markers.markers.append(
                     self._sphere_marker(
                         "discovered_saved_badge",
-                        base_id + 2,
+                        base_id + 4,
                         x,
                         y,
                         z + 3.2,
@@ -2147,6 +2183,35 @@ class LocalPathNode(Node):
         m.scale.x = scale; m.scale.y = scale; m.scale.z = scale
         m.color = color
         return m
+
+    def _cylinder_marker(self, ns: str, marker_id: int, x: float, y: float, z: float, radius: float, color: ColorRGBA) -> Marker:
+        m = self._base_marker(ns, marker_id, 0.0)
+        m.type = Marker.CYLINDER
+        m.pose.position.x = float(x); m.pose.position.y = float(y); m.pose.position.z = float(z)
+        m.pose.orientation.w = 1.0
+        d = max(0.1, float(radius) * 2.0)
+        m.scale.x = d; m.scale.y = d; m.scale.z = 0.08
+        m.color = color
+        return m
+
+    def _circle_marker(
+        self,
+        ns: str,
+        marker_id: int,
+        x: float,
+        y: float,
+        z: float,
+        radius: float,
+        color: ColorRGBA,
+        segments: int = 72,
+    ) -> Marker:
+        r = max(0.1, float(radius))
+        n = max(12, int(segments))
+        points: List[Tuple[float, float, float]] = []
+        for i in range(n + 1):
+            theta = 2.0 * math.pi * float(i) / float(n)
+            points.append((float(x) + r * math.cos(theta), float(y) + r * math.sin(theta), float(z)))
+        return self._line_marker(ns, marker_id, points, color, 0.0)
 
     def _line_marker(self, ns: str, marker_id: int, points: List[Tuple[float, float, float]], color: ColorRGBA, lifetime: float) -> Marker:
         m = self._base_marker(ns, marker_id, lifetime)

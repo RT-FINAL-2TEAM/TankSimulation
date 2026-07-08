@@ -6,17 +6,17 @@ source "/home/tankcc/tankcc/scripts/.terminator_runtime/common_env.sh"
 echo "============================================================"
 echo "[T1] ros_bridge"
 echo "============================================================"
-echo "Command:"
-echo "  TANK_MODE=auto TANK_EPISODE_CONTROL=true TANK_LIVE_VIEW=true ros2 run ros_bridge ros_bridge"
-echo
-echo "[YOLO MODEL]"
-echo "  TANK_YOLO_MODEL_PATH=${TANK_YOLO_MODEL_PATH:-<not set>}"
-echo
-echo "[LOG] /home/tankcc/tankcc/logs/scenario2_terminator_20260708_120036/bridge.log"
+echo "live web       : true"
+echo "command        : TANK_MODE=auto TANK_EPISODE_CONTROL=true TANK_LIVE_VIEW=true ros2 run ros_bridge ros_bridge"
+echo "log            : /home/tankcc/tankcc/logs/scenario2_terminator_20260708_164553/bridge.log"
 echo
 
-TANK_MODE=auto TANK_EPISODE_CONTROL=true TANK_LIVE_VIEW=true ros2 run ros_bridge ros_bridge 2>&1 | tee "/home/tankcc/tankcc/logs/scenario2_terminator_20260708_120036/bridge.log"
+set +e
+TANK_MODE=auto TANK_EPISODE_CONTROL=true TANK_LIVE_VIEW=true ros2 run ros_bridge ros_bridge 2>&1 | tee "/home/tankcc/tankcc/logs/scenario2_terminator_20260708_164553/bridge.log"
+code=${PIPESTATUS[0]}
+set -e
 
 echo
-echo "[EXIT] ros_bridge 종료됨. 창을 닫거나 Enter를 누르세요."
+echo "[EXIT] ros_bridge 종료됨 (exit=$code)."
+echo "[LOG] /home/tankcc/tankcc/logs/scenario2_terminator_20260708_164553/bridge.log"
 exec bash

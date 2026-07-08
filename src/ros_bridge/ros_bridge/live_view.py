@@ -731,6 +731,61 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 border: 1px solid var(--line-dim);
                 padding: 3px 6px;
             }
+            .report-root {
+                border: 1px solid var(--line-dim);
+                background: rgba(7, 18, 12, 0.62);
+                margin-bottom: 8px;
+            }
+            .report-root-head {
+                display: flex;
+                justify-content: space-between;
+                gap: 8px;
+                padding: 7px 8px;
+                border-bottom: 1px solid var(--line-dim);
+                color: var(--green);
+                font-size: 12px;
+                font-weight: 800;
+            }
+            .report-file {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) auto auto;
+                align-items: center;
+                gap: 6px;
+                padding: 6px 8px;
+                border-top: 1px solid rgba(42, 83, 154, 0.22);
+                font-size: 11px;
+            }
+            .report-file:first-of-type { border-top: 0; }
+            .report-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+            .report-file-meta { color: var(--muted); font-size: 10px; }
+            .report-preview {
+                margin-top: 10px;
+                border: 1px solid var(--line-dim);
+                background: rgba(3, 8, 16, 0.88);
+                padding: 8px;
+            }
+            .report-preview pre {
+                margin: 6px 0 0 0;
+                white-space: pre-wrap;
+                overflow-wrap: anywhere;
+                color: #dce8ff;
+                font: 11px/1.45 "Cascadia Mono", "Consolas", monospace;
+            }
+            .link-button {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                border: 1px solid var(--line-dim);
+                background: rgba(8, 19, 40, 0.9);
+                color: var(--muted);
+                text-decoration: none;
+                font: inherit;
+                font-size: 10px;
+                font-weight: 800;
+                padding: 4px 7px;
+                cursor: pointer;
+            }
+            .link-button:hover { border-color: var(--green); color: var(--green); }
             @media (max-width: 980px) {
                 body { overflow: auto; }
                 .mfd { min-height: 100vh; height: auto; grid-template-rows: auto auto auto; }
@@ -864,6 +919,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
             let overviewImageLoaded = false;
             let overviewImageError = null;
             let lastWindowsReconAction = null;
+            let lastRenderedReportMtime = null;
 
             function byId(id) { return document.getElementById(id); }
             function safe(value, fallback = "-") { return value === undefined || value === null || value === "" ? fallback : value; }
@@ -1135,19 +1191,21 @@ def render_view_page(poll_ms: int = 1000) -> str:
             let activeLlmSub = "recon";
             function initLlmTabs() {
                 byId("llmWrap").innerHTML = `
-                    <div class="map-tabs" style="grid-template-columns:repeat(3,minmax(0,1fr));height:32px;flex:0 0 auto;">
+                    <div class="map-tabs" style="grid-template-columns:repeat(4,minmax(0,1fr));height:32px;flex:0 0 auto;">
                         <button id="llm-sub-recon" class="tab-button active" type="button" onclick="setLlmSub('recon')">정찰결과</button>
                         <button id="llm-sub-mission" class="tab-button" type="button" onclick="setLlmSub('mission')">미션계획</button>
                         <button id="llm-sub-realtime" class="tab-button" type="button" onclick="setLlmSub('realtime')">실시간판단</button>
+                        <button id="llm-sub-reports" class="tab-button" type="button" onclick="setLlmSub('reports')">레포트파일</button>
                     </div>
                     <div id="llm-content-recon" style="overflow-y:auto;flex:1 1 0;padding:10px 12px;"></div>
                     <div id="llm-content-mission" style="display:none;overflow-y:auto;flex:1 1 0;padding:10px 12px;"></div>
                     <div id="llm-content-realtime" style="display:none;overflow-y:auto;flex:1 1 0;padding:10px 12px;"></div>
+                    <div id="llm-content-reports" style="display:none;overflow-y:auto;flex:1 1 0;padding:10px 12px;"></div>
                 `;
             }
             function setLlmSub(subTab) {
                 activeLlmSub = subTab;
-                for (const t of ["recon", "mission", "realtime"]) {
+                for (const t of ["recon", "mission", "realtime", "reports"]) {
                     byId(`llm-sub-${t}`).classList.toggle("active", t === subTab);
                     byId(`llm-content-${t}`).style.display = t === subTab ? "block" : "none";
                 }
@@ -1160,6 +1218,13 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     byId("llm-content-mission").innerHTML = renderMissionPlan(state);
                 } else if (subTab === "realtime") {
                     byId("llm-content-realtime").innerHTML = renderSuddenDecision(state);
+                } else if (subTab === "reports") {
+                    const reportMtime = state?.reportFiles?.latestMtime ?? "none";
+                    const reportPane = byId("llm-content-reports");
+                    if (!reportPane.innerHTML || lastRenderedReportMtime !== reportMtime) {
+                        reportPane.innerHTML = renderReportFiles(state);
+                        lastRenderedReportMtime = reportMtime;
+                    }
                 }
             }
             function setMapTab(tabName) {
@@ -1826,6 +1891,106 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     lastWindowsReconAction = { running: false, ok: false, message: err.message };
                     updateLeftPanel(latestState || {});
                 }
+            }
+            function formatBytes(bytes) {
+                const n = Number(bytes);
+                if (!Number.isFinite(n)) return "-";
+                if (n < 1024) return `${n}B`;
+                if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+                return `${(n / (1024 * 1024)).toFixed(1)}MB`;
+            }
+            function reportRootLabel(key) {
+                return ({
+                    recon_reports: "정찰/위험도 레포트",
+                    tank_discovered_maps: "발견 객체 맵",
+                    tank_terrain_maps: "지형 맵"
+                })[key] || key;
+            }
+            function reportBriefText(file) {
+                const b = file?.brief || {};
+                const parts = [];
+                if (b.route) parts.push(`route=${b.route}`);
+                if (b.reached !== undefined) parts.push(`reached=${b.reached}`);
+                if (b.distanceM !== undefined) parts.push(`dist=${numberText(b.distanceM, 1)}m`);
+                if (b.simTimeS !== undefined) parts.push(`time=${numberText(b.simTimeS, 1)}s`);
+                if (b.selectedRoute) parts.push(`selected=${b.selectedRoute}`);
+                if (b.routeRecommended) parts.push(`recommended=${b.routeRecommended}`);
+                return parts.join(" · ");
+            }
+            async function openReportFile(root, name) {
+                const holder = byId("reportPreview");
+                if (!holder) return;
+                holder.innerHTML = `<div style="color:var(--muted);font-size:11px;">파일 읽는 중... ${escapeHtml(root)}/${escapeHtml(name)}</div>`;
+                try {
+                    const url = `/api/reports/file?root=${encodeURIComponent(root)}&name=${encodeURIComponent(name)}`;
+                    const response = await fetch(url, { cache: "no-store" });
+                    const data = await response.json().catch(() => ({ ok: false, error: `HTTP ${response.status}` }));
+                    if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
+                    const f = data.file || {};
+                    const p = data.preview || {};
+                    let body = "";
+                    if (p.kind === "npz") {
+                        const arrays = Array.isArray(p.arrays) ? p.arrays : [];
+                        body = arrays.length ? arrays.map((a) => {
+                            const stats = a.min === undefined ? "" : ` · min ${numberText(a.min, 3)} · max ${numberText(a.max, 3)} · mean ${numberText(a.mean, 3)}`;
+                            return `<div class="readout"><div class="label">${escapeHtml(a.name)}</div><div class="value">shape ${escapeHtml(JSON.stringify(a.shape))} · ${escapeHtml(a.dtype)} · size ${safe(a.size)}${stats}</div></div>`;
+                        }).join("") : `<div class="empty">NPZ 배열 정보 없음 ${escapeHtml(p.error || "")}</div>`;
+                        body = `<div class="readout-list">${body}</div>`;
+                    } else if (p.kind === "json") {
+                        const text = p.json ? JSON.stringify(p.json, null, 2) : (p.text || p.jsonError || "");
+                        body = `<pre>${escapeHtml(text)}</pre>`;
+                    } else if (p.kind === "text") {
+                        body = `<pre>${escapeHtml(p.text || "")}</pre>`;
+                    } else {
+                        body = `<div class="empty">미리보기를 지원하지 않는 파일입니다. 다운로드 버튼을 사용하세요.</div>`;
+                    }
+                    holder.innerHTML = `<div class="report-preview">
+                        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+                            <div style="min-width:0;"><b style="color:var(--green);">${escapeHtml(f.relativePath || f.name || name)}</b><div class="report-file-meta">${escapeHtml(reportRootLabel(f.root || root))} · ${formatBytes(f.size)} · ${escapeHtml(f.modified || "")}${p.truncated ? " · preview truncated" : ""}</div></div>
+                            <a class="link-button" href="${escapeHtml(f.downloadUrl || '#')}">다운로드</a>
+                        </div>
+                        ${body}
+                    </div>`;
+                } catch (err) {
+                    holder.innerHTML = `<div class="empty" style="color:var(--red);">레포트 파일 읽기 실패: ${escapeHtml(err.message || err)}</div>`;
+                }
+            }
+            function renderReportFiles(state) {
+                const rf = state?.reportFiles || {};
+                if (rf.error) return `<div class="empty" style="color:var(--red);">레포트 목록 오류: ${escapeHtml(rf.error)}</div>`;
+                const roots = rf.roots || {};
+                const keys = ["recon_reports", "tank_discovered_maps", "tank_terrain_maps"];
+                let html = `<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;margin-bottom:8px;">
+                    <div><b style="color:var(--green);">Scenario 1 결과 레포트</b><div style="font-size:10.5px;color:var(--muted);line-height:1.45;">프로젝트 루트: ${escapeHtml(rf.projectRoot || "~/tankcc")}<br>최신 갱신: ${escapeHtml(rf.latestModified || "-")}</div></div>
+                    <button class="action-button" style="width:92px;" onclick="fetchDashboardState()">새로고침</button>
+                </div>`;
+                let total = 0;
+                for (const key of keys) {
+                    const root = roots[key] || {};
+                    const files = Array.isArray(root.files) ? root.files : [];
+                    total += files.length;
+                    html += `<div class="report-root">
+                        <div class="report-root-head"><span>${escapeHtml(reportRootLabel(key))}</span><span>${root.exists ? `${files.length} files` : "not found"}</span></div>`;
+                    if (!root.exists) {
+                        html += `<div class="empty" style="border:0;">${escapeHtml(root.path || key)} 폴더가 없습니다.</div>`;
+                    } else if (!files.length) {
+                        html += `<div class="empty" style="border:0;">표시할 레포트 파일이 없습니다.</div>`;
+                    } else {
+                        for (const f of files.slice(0, 12)) {
+                            const brief = reportBriefText(f);
+                            html += `<div class="report-file">
+                                <div style="min-width:0;"><div class="report-file-name" title="${escapeHtml(f.relativePath)}">${escapeHtml(f.relativePath)}</div><div class="report-file-meta">${formatBytes(f.size)} · ${escapeHtml(f.modified || "")}${brief ? ` · ${escapeHtml(brief)}` : ""}</div></div>
+                                <button class="link-button" type="button" onclick="openReportFile(decodeURIComponent('${encodeURIComponent(f.root || "")}'),decodeURIComponent('${encodeURIComponent(f.relativePath || "")}'))">열기</button>
+                                <a class="link-button" href="${escapeHtml(f.downloadUrl)}">받기</a>
+                            </div>`;
+                        }
+                        if (files.length > 12) html += `<div style="font-size:10.5px;color:var(--muted);padding:6px 8px;">외 ${files.length - 12}개 파일은 최신순 목록에서 생략됨</div>`;
+                    }
+                    html += `</div>`;
+                }
+                if (!total) html += `<div class="empty">아직 생성된 결과 레포트가 없습니다. 시나리오1 종료 후 recon_reports, tank_discovered_maps, tank_terrain_maps를 확인합니다.</div>`;
+                html += `<div id="reportPreview"></div>`;
+                return html;
             }
             function renderReadouts(items) {
                 if (!items.length) return '<div class="empty">No data</div>';

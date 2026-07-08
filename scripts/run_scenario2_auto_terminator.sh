@@ -1,137 +1,155 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Use merged real LiDAR + phone_sim2real synthetic clusters for planner.
-export TANK_TOPIC_LIDAR_CLUSTERS=/tank/phone_sim2real/muxed_lidar_clusters
+# Scenario 2 auto runner.
+# - Default: no local /view web, no local desktop RViz2 GUI.
+# - --web : enable ros_bridge /view on this PC.
+# - --rviz: open desktop RViz2 map view on this PC.
+# rviz_web / rosbridge_websocket is intentionally not launched.
 
-# run_scenario2_auto_terminator_v3.sh
-#
-# 목적:
-#   Terminator 4분할 창으로 시나리오2를 자동 실행하면서 각 pane 로그를 실시간 확인한다.
-#
-# v3 수정점:
-#   - 기본 시각화를 웹 RViz 서버가 아니라 데스크톱 RViz2 창으로 변경
-#   - scenario2_map.map이 생길 때까지 기다린 뒤 RViz2를 실행
-#   - --web-rviz 옵션으로 기존 웹 RViz 모드도 선택 가능
-#   - --no-rviz 옵션은 RViz2 창 없이 marker publisher만 실행
-#
-# Pane 구성:
-#   좌상: T1 ros_bridge
-#   우상: T2 scenario2 데스크톱 RViz2, map 파일 대기 후 실행
-#   좌하: T3 scenario2 자동 manager
-#   우하: T4 debug monitor
-#
-# 사용(어느 경로/PC든): 워크스페이스 루트에서 실행
-#   ./scripts/run_scenario2_auto_terminator.sh
-#   (스크립트가 자기 위치로 워크스페이스를 자동 감지. 필요시 TANK_WS로 강제 지정)
-#
-# 옵션:
-#   --no-rviz        RViz2 창 없이 scenario2 marker publisher만 실행
-#   --web-rviz       기존 웹 RViz 모드로 실행(데스크톱 RViz2 대신 웹 서버)
-#   --skip-reset     scenario2 실행 전 simulator reset 생략
-#   --rebuild-map    기존 map이 있어도 build_scenario2_map.py 재실행
-#   --no-build-map   map 자동 생성 안 함. 없으면 에러
-#
-# 주의:
-#   scripts/run_scenario2_scenario.py가 scenario2 자율/교전 스택을 내부에서 실행한다.
-#   따라서 이 스크립트는 tank_scenario2.launch.py를 별도로 실행하지 않는다.
-
-# 워크스페이스 루트를 스크립트 위치에서 자동 감지(scripts/의 부모). 어느 PC/경로에서든 동작.
-# TANK_WS 를 지정하면 그 값을 우선 사용한다.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${TANK_WS:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-
-# Scenario1 정찰 결과로 생성된 mission_plan.json을 Scenario2 교전 시퀀스에 사용한다.
-export TANK_USE_MISSION_PLAN=true
-export TANK_MISSION_PLAN_FILE="$WORKSPACE/recon_reports/mission_plan.json"
-
 LOG_ROOT="${LOG_ROOT:-$WORKSPACE/logs}"
 RUN_ID="scenario2_terminator_$(date +%Y%m%d_%H%M%S)"
 LOG_DIR="$LOG_ROOT/$RUN_ID"
+RUNTIME_DIR="$WORKSPACE/scripts/.terminator_runtime"
 
-# 기본값은 실제 데스크톱 RViz2 창이다.
-# --web-rviz: 기존 웹 RViz 서버 모드
-# --no-rviz : RViz2 창 생략, marker publisher만 실행
-RVIZ_MODE="none"   # desktop | web | none
+WEB_ENABLED="false"
+RVIZ_ENABLED="false"
 SKIP_RESET="false"
-BUILD_MODE="auto"     # auto | rebuild | never
+BUILD_MODE="auto"  # auto | rebuild | never
 BRIDGE_HEALTH_URL="${BRIDGE_HEALTH_URL:-http://127.0.0.1:5000/health}"
 SCENARIO2_MAP_REL="recon_reports/recon_map/scenario2_map.map"
 SCENARIO2_TERRAIN_REL="recon_reports/recon_map/scenario2_terrain.npz"
+SCENARIO2_TERRAIN_JSON_REL="recon_reports/recon_map/scenario2_terrain.json"
+MISSION_PLAN_REL="recon_reports/mission_plan.json"
 MAP_WAIT_SEC="${MAP_WAIT_SEC:-180}"
+PHONE_PORT="${PHONE_PORT:-5002}"
+
+# Scenario1 정찰 결과로 생성된 mission_plan.json을 Scenario2 교전 시퀀스에 사용한다.
+export TANK_USE_MISSION_PLAN=true
+export TANK_MISSION_PLAN_FILE="$WORKSPACE/$MISSION_PLAN_REL"
 
 usage() {
   cat <<USAGE
-Usage: $0 [--no-rviz] [--skip-reset] [--rebuild-map] [--no-build-map]
-Options:
-  --no-rviz       RViz2 창 없이 scenario2 marker publisher만 실행
-  --skip-reset    run_scenario2_scenario.py 실행 전 simulator reset 요청 생략
-  --rebuild-map   기존 scenario2_map.map이 있어도 build_scenario2_map.py 재실행
-  --no-build-map  map 자동 생성을 하지 않음. map이 없으면 에러
-  -h, --help      도움말 출력
+Usage: $0 [--web] [--rviz] [--skip-reset] [--rebuild-map] [--no-build-map]
 
-Environment:
-  TANK_WS             ROS2 workspace 경로(default: 스크립트 위치 기준 자동 감지)
-  LOG_ROOT            로그 저장 상위 경로(default: <workspace>/logs)
-  MAP_WAIT_SEC        RViz pane의 scenario2_map.map 대기 시간(default: 180)
-  BRIDGE_HEALTH_URL   bridge health URL(default: http://127.0.0.1:5000/health)
+Options:
+  --web          이 PC의 ros_bridge에서 /view live web을 켬. 기본값은 꺼짐.
+  --rviz         이 PC에서 데스크톱 RViz2 scenario2 map view를 실행. 기본값은 RViz2 GUI 꺼짐.
+  --skip-reset   run_scenario2_scenario.py 실행 전 simulator reset 요청 생략
+  --rebuild-map  기존 scenario2_map.map이 있어도 build_scenario2_map.py 재실행
+  --no-build-map map 자동 생성을 하지 않음. map이 없거나 stale이어도 에러 처리
+  --no-rviz      호환용 no-op. 기본값이 이미 RViz2 GUI off.
+  -h, --help     도움말 출력
+
+Panes:
+  T1 ros_bridge
+  T2 scenario2 visualization backend, plus local RViz2 GUI only when --rviz is set
+  T3 scenario2 manager
+  T4 phone_sim2real, phone_port:=5002
 USAGE
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --web)
+      WEB_ENABLED="true"; shift ;;
+    --rviz)
+      RVIZ_ENABLED="true"; shift ;;
     --no-rviz)
-      RVIZ_MODE="none"
-      shift
-      ;;
-    --web-rviz)
-      echo "[ERROR] 이 PC에서는 Web RViz를 실행하지 않습니다."
-      echo "        Web/RViz는 시각화용 다른 PC에서 실행하세요."
-      exit 2
-      ;;
+      RVIZ_ENABLED="false"; shift ;;
     --skip-reset)
-      SKIP_RESET="true"
-      shift
-      ;;
+      SKIP_RESET="true"; shift ;;
     --rebuild-map)
-      BUILD_MODE="rebuild"
-      shift
-      ;;
+      BUILD_MODE="rebuild"; shift ;;
     --no-build-map)
-      BUILD_MODE="never"
-      shift
-      ;;
+      BUILD_MODE="never"; shift ;;
+    --web-rviz)
+      echo "[ERROR] rviz_web/Web RViz는 더 이상 이 스크립트에서 실행하지 않습니다."
+      echo "        live web은 --web, 데스크톱 RViz2는 --rviz를 사용하세요."
+      exit 2 ;;
     -h|--help)
-      usage
-      exit 0
-      ;;
+      usage; exit 0 ;;
     *)
-      echo "[ERROR] Unknown option: $1"
-      usage
-      exit 2
-      ;;
+      echo "[ERROR] Unknown option: $1"; usage; exit 2 ;;
   esac
 done
 
 if ! command -v terminator >/dev/null 2>&1; then
   echo "[ERROR] terminator가 설치되어 있지 않습니다."
-  echo "설치:"
   echo "  sudo apt update && sudo apt install -y terminator"
   exit 1
 fi
-
 if [[ ! -d "$WORKSPACE" ]]; then
   echo "[ERROR] workspace not found: $WORKSPACE"
   exit 1
 fi
 
-mkdir -p "$LOG_DIR"
 
-RUNTIME_DIR="$WORKSPACE/scripts/.terminator_runtime"
-mkdir -p "$RUNTIME_DIR"
+preflight_cleanup_local_processes() {
+  echo "[PRE-FLIGHT] 이전 실행에서 남은 로컬 프로세스를 정리합니다."
+  echo "             stale bridge/RViz/terrain/autonomy 노드가 남으면 reset, marker, map 상태가 섞입니다."
+
+  # Old bridge on :5000 is especially dangerous: the new bridge may fail to bind,
+  # while manager health checks the old bridge and episode reset is ignored.
+  pkill -9 -f 'ros2 run ros_bridge ros_bridge' 2>/dev/null || true
+  pkill -9 -f 'install/ros_bridge/lib/ros_bridge/ros_bridge' 2>/dev/null || true
+  pkill -9 -f 'ros_bridge.main' 2>/dev/null || true
+  pkill -9 -f '/ros_bridge/ros_bridge' 2>/dev/null || true
+
+  # Local visualization/terrain nodes. Remote RViz on another PC is not affected.
+  pkill -9 -f 'rviz2' 2>/dev/null || true
+  pkill -9 -f 'ros2 launch rviz_visualization' 2>/dev/null || true
+  pkill -9 -f 'ros2 launch ground_division' 2>/dev/null || true
+  pkill -9 -f 'clear_rviz_runtime_state.py' 2>/dev/null || true
+  pkill -9 -f 'static_map_loader_node' 2>/dev/null || true
+  pkill -9 -f 'rviz_visualizer_node' 2>/dev/null || true
+  pkill -9 -f 'terrain_record_finalize_node' 2>/dev/null || true
+  pkill -9 -f 'terrain_saved_map_visualizer_node' 2>/dev/null || true
+
+  # Old autonomy stack and phone bridge can keep publishing stale path/markers or occupy phone_port.
+  for key in \
+    'tank_autonomous_control.launch.py' \
+    'lidar_processor_node' \
+    'lidar_camera_overlay' \
+    'lidar_dbscan_cluster_node' \
+    'map_astar_planner_node' \
+    'local_path_node' \
+    'potential_field_node' \
+    'tank_controller_node' \
+    'phone_sim2real.launch.py' \
+    'phone_sim2real'; do
+    pkill -9 -f "$key" 2>/dev/null || true
+  done
+
+  sleep 1.0
+  local leftovers
+  leftovers="$(pgrep -af 'ros_bridge|rviz2|static_map_loader_node|rviz_visualizer_node|terrain_record_finalize_node|terrain_saved_map_visualizer_node|phone_sim2real|tank_autonomous_control.launch.py|lidar_processor_node|lidar_dbscan_cluster_node|map_astar_planner_node|local_path_node|tank_controller_node' 2>/dev/null || true)"
+  if [[ -n "$leftovers" ]]; then
+    echo "[PRE-FLIGHT][WARN] 아직 남은 관련 프로세스가 있습니다. 한 번 더 정리합니다:"
+    echo "$leftovers"
+    pkill -9 -f 'ros_bridge|rviz2|static_map_loader_node|rviz_visualizer_node|terrain_record_finalize_node|terrain_saved_map_visualizer_node|phone_sim2real|tank_autonomous_control.launch.py|lidar_processor_node|lidar_dbscan_cluster_node|map_astar_planner_node|local_path_node|tank_controller_node' 2>/dev/null || true
+    sleep 1.0
+  fi
+}
+preflight_cleanup_runtime_outputs() {
+  echo "[PRE-FLIGHT] 시나리오2 runtime 결과만 Terminator 실행 전에 먼저 정리합니다."
+  mkdir -p "$WORKSPACE/recon_reports/scenario2"            "$WORKSPACE/tank_discovered_maps"            "$WORKSPACE/tank_terrain_maps"
+
+  # Scenario2 입력인 scenario2_map.map, scenario2_terrain.*, mission_plan.json,
+  # route_A/B 정찰 산출물은 절대 삭제하지 않는다.
+  rm -f     "$WORKSPACE/recon_reports/scenario2/route_A.json"     "$WORKSPACE/recon_reports/scenario2/scenario2_result.json"     "$WORKSPACE/tank_discovered_maps/discovered_objects_latest.map"     "$WORKSPACE/tank_terrain_maps/terrain_map_latest.npz"
+}
+preflight_cleanup_local_processes
+preflight_cleanup_runtime_outputs
+
+# 이전 실행에서 생성된 pane script/config를 지워 stale command가 재사용되지 않게 한다.
+rm -rf "$RUNTIME_DIR"
+mkdir -p "$LOG_DIR" "$RUNTIME_DIR"
 
 COMMON_ENV="$RUNTIME_DIR/common_env.sh"
-cat > "$COMMON_ENV" <<EOF
+cat > "$COMMON_ENV" <<EOF_ENV
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -143,31 +161,32 @@ safe_source() {
 }
 
 cd "$WORKSPACE"
+export TANK_PROJECT_ROOT="$WORKSPACE"
+# 기본값: 수동 실행과 동일하게 planner cluster topic env override 없음.
+export TANK_USE_MISSION_PLAN="true"
+export TANK_MISSION_PLAN_FILE="$WORKSPACE/$MISSION_PLAN_REL"
 
 if [[ ! -f /opt/ros/humble/setup.bash ]]; then
   echo "[ERROR] /opt/ros/humble/setup.bash not found"
   exec bash
 fi
-
 safe_source /opt/ros/humble/setup.bash
 
 if [[ ! -f "$WORKSPACE/install/setup.bash" ]]; then
   echo "[ERROR] $WORKSPACE/install/setup.bash not found"
-  echo "먼저 빌드하세요:"
-  echo "  cd $WORKSPACE && colcon build"
+  echo "먼저 빌드하세요: cd $WORKSPACE && colcon build"
   exec bash
 fi
-
 safe_source "$WORKSPACE/install/setup.bash"
 
 if [[ -f "$WORKSPACE/src/vision/models/best_final.engine" ]]; then
   export TANK_YOLO_MODEL_PATH="$WORKSPACE/src/vision/models/best_final.engine"
 fi
-EOF
+EOF_ENV
 chmod +x "$COMMON_ENV"
 
 BRIDGE_SCRIPT="$RUNTIME_DIR/s2_bridge_pane.sh"
-cat > "$BRIDGE_SCRIPT" <<EOF
+cat > "$BRIDGE_SCRIPT" <<EOF_BRIDGE
 #!/usr/bin/env bash
 set -Eeuo pipefail
 printf '\\033]0;S2-T1 ros_bridge\\007'
@@ -176,158 +195,104 @@ source "$COMMON_ENV"
 echo "============================================================"
 echo "[T1] ros_bridge"
 echo "============================================================"
-echo "Command:"
-echo "  TANK_MODE=auto TANK_EPISODE_CONTROL=true TANK_LIVE_VIEW=true ros2 run ros_bridge ros_bridge"
+echo "live web       : $WEB_ENABLED"
+echo "command        : TANK_MODE=auto TANK_EPISODE_CONTROL=true TANK_LIVE_VIEW=$WEB_ENABLED ros2 run ros_bridge ros_bridge"
+echo "log            : $LOG_DIR/bridge.log"
 echo
-echo "[YOLO MODEL]"
-echo "  TANK_YOLO_MODEL_PATH=\${TANK_YOLO_MODEL_PATH:-<not set>}"
+
+set +e
+TANK_MODE=auto \
+TANK_EPISODE_CONTROL=true \
+TANK_LIVE_VIEW=$WEB_ENABLED \
+ros2 run ros_bridge ros_bridge 2>&1 | tee "$LOG_DIR/bridge.log"
+code=\${PIPESTATUS[0]}
+set -e
+
 echo
+echo "[EXIT] ros_bridge 종료됨 (exit=\$code)."
 echo "[LOG] $LOG_DIR/bridge.log"
-echo
-
-TANK_MODE=auto TANK_EPISODE_CONTROL=true TANK_LIVE_VIEW=true ros2 run ros_bridge ros_bridge 2>&1 | tee "$LOG_DIR/bridge.log"
-
-echo
-echo "[EXIT] ros_bridge 종료됨. 창을 닫거나 Enter를 누르세요."
 exec bash
-EOF
+EOF_BRIDGE
 chmod +x "$BRIDGE_SCRIPT"
 
 RVIZ_SCRIPT="$RUNTIME_DIR/s2_rviz_pane.sh"
-if [[ "$RVIZ_MODE" == "desktop" ]]; then
-  cat > "$RVIZ_SCRIPT" <<EOF
+if [[ "$RVIZ_ENABLED" == "true" ]]; then
+  cat > "$RVIZ_SCRIPT" <<EOF_RVIZ
 #!/usr/bin/env bash
 set -Eeuo pipefail
-printf '\\033]0;S2-T2 Scenario2 RViz2\\007'
+printf '\\033]0;S2-T2 RViz2 Map View\\007'
 source "$COMMON_ENV"
 
 MAP_FILE="$WORKSPACE/$SCENARIO2_MAP_REL"
 
 echo "============================================================"
-echo "[T2] Scenario2 Desktop RViz2 (default)"
+echo "[T2] Scenario2 Desktop RViz2 + Visualization Backend (--rviz)"
 echo "============================================================"
-echo "RViz2는 scenario2_map.map이 생긴 뒤 실행합니다."
-echo "대기 파일:"
-echo "  \$MAP_FILE"
+echo "RViz2는 scenario2_map.map이 준비된 뒤 실행합니다."
+echo "map : \$MAP_FILE"
+echo "log : $LOG_DIR/rviz_scenario2.log"
 echo
-echo "[LOG] $LOG_DIR/rviz_scenario2.log"
-echo
-
-for i in \$(seq 1 "$MAP_WAIT_SEC"); do
-  if [[ -f "\$MAP_FILE" ]]; then
-    echo "[OK] scenario2 map found:"
-    ls -lh "\$MAP_FILE"
-    break
-  fi
-  if [[ "\$i" -eq "$MAP_WAIT_SEC" ]]; then
-    echo "[ERROR] scenario2 map wait timeout: \$MAP_FILE"
-    echo "        manager pane에서 build_scenario2_map.py 로그를 확인하세요."
-    exec bash
-  fi
-  echo "[WAIT] scenario2_map.map 대기 중... \$i/$MAP_WAIT_SEC"
-  sleep 1
-done
-
-echo
-echo "Command:"
-echo "  ros2 launch rviz_visualization tank_scenario2_map_view.launch.py use_rviz:=true"
-echo
-
-# 시나리오2 최종맵·지형·탱크/목표/장애물 marker를 발행하고 실제 RViz2 창을 연다.
-ros2 launch rviz_visualization tank_scenario2_map_view.launch.py use_rviz:=true \
-  2>&1 | tee "$LOG_DIR/rviz_scenario2.log"
-
-echo
-echo "[EXIT] scenario2 데스크톱 RViz2 종료됨. 창을 닫거나 Enter를 누르세요."
-exec bash
-EOF
-elif [[ "$RVIZ_MODE" == "web" ]]; then
-  cat > "$RVIZ_SCRIPT" <<EOF
-#!/usr/bin/env bash
-set -Eeuo pipefail
-printf '\\033]0;S2-T2 Scenario2 Web RViz\\007'
-source "$COMMON_ENV"
-
-MAP_FILE="$WORKSPACE/$SCENARIO2_MAP_REL"
-
-echo "============================================================"
-echo "[T2] Scenario2 Web RViz (--web-rviz)"
-echo "============================================================"
-echo "웹 RViz는 scenario2_map.map이 생긴 뒤 실행합니다."
-echo "대기 파일:"
-echo "  \$MAP_FILE"
-echo
-echo "[LOG] $LOG_DIR/rviz_scenario2.log"
-echo
-
-for i in \$(seq 1 "$MAP_WAIT_SEC"); do
-  if [[ -f "\$MAP_FILE" ]]; then
-    echo "[OK] scenario2 map found:"
-    ls -lh "\$MAP_FILE"
-    break
-  fi
-  if [[ "\$i" -eq "$MAP_WAIT_SEC" ]]; then
-    echo "[ERROR] scenario2 map wait timeout: \$MAP_FILE"
-    echo "        manager pane에서 build_scenario2_map.py 로그를 확인하세요."
-    exec bash
-  fi
-  echo "[WAIT] scenario2_map.map 대기 중... \$i/$MAP_WAIT_SEC"
-  sleep 1
-done
-
-echo
-echo "Command:"
-echo "  ros2 launch rviz_web rviz_web_scenario2_map_view.launch.py"
-echo
-
-ros2 launch rviz_web rviz_web_scenario2_map_view.launch.py 2>&1 | tee "$LOG_DIR/rviz_scenario2.log"
-
-echo
-echo "[EXIT] scenario2 웹 RViz 종료됨. 창을 닫거나 Enter를 누르세요."
-exec bash
-EOF
-else
-  cat > "$RVIZ_SCRIPT" <<EOF
-#!/usr/bin/env bash
-set -Eeuo pipefail
-printf '\\033]0;S2-T2 Scenario2 Marker Publishers\\007'
-source "$COMMON_ENV"
-
-MAP_FILE="$WORKSPACE/$SCENARIO2_MAP_REL"
-
-echo "============================================================"
-echo "[T2] RViz2 창 생략 (--no-rviz) — scenario2 marker publisher만 실행"
-echo "============================================================"
-echo "대기 파일: \$MAP_FILE"
-echo
-
 for i in \$(seq 1 "$MAP_WAIT_SEC"); do
   if [[ -f "\$MAP_FILE" ]]; then
     echo "[OK] scenario2 map found:"; ls -lh "\$MAP_FILE"; break
   fi
   if [[ "\$i" -eq "$MAP_WAIT_SEC" ]]; then
-    echo "[ERROR] scenario2 map wait timeout: \$MAP_FILE"; exec bash
+    echo "[ERROR] scenario2 map wait timeout: \$MAP_FILE"
+    echo "        manager pane의 build_scenario2_map.py 로그를 확인하세요."
+    exec bash
   fi
-  echo "[WAIT] scenario2_map.map 대기 중... \$i/$MAP_WAIT_SEC"; sleep 1
+  echo "[WAIT] scenario2_map.map 대기 중... \$i/$MAP_WAIT_SEC"
+  sleep 1
 done
 
+sleep 0.7
+ros2 launch rviz_visualization tank_scenario2_map_view.launch.py 2>&1 | tee "$LOG_DIR/rviz_scenario2.log"
 echo
-echo "Command:"
-echo "  ros2 launch rviz_visualization tank_scenario2_map_view.launch.py use_rviz:=false"
-echo
-
-ros2 launch rviz_visualization tank_scenario2_map_view.launch.py use_rviz:=false \
-  2>&1 | tee "$LOG_DIR/rviz_scenario2.log"
-
-echo
-echo "[EXIT] scenario2 marker publisher 종료됨. 창을 닫거나 Enter를 누르세요."
+echo "[EXIT] scenario2 RViz2 종료."
 exec bash
-EOF
+EOF_RVIZ
+else
+  cat > "$RVIZ_SCRIPT" <<EOF_RVIZ
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '\\033]0;S2-T2 RViz Disabled\\007'
+source "$COMMON_ENV"
+
+echo "============================================================"
+echo "[T2] Scenario2 Visualization Backend Only"
+echo "============================================================"
+echo "이 PC에서는 RViz2 GUI를 실행하지 않습니다."
+echo "이 PC에서 보려면 다음 실행 때 --rviz를 붙이세요."
+echo "마커 발행 노드는 이 pane에서 단일 출처로 실행합니다."
+echo
+echo "다른 PC/터미널에서는 중복 publisher가 생기지 않도록 viewer-only launch만 실행하세요:"
+echo "  ros2 launch rviz_visualization tank_scenario2_rviz_viewer_only.launch.py"
+echo
+MAP_FILE="$WORKSPACE/$SCENARIO2_MAP_REL"
+echo "대기 파일: \$MAP_FILE"
+for i in \$(seq 1 "$MAP_WAIT_SEC"); do
+  if [[ -f "\$MAP_FILE" ]]; then
+    echo "[OK] scenario2 map found:"; ls -lh "\$MAP_FILE"; break
+  fi
+  if [[ "\$i" -eq "$MAP_WAIT_SEC" ]]; then
+    echo "[ERROR] scenario2 map wait timeout: \$MAP_FILE"
+    exec bash
+  fi
+  echo "[WAIT] scenario2_map.map 대기 중... \$i/$MAP_WAIT_SEC"
+  sleep 1
+done
+
+sleep 0.7
+ros2 launch rviz_visualization tank_scenario2_map_view.launch.py use_rviz:=false 2>&1 | tee "$LOG_DIR/rviz_scenario2_backend.log"
+echo
+echo "[EXIT] scenario2 visualization backend 종료."
+exec bash
+EOF_RVIZ
 fi
 chmod +x "$RVIZ_SCRIPT"
 
 MANAGER_SCRIPT="$RUNTIME_DIR/s2_manager_pane.sh"
-cat > "$MANAGER_SCRIPT" <<EOF
+cat > "$MANAGER_SCRIPT" <<EOF_MANAGER
 #!/usr/bin/env bash
 set -Eeuo pipefail
 printf '\\033]0;S2-T3 Auto Pipeline\\007'
@@ -335,68 +300,67 @@ source "$COMMON_ENV"
 
 MAP_FILE="$WORKSPACE/$SCENARIO2_MAP_REL"
 TERRAIN_FILE="$WORKSPACE/$SCENARIO2_TERRAIN_REL"
+TERRAIN_JSON_FILE="$WORKSPACE/$SCENARIO2_TERRAIN_JSON_REL"
+MISSION_PLAN_FILE="$WORKSPACE/$MISSION_PLAN_REL"
 
 echo "============================================================"
 echo "[T3] Scenario 2 Auto Pipeline"
 echo "============================================================"
-echo "순서:"
-echo "  1) bridge health 확인"
-echo "  2) scenario2_map.map 없으면 자동 생성"
-echo "  3) 3초 대기"
-echo "  4) simulator reset/restart 요청"
-echo "  5) 3초 대기"
-echo "  6) python3 scripts/run_scenario2_scenario.py"
-echo
-echo "[LOG DIR] $LOG_DIR"
-echo "[BUILD_MODE] $BUILD_MODE"
+echo "log dir    : $LOG_DIR"
+echo "build mode : $BUILD_MODE"
+echo "map        : \$MAP_FILE"
+echo "mission    : \$MISSION_PLAN_FILE"
 echo
 
 run_step() {
-  local name="\$1"
-  shift
-
+  local name="\$1"; shift
   echo
   echo "============================================================"
   echo "[RUN] \$name"
   echo "============================================================"
   echo "Command: \$*"
   echo
-
   "\$@" 2>&1 | tee "$LOG_DIR/\$name.log"
   local code="\${PIPESTATUS[0]}"
-
   if [[ "\$code" -ne 0 ]]; then
     echo
     echo "[ERROR] \$name failed with exit code \$code"
     echo "로그: $LOG_DIR/\$name.log"
     exec bash
   fi
-
-  echo
   echo "[OK] \$name completed"
+}
+
+run_optional_step() {
+  local name="\$1"; shift
+  echo
+  echo "============================================================"
+  echo "[RUN/OPTIONAL] \$name"
+  echo "============================================================"
+  echo "Command: \$*"
+  echo
+  set +e
+  "\$@" 2>&1 | tee "$LOG_DIR/\$name.log"
+  local code="\${PIPESTATUS[0]}"
+  set -e
+  if [[ "\$code" -ne 0 ]]; then
+    echo "[WARN] optional step failed: \$name (exit=\$code). 계속 진행합니다."
+    echo "       로그: $LOG_DIR/\$name.log"
+  else
+    echo "[OK] \$name completed"
+  fi
 }
 
 wait_for_bridge() {
   echo "[WAIT] ros_bridge health: $BRIDGE_HEALTH_URL"
-
   for _ in \$(seq 1 60); do
-    if command -v curl >/dev/null 2>&1; then
-      if curl -fsS "$BRIDGE_HEALTH_URL" >"$LOG_DIR/bridge_health.json" 2>/dev/null; then
-        echo "[OK] bridge health: \$(cat "$LOG_DIR/bridge_health.json")"
-        return 0
-      fi
-    else
-      if ros2 topic list 2>/dev/null | grep -q "/tank"; then
-        echo "[OK] ROS /tank topic detected"
-        return 0
-      fi
+    if command -v curl >/dev/null 2>&1 && curl -fsS "$BRIDGE_HEALTH_URL" >"$LOG_DIR/bridge_health.json" 2>/dev/null; then
+      echo "[OK] bridge health: \$(cat "$LOG_DIR/bridge_health.json")"
+      return 0
     fi
     sleep 0.5
   done
-
   echo "[WARN] bridge health 확인 실패. 그래도 계속 진행합니다."
-  echo "       bridge pane 로그를 확인하세요."
-  return 0
 }
 
 request_simulator_reset() {
@@ -404,129 +368,155 @@ request_simulator_reset() {
     echo "[SKIP] simulator reset skipped"
     return 0
   fi
-
-  echo "[RESET] simulator restart/reset request"
-  echo "        topic: /tank/episode/control"
-  echo "        data : reset"
-
+  echo "[RESET] simulator restart/reset request -> /tank/episode/control reset"
   for i in 1 2 3; do
-    echo "        publish reset attempt \$i/3"
-    timeout 6s ros2 topic pub --once /tank/episode/control std_msgs/msg/String "{data: 'reset'}" \\
+    timeout 6s ros2 topic pub --once /tank/episode/control std_msgs/msg/String "{data: 'reset'}" \
       2>&1 | tee "$LOG_DIR/reset_attempt_\${i}.log" || true
     sleep 0.5
   done
 }
 
-ensure_scenario2_map() {
-  echo "[CHECK] scenario2 map:"
-  echo "        \$MAP_FILE"
+cleanup_scenario2_runtime_outputs() {
+  echo "[CLEAN] 시나리오2 실행 결과만 정리. 정찰 입력 map/terrain/mission_plan은 보존합니다."
+  mkdir -p recon_reports/scenario2
+  rm -f recon_reports/scenario2/route_A.json recon_reports/scenario2/scenario2_result.json
+}
 
+map_inputs_newer_than_output() {
+  python3 - <<'PY'
+from pathlib import Path
+import sys
+out = Path("recon_reports/recon_map/scenario2_map.map")
+inputs = [
+    Path("recon_reports/recon_map/discovered_objects_route_A.map"),
+    Path("recon_reports/recon_map/discovered_objects_route_B.map"),
+    Path("recon_reports/terrain_maps/terrain_map_route_A.npz"),
+    Path("recon_reports/terrain_maps/terrain_map_route_B.npz"),
+]
+if not out.exists():
+    sys.exit(0)
+out_m = out.stat().st_mtime
+newer = [p for p in inputs if p.exists() and p.stat().st_mtime > out_m + 0.1]
+if newer:
+    print("[STALE] scenario2_map.map보다 최신 입력:", ", ".join(str(p) for p in newer))
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
+mission_plan_stale() {
+  python3 - <<'PY'
+from pathlib import Path
+import sys
+map_file = Path("recon_reports/recon_map/scenario2_map.map")
+terrain_file = Path("recon_reports/recon_map/scenario2_terrain.json")
+plan = Path("recon_reports/mission_plan.json")
+if not plan.exists():
+    sys.exit(0)
+base = plan.stat().st_mtime
+for p in (map_file, terrain_file):
+    if p.exists() and p.stat().st_mtime > base + 0.1:
+        print(f"[STALE] mission_plan.json보다 최신 입력: {p}")
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
+ensure_scenario2_map() {
+  echo "[CHECK] scenario2 map: \$MAP_FILE"
+  local need_build="false"
   if [[ "$BUILD_MODE" == "rebuild" ]]; then
-    echo "[BUILD] --rebuild-map 지정됨. 기존 map 여부와 관계없이 다시 생성합니다."
-    run_step "build_scenario2_map" python3 scripts/build_scenario2_map.py
-  elif [[ -f "\$MAP_FILE" ]]; then
-    echo "[OK] existing scenario2 map found:"
-    ls -lh "\$MAP_FILE"
-  elif [[ "$BUILD_MODE" == "auto" ]]; then
-    echo "[BUILD] scenario2_map.map 없음 → 자동 생성합니다."
-    run_step "build_scenario2_map" python3 scripts/build_scenario2_map.py
+    echo "[BUILD] --rebuild-map 지정됨."
+    need_build="true"
+  elif [[ ! -f "\$MAP_FILE" ]]; then
+    if [[ "$BUILD_MODE" == "never" ]]; then
+      echo "[ERROR] scenario2_map.map 없음, 그리고 --no-build-map 지정됨."
+      exec bash
+    fi
+    echo "[BUILD] scenario2_map.map 없음."
+    need_build="true"
+  elif map_inputs_newer_than_output; then
+    if [[ "$BUILD_MODE" == "never" ]]; then
+      echo "[ERROR] scenario2_map.map이 입력보다 오래됐지만 --no-build-map 지정됨."
+      exec bash
+    fi
+    echo "[BUILD] route A/B 정찰 입력이 scenario2_map.map보다 최신입니다. 자동 재생성합니다."
+    need_build="true"
   else
-    echo "[ERROR] scenario2_map.map 없음, 그리고 --no-build-map 지정됨."
-    echo "        먼저 시나리오1 또는 build_scenario2_map.py를 실행하세요."
-    exec bash
+    echo "[OK] existing scenario2 map is current enough."
+  fi
+
+  if [[ "\$need_build" == "true" ]]; then
+    run_step "build_scenario2_map" python3 scripts/build_scenario2_map.py
   fi
 
   if [[ ! -f "\$MAP_FILE" ]]; then
-    echo
-    echo "[ERROR] build 후에도 scenario2_map.map 없음"
-    echo "        build 로그: $LOG_DIR/build_scenario2_map.log"
-    echo "        recon_reports/recon_map 입력 파일들을 확인하세요:"
+    echo "[ERROR] build 후에도 scenario2_map.map 없음: \$MAP_FILE"
     find recon_reports -maxdepth 3 -type f 2>/dev/null | sort || true
     exec bash
   fi
+  echo "[OK] scenario2 map ready:"; ls -lh "\$MAP_FILE"
+  [[ -f "\$TERRAIN_FILE" ]] && { echo "[OK] terrain npz:"; ls -lh "\$TERRAIN_FILE"; } || true
+  [[ -f "\$TERRAIN_JSON_FILE" ]] && { echo "[OK] terrain json:"; ls -lh "\$TERRAIN_JSON_FILE"; } || true
+}
 
-  echo
-  echo "[OK] scenario2 map ready:"
-  ls -lh "\$MAP_FILE"
-  if [[ -f "\$TERRAIN_FILE" ]]; then
-    echo "[OK] scenario2 terrain ready:"
-    ls -lh "\$TERRAIN_FILE"
+ensure_mission_plan() {
+  if mission_plan_stale; then
+    echo "[BUILD] mission_plan.json 없음 또는 scenario2_map/terrain보다 오래됨. 재생성합니다."
+    run_optional_step "build_mission_plan" python3 scripts/build_mission_plan.py
   else
-    echo "[WARN] scenario2 terrain npz 없음:"
-    echo "       \$TERRAIN_FILE"
-    echo "       지형 없이 map만으로 진행할 수 있는 구조면 계속 진행합니다."
+    echo "[OK] mission_plan.json is current enough."
+  fi
+  if [[ -f "\$MISSION_PLAN_FILE" ]]; then
+    echo "[OK] mission plan:"; ls -lh "\$MISSION_PLAN_FILE"
+  else
+    echo "[WARN] mission_plan.json 없음. tank_scenario2.launch.py의 fallback engagement로 진행할 수 있습니다."
   fi
 }
 
 wait_for_bridge
+cleanup_scenario2_runtime_outputs
 ensure_scenario2_map
-
-echo
-echo "[WAIT] bridge/RViz 실행 후 3초 대기"
+ensure_mission_plan
+echo "[WAIT] bridge 준비 대기 3초"
 sleep 3
-
 request_simulator_reset
-
-echo
 echo "[WAIT] reset 후 3초 대기"
 sleep 3
-
 run_step "run_scenario2_scenario" python3 scripts/run_scenario2_scenario.py
 
 echo
 echo "============================================================"
 echo "[DONE] Scenario 2 completed"
 echo "============================================================"
-echo "결과 확인:"
-echo "  recon_reports/scenario2/"
-echo "  recon_reports/scenario2/scenario2_result.json"
-echo
-echo "로그:"
-echo "  $LOG_DIR"
-echo
-echo "이 창은 확인용으로 유지됩니다. 닫아도 됩니다."
+echo "결과: recon_reports/scenario2/scenario2_result.json"
+echo "로그: $LOG_DIR"
 exec bash
-EOF
+EOF_MANAGER
 chmod +x "$MANAGER_SCRIPT"
 
-DEBUG_SCRIPT="$RUNTIME_DIR/s2_debug_pane.sh"
-cat > "$DEBUG_SCRIPT" <<EOF
+PHONE_SCRIPT="$RUNTIME_DIR/s2_phone_sim2real_pane.sh"
+cat > "$PHONE_SCRIPT" <<EOF_PHONE
 #!/usr/bin/env bash
 set -Eeuo pipefail
-printf '\\033]0;S2-T4 Debug\\007'
+printf '\\033]0;S2-T4 phone_sim2real\\007'
 source "$COMMON_ENV"
 
 echo "============================================================"
-echo "[T4] Scenario2 Debug Monitor"
+echo "[T4] phone_sim2real"
 echo "============================================================"
-echo "2초마다 핵심 node/topic/file을 표시합니다."
-echo "종료: Ctrl+C"
+echo "Command: ros2 launch phone_sim2real phone_sim2real.launch.py phone_port:=$PHONE_PORT"
+echo "Log    : $LOG_DIR/phone_sim2real.log"
 echo
-echo "[LOG DIR] $LOG_DIR"
+ros2 launch phone_sim2real phone_sim2real.launch.py phone_port:=$PHONE_PORT 2>&1 | tee "$LOG_DIR/phone_sim2real.log"
 echo
-
-sleep 4
-
-watch -n 2 "
-echo '[nodes]';
-ros2 node list 2>/dev/null | grep -E 'ros_bridge|static_map|rviz_visualizer|terrain|lidar|overlay|dbscan|astar|local_path|controller|potential|turret|decision|scenario' || true;
-echo;
-echo '[key topics]';
-ros2 topic list 2>/dev/null | grep -E '/tank/(api/info/raw|player/pose|enemy/pose|global_path|path/lookahead_pose|control/command|control/status|mission/goal_pose|turret/status|turret/override|engage/result|decision/status|map/discovered/objects|episode/control)' || true;
-echo;
-echo '[scenario2 files]';
-ls -lh $SCENARIO2_MAP_REL $SCENARIO2_TERRAIN_REL recon_reports/scenario2/scenario2_result.json 2>/dev/null || true;
-echo;
-echo '[recon map inputs]';
-find recon_reports/recon_map recon_reports/terrain_maps -maxdepth 1 -type f 2>/dev/null | sort | sed 's#^#  #';
-"
-
+echo "[EXIT] phone_sim2real 종료."
 exec bash
-EOF
-chmod +x "$DEBUG_SCRIPT"
+EOF_PHONE
+chmod +x "$PHONE_SCRIPT"
 
 CONFIG_FILE="$RUNTIME_DIR/scenario2_auto_terminator_config"
-cat > "$CONFIG_FILE" <<EOF
+cat > "$CONFIG_FILE" <<EOF_CFG
 [global_config]
 [keybindings]
 [profiles]
@@ -570,42 +560,34 @@ cat > "$CONFIG_FILE" <<EOF
       parent = vpaned_right
       order = 0
       command = bash -lc '$RVIZ_SCRIPT'
-    [[[terminal_debug]]]
+    [[[terminal_phone]]]
       type = Terminal
       parent = vpaned_right
       order = 1
-      command = bash -lc '$DEBUG_SCRIPT'
+      command = bash -lc '$PHONE_SCRIPT'
 [plugins]
-EOF
+EOF_CFG
 
-echo "[RUN] Terminator Scenario 2 Auto v3"
-echo "      workspace : $WORKSPACE"
-echo "      log dir   : $LOG_DIR"
-echo "      rviz mode : $RVIZ_MODE"
-echo "      skip_reset: $SKIP_RESET"
-echo "      build_mode: $BUILD_MODE"
-echo "      config    : $CONFIG_FILE"
+echo "[RUN] Terminator Scenario 2 Auto"
+echo "      workspace       : $WORKSPACE"
+echo "      log dir         : $LOG_DIR"
+echo "      local web /view : $WEB_ENABLED"
+echo "      desktop RViz2   : $RVIZ_ENABLED"
+echo "      skip_reset      : $SKIP_RESET"
+echo "      build_mode      : $BUILD_MODE"
+echo "      phone_port      : $PHONE_PORT"
 echo
-echo "Terminator 4분할 창이 열립니다:"
+echo "Terminator 4분할 창:"
 echo "  좌상: ros_bridge"
-echo "  우상: scenario2 RViz2(기본), map 파일 대기 후 launch"
-echo "  좌하: 자동 순차 실행 manager"
-echo "  우하: debug monitor"
+echo "  우상: RViz2 map view(--rviz) 또는 안내 pane"
+echo "  좌하: scenario2 manager"
+echo "  우하: phone_sim2real"
 echo
-
-# 웹 3D용 rosbridge websocket은 시각화용 다른 PC에서 실행한다.
-# 이 PC에서는 자동 기동하지 않는다.
-ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET="${ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET:-true}"
-
-if [[ "$ENABLE_LOCAL_ROSBRIDGE_WEBSOCKET" == "true" ]]; then
-  if ! pgrep -f rosbridge_websocket >/dev/null 2>&1; then
-    echo "[WEB] rosbridge_websocket :9090 백그라운드 기동"
-    ros2 run rosbridge_server rosbridge_websocket >/dev/null 2>&1 &
-  fi
-else
-  echo "[WEB] local rosbridge_websocket disabled"
+if [[ "$WEB_ENABLED" != "true" ]]; then
+  echo "[WEB] 이 ros_bridge의 /view는 꺼져 있습니다. 이 PC에서 보려면 --web을 붙이세요."
+fi
+if [[ "$RVIZ_ENABLED" != "true" ]]; then
+  echo "[RVIZ] 이 PC에서 RViz2 GUI는 열지 않습니다. 다른 PC/터미널은 tank_scenario2_rviz_viewer_only.launch.py를 사용하세요."
 fi
 
-# -u/--no-dbus: 이미 떠 있는 terminator 인스턴스에 DBus로 붙어 커스텀 -g 설정/레이아웃이
-# 무시되는 문제(빈 터미널 하나만 뜸)를 막고, 항상 독립 인스턴스로 이 레이아웃을 로드한다.
 terminator -u -g "$CONFIG_FILE" -l scenario2_auto

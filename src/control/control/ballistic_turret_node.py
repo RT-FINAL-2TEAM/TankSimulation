@@ -56,6 +56,17 @@ def normalize_180(angle_deg: float) -> float:
     return (float(angle_deg) + 180.0) % 360.0 - 180.0
 
 
+def abs_angle_180(angle_deg: float) -> float:
+    """Absolute value for simulator Euler angles that may arrive as 0..360.
+
+    Unity/simulator roll is sometimes reported as 357.8° for a small -2.2°
+    left roll.  A flat-fire guard must evaluate the signed shortest angle, not
+    the raw 0..360 representation; otherwise a practically level hull is
+    rejected as a 357° tilt and Scenario-2 stalls forever.
+    """
+    return abs(normalize_180(float(angle_deg)))
+
+
 def as_finite_float(value: Any) -> Optional[float]:
     try:
         out = float(value)
@@ -183,7 +194,7 @@ class BallisticTurretNode(Node):
         # farther than that for the controller to make physical progress.
         self.declare_parameter("reposition_goal_offset_m", 16.0)
         self.declare_parameter("reposition_min_travel_m", 3.0)
-        self.declare_parameter("reposition_arrival_radius_m", 10.5)
+        self.declare_parameter("reposition_arrival_radius_m", 2.5)
         self.declare_parameter("reposition_timeout_sec", 35.0)
         self.declare_parameter("reposition_max_attempts", 2)
         self.declare_parameter("reposition_goal_topic", TOPIC_REPOSITION_GOAL)
@@ -194,6 +205,23 @@ class BallisticTurretNode(Node):
         self.declare_parameter("max_fire_body_pitch_deg", 3.0)
         self.declare_parameter("max_fire_body_roll_deg", 3.0)
         self.declare_parameter("flat_fire_pose_require_fresh_attitude", False)
+        # Before firing, the hull should face the target direction.  The
+        # simulator/ballistic calibration is much more reliable when the gun is
+        # used in the forward sector instead of shooting backward over the deck.
+        # If the vehicle reaches a firing checkpoint backwards or side-on, the
+        # node briefly drives to a point behind the checkpoint and re-enters the
+        # same checkpoint from the target-opposite side, forcing the final
+        # approach heading to point toward the target.
+        self.declare_parameter("align_hull_before_fire", True)
+        self.declare_parameter("max_fire_body_yaw_error_deg", 35.0)
+        self.declare_parameter("hull_alignment_backoff_m", 8.0)
+        self.declare_parameter("hull_alignment_arrival_radius_m", 1.5)
+        self.declare_parameter("hull_alignment_timeout_sec", 35.0)
+        self.declare_parameter("hull_alignment_max_attempts", 1)
+        # Last-resort mission progress guard.  It should not be used in a
+        # normal run, but prevents Scenario-2 from stalling forever at stage 1
+        # if a future map creates an impossible firing pose.
+        self.declare_parameter("aim_error_skip_after_sec", 12.0)
 
         self.target_pose_ttl_sec = max(0.05, float(self.get_parameter("target_pose_ttl_sec").value))
         self.default_checkpoint_settle_sec = max(
@@ -379,6 +407,27 @@ class BallisticTurretNode(Node):
         self.flat_fire_pose_require_fresh_attitude = bool(
             self.get_parameter("flat_fire_pose_require_fresh_attitude").value
         )
+        self.align_hull_before_fire = bool(
+            self.get_parameter("align_hull_before_fire").value
+        )
+        self.max_fire_body_yaw_error_deg = max(0.0, float(
+            self.get_parameter("max_fire_body_yaw_error_deg").value
+        ))
+        self.hull_alignment_backoff_m = max(1.0, float(
+            self.get_parameter("hull_alignment_backoff_m").value
+        ))
+        self.hull_alignment_arrival_radius_m = max(0.5, float(
+            self.get_parameter("hull_alignment_arrival_radius_m").value
+        ))
+        self.hull_alignment_timeout_sec = max(3.0, float(
+            self.get_parameter("hull_alignment_timeout_sec").value
+        ))
+        self.hull_alignment_max_attempts = max(0, int(
+            self.get_parameter("hull_alignment_max_attempts").value
+        ))
+        self.aim_error_skip_after_sec = max(0.0, float(
+            self.get_parameter("aim_error_skip_after_sec").value
+        ))
 
         # Latest simulator state.
         self.player_pose: Optional[Tuple[float, float, float]] = None
@@ -430,6 +479,12 @@ class BallisticTurretNode(Node):
         self.reposition_started_wall: Optional[float] = None
         self.reposition_reason: Optional[str] = None
         self.last_reposition_solution: Optional[Dict[str, Any]] = None
+        self.hull_alignment_attempts = 0
+        self.hull_alignment_goal: Optional[Tuple[float, float]] = None
+        self.hull_alignment_started_wall: Optional[float] = None
+        self.hull_alignment_step: Optional[str] = None
+        self.hull_alignment_reason: Optional[str] = None
+        self.aim_error_started_wall: Optional[float] = None
         self.stage_results: List[Dict[str, Any]] = []
         self.return_goal_sent = False
         self.return_started_wall: Optional[float] = None
@@ -474,6 +529,8 @@ class BallisticTurretNode(Node):
             f"reposition_on_pitch_limit={self.reposition_on_unreachable_pitch}, "
             f"flat_fire_pose={self.require_flat_fire_pose} "
             f"(|pitch|<={self.max_fire_body_pitch_deg:.1f}, |roll|<={self.max_fire_body_roll_deg:.1f}), "
+            f"hull_align={self.align_hull_before_fire} "
+            f"(|yaw_error|<={self.max_fire_body_yaw_error_deg:.1f}), "
             f"center_after_fire={self.center_turret_after_engagement}"
         )
 
@@ -619,17 +676,23 @@ class BallisticTurretNode(Node):
         body = payload.get("body") if isinstance(payload, dict) else None
         if isinstance(body, dict):
             raw_body_yaw = as_finite_float(body.get("x"))
-            raw_body_pitch = as_finite_float(body.get("y"))
-            raw_body_roll = as_finite_float(body.get("z"))
+            # Simulator convention used by the dashboard/RViz:
+            #   body.x = yaw, body.z = pitch, body.y = roll.
+            # Earlier versions accidentally treated body.y as pitch and body.z
+            # as roll.  That made Scenario-2 compute the wrong hull attitude at
+            # the first firing position and could allow a backward/tilted shot
+            # or reject a valid one.
+            raw_body_roll = as_finite_float(body.get("y"))
+            raw_body_pitch = as_finite_float(body.get("z"))
             if raw_body_yaw is not None:
                 self.body_yaw_deg = normalize_180(raw_body_yaw)
             if raw_body_pitch is not None:
-                self.body_pitch_deg = self.body_pitch_sign * raw_body_pitch
+                self.body_pitch_deg = normalize_180(self.body_pitch_sign * raw_body_pitch)
             if raw_body_roll is not None:
-                self.body_roll_deg = self.body_roll_sign * raw_body_roll
+                self.body_roll_deg = normalize_180(self.body_roll_sign * raw_body_roll)
             if any(value is not None for value in (raw_body_yaw, raw_body_pitch, raw_body_roll)):
                 self.body_attitude_wall = now
-                self.body_attitude_source = "player_state.body"
+                self.body_attitude_source = "player_state.body(x=yaw,z=pitch,y=roll)"
 
         turret = payload.get("turret") if isinstance(payload, dict) else None
         if not isinstance(turret, dict):
@@ -882,6 +945,12 @@ class BallisticTurretNode(Node):
         self.reposition_started_wall = None
         self.reposition_reason = None
         self.last_reposition_solution = None
+        self.hull_alignment_attempts = 0
+        self.hull_alignment_goal = None
+        self.hull_alignment_started_wall = None
+        self.hull_alignment_step = None
+        self.hull_alignment_reason = None
+        self.aim_error_started_wall = None
 
     def _advance_or_return(self, reason: str) -> None:
         completed = {
@@ -1034,8 +1103,8 @@ class BallisticTurretNode(Node):
         return {
             "enabled": self.use_body_attitude_compensation,
             "yaw_deg": self.body_yaw_deg,
-            "pitch_deg": self.body_pitch_deg,
-            "roll_deg": self.body_roll_deg,
+            "pitch_deg": normalize_180(float(self.body_pitch_deg)),
+            "roll_deg": normalize_180(float(self.body_roll_deg)),
             "age_sec": round(max(0.0, age), 3),
             "fresh": age <= self.body_attitude_ttl_sec,
             "source": self.body_attitude_source,
@@ -1124,8 +1193,8 @@ class BallisticTurretNode(Node):
             now = time.monotonic()
         age = now - self.body_attitude_wall
         fresh = age <= self.body_attitude_ttl_sec
-        pitch_abs = abs(float(self.body_pitch_deg))
-        roll_abs = abs(float(self.body_roll_deg))
+        pitch_abs = abs_angle_180(float(self.body_pitch_deg))
+        roll_abs = abs_angle_180(float(self.body_roll_deg))
         enabled = bool(self.require_flat_fire_pose)
         known = fresh or not self.flat_fire_pose_require_fresh_attitude
         ok = (not enabled) or (known and pitch_abs <= self.max_fire_body_pitch_deg and roll_abs <= self.max_fire_body_roll_deg)
@@ -1141,8 +1210,8 @@ class BallisticTurretNode(Node):
             "enabled": enabled,
             "ok": bool(ok),
             "reason": reason,
-            "pitch_deg": self.body_pitch_deg,
-            "roll_deg": self.body_roll_deg,
+            "pitch_deg": normalize_180(float(self.body_pitch_deg)),
+            "roll_deg": normalize_180(float(self.body_roll_deg)),
             "abs_pitch_deg": round(pitch_abs, 3),
             "abs_roll_deg": round(roll_abs, 3),
             "max_pitch_deg": self.max_fire_body_pitch_deg,
@@ -1150,6 +1219,108 @@ class BallisticTurretNode(Node):
             "attitude_age_sec": round(max(0.0, age), 3),
             "attitude_fresh": bool(fresh),
         }
+
+    def _stage_target_bearing_deg(self) -> Optional[float]:
+        if self.player_pose is None:
+            return None
+        tx, ty, _ = self._selected_target()
+        dx = tx - self.player_pose[0]
+        dy = ty - self.player_pose[1]
+        if abs(dx) < 1e-6 and abs(dy) < 1e-6:
+            return None
+        return normalize_180(math.degrees(math.atan2(dx, dy)))
+
+    def _fire_hull_alignment_status(self, now: Optional[float] = None) -> Dict[str, Any]:
+        if now is None:
+            now = time.monotonic()
+        target_bearing = self._stage_target_bearing_deg()
+        yaw_error = None if target_bearing is None else normalize_180(target_bearing - self.body_yaw_deg)
+        enabled = bool(self.align_hull_before_fire)
+        ok = (not enabled) or yaw_error is None or abs(yaw_error) <= self.max_fire_body_yaw_error_deg
+        return {
+            "enabled": enabled,
+            "ok": bool(ok),
+            "reason": "disabled" if not enabled else ("aligned" if ok else "hull_not_facing_target"),
+            "body_yaw_deg": normalize_180(float(self.body_yaw_deg)),
+            "target_bearing_deg": target_bearing,
+            "yaw_error_deg": yaw_error,
+            "abs_yaw_error_deg": None if yaw_error is None else round(abs(yaw_error), 3),
+            "max_yaw_error_deg": self.max_fire_body_yaw_error_deg,
+            "attempt": self.hull_alignment_attempts,
+            "max_attempts": self.hull_alignment_max_attempts,
+            "step": self.hull_alignment_step,
+            "goal": (
+                {"x": self.hull_alignment_goal[0], "y": self.hull_alignment_goal[1]}
+                if self.hull_alignment_goal is not None else None
+            ),
+            "elapsed_sec": (
+                round(max(0.0, now - self.hull_alignment_started_wall), 3)
+                if self.hull_alignment_started_wall is not None else 0.0
+            ),
+        }
+
+    def _start_hull_alignment_for_fire(self, now: float) -> bool:
+        """Force the final approach into the firing checkpoint to face target.
+
+        The ballistic dataset and simulator turret are reliable when the hull is
+        forward-facing toward the target.  If the controller reaches a checkpoint
+        backwards/sideways, drive to a short staging point behind the checkpoint
+        and then back to the checkpoint.  The second leg aligns the hull along
+        the target bearing without adding a new low-level movement command.
+        """
+        status = self._fire_hull_alignment_status(now)
+        if status.get("ok", True):
+            return False
+        if self.hull_alignment_attempts >= self.hull_alignment_max_attempts:
+            return False
+        checkpoint = self.stage["checkpoint"]
+        tx, ty, _ = self._selected_target()
+        vx = tx - checkpoint[0]
+        vy = ty - checkpoint[1]
+        norm = math.hypot(vx, vy)
+        if norm <= 1e-6:
+            return False
+        ux, uy = vx / norm, vy / norm
+        staging = (
+            checkpoint[0] - ux * self.hull_alignment_backoff_m,
+            checkpoint[1] - uy * self.hull_alignment_backoff_m,
+        )
+        self.hull_alignment_attempts += 1
+        self.hull_alignment_goal = staging
+        self.hull_alignment_started_wall = now
+        self.hull_alignment_step = "stage_out"
+        self.hull_alignment_reason = (
+            f"hull_not_facing_target:yaw_error={status.get('yaw_error_deg'):.2f},"
+            f"limit={self.max_fire_body_yaw_error_deg:.2f}"
+            if status.get("yaw_error_deg") is not None else "hull_not_facing_target"
+        )
+        self.phase = "align_hull_for_fire"
+        self._reset_aim_dwell()
+        self._reset_hybrid_yaw_control()
+        self.reposition_goal_pub.publish(self._make_goal_pose(staging))
+        self.get_logger().warn(
+            f"Hull is not aligned for stage={self.stage_index + 1}/{len(self.engagements)}; "
+            f"alignment {self.hull_alignment_attempts}/{self.hull_alignment_max_attempts}: "
+            f"stage_out=({staging[0]:.1f},{staging[1]:.1f}) -> "
+            f"checkpoint=({checkpoint[0]:.1f},{checkpoint[1]:.1f})"
+        )
+        return True
+
+    def _hull_alignment_status(self, now: float) -> Dict[str, Any]:
+        current = (self.player_pose[0], self.player_pose[1]) if self.player_pose else None
+        goal = self.hull_alignment_goal
+        distance_to_goal = (
+            math.hypot(current[0] - goal[0], current[1] - goal[1])
+            if current is not None and goal is not None else None
+        )
+        out = self._fire_hull_alignment_status(now)
+        out.update({
+            "reason": self.hull_alignment_reason,
+            "distance_to_goal_m": round(distance_to_goal, 3) if distance_to_goal is not None else None,
+            "arrival_radius_m": self.hull_alignment_arrival_radius_m,
+            "timeout_sec": self.hull_alignment_timeout_sec,
+        })
+        return out
 
     def _start_reposition_for_flat_fire_pose(self, now: float) -> bool:
         """Reposition before aiming if the current fire stop is on a slope."""
@@ -1706,6 +1877,7 @@ class BallisticTurretNode(Node):
             "target_locked": self.engagement_target is not None,
             "body_attitude": self._body_attitude_debug(),
             "flat_fire_pose": self._fire_pose_tilt_status(),
+            "hull_alignment": self._fire_hull_alignment_status(),
             "pitch_feedback_frame": (
                 "world" if self.turret_pitch_feedback_is_world else "hull_relative"
             ),
@@ -1793,6 +1965,83 @@ class BallisticTurretNode(Node):
             self._publish_override(
                 active=terminal_return_stop,
                 hold_motion=terminal_return_stop,
+                turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                fire=False, status=status,
+            )
+            return
+
+        # Hull alignment publishes two temporary direct planner goals:
+        #   1) move behind the checkpoint, 2) re-enter the checkpoint toward the target.
+        if self.phase == "align_hull_for_fire":
+            hstatus = self._hull_alignment_status(now)
+            distance_to_goal = hstatus.get("distance_to_goal_m")
+            arrived = (
+                distance_to_goal is not None
+                and float(distance_to_goal) <= self.hull_alignment_arrival_radius_m
+            )
+            timed_out = (
+                self.hull_alignment_started_wall is not None
+                and now - self.hull_alignment_started_wall >= self.hull_alignment_timeout_sec
+            )
+            checkpoint = self.stage["checkpoint"]
+            if arrived and self.hull_alignment_step == "stage_out":
+                self.hull_alignment_goal = checkpoint
+                self.hull_alignment_started_wall = now
+                self.hull_alignment_step = "stage_in"
+                self.reposition_goal_pub.publish(self._make_goal_pose(checkpoint))
+                status = self._stage_status_base(active=False)
+                status.update({
+                    "phase": "align_hull_for_fire",
+                    "reason": "stage_out_arrived_reenter_checkpoint",
+                    "hull_alignment": self._hull_alignment_status(now),
+                })
+                self._publish_override(
+                    active=False, hold_motion=False,
+                    turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                    fire=False, status=status,
+                )
+                return
+            if arrived and self.hull_alignment_step == "stage_in":
+                self.phase = "settling"
+                self.checkpoint_enter_wall = now
+                status = self._stage_status_base(active=True)
+                status.update({
+                    "phase": "settling_after_hull_alignment",
+                    "reason": "checkpoint_reentered_toward_target",
+                    "hull_alignment": self._fire_hull_alignment_status(now),
+                })
+                self._publish_override(
+                    active=True, hold_motion=True,
+                    turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                    fire=False, status=status,
+                )
+                return
+            if timed_out:
+                self.get_logger().warn(
+                    f"Hull alignment timeout at stage={self.stage_index + 1}; rechecking firing pose"
+                )
+                self.phase = "settling"
+                self.checkpoint_enter_wall = now
+                status = self._stage_status_base(active=True)
+                status.update({
+                    "phase": "settling_after_hull_alignment_timeout",
+                    "reason": "hull_alignment_timeout_recheck",
+                    "hull_alignment": hstatus,
+                })
+                self._publish_override(
+                    active=True, hold_motion=True,
+                    turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                    fire=False, status=status,
+                )
+                return
+            status = self._stage_status_base(active=False)
+            status.update({
+                "phase": "align_hull_for_fire",
+                "reason": self.hull_alignment_reason,
+                "hull_alignment": hstatus,
+            })
+            self._publish_override(
+                active=False, hold_motion=False,
                 turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
                 fire=False, status=status,
             )
@@ -1892,6 +2141,20 @@ class BallisticTurretNode(Node):
                     fire=False, status=status,
                 )
                 return
+            if self._start_hull_alignment_for_fire(now):
+                status = self._stage_status_base(active=False)
+                status.update({
+                    "phase": "align_hull_for_fire",
+                    "reason": self.hull_alignment_reason,
+                    "aim_axis": "hull_alignment_guard",
+                    "hull_alignment": self._hull_alignment_status(now),
+                })
+                self._publish_override(
+                    active=False, hold_motion=False,
+                    turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                    fire=False, status=status,
+                )
+                return
             if self._start_reposition_for_flat_fire_pose(now):
                 status = self._stage_status_base(active=False)
                 status.update({
@@ -1924,6 +2187,7 @@ class BallisticTurretNode(Node):
                 )
                 return
             self.phase = "aim"
+            self.aim_error_started_wall = None
             self._reset_hybrid_yaw_control()
             self._lock_engagement_target()
 
@@ -2156,7 +2420,58 @@ class BallisticTurretNode(Node):
             )
             return
 
+        if self.phase == "aim_error":
+            if self.aim_error_started_wall is None:
+                self.aim_error_started_wall = now
+            elapsed_error = now - self.aim_error_started_wall
+            if self.aim_error_skip_after_sec > 0.0 and elapsed_error >= self.aim_error_skip_after_sec:
+                self.last_result = {
+                    "engagement_index": self.stage_index + 1,
+                    "engagement_count": len(self.engagements),
+                    "target_id": self.stage["id"],
+                    "success": False,
+                    "source": "ballistic_turret_node",
+                    "reason": "aim_error_timeout_skip",
+                    "elapsed_sec": round(elapsed_error, 3),
+                    "shot_count": self.shot_count,
+                    "total_shot_count": self.total_shot_count,
+                }
+                self.engage_result_pub.publish(String(data=json.dumps(self.last_result, ensure_ascii=False)))
+                self.get_logger().warn(
+                    f"Aim-error timeout at stage={self.stage_index + 1}/{len(self.engagements)} "
+                    f"id={self.stage['id']} after {elapsed_error:.1f}s; advancing mission fail-safe"
+                )
+                self._begin_post_fire_recovery("aim_error_timeout_skip")
+                status = self._stage_status_base(active=True)
+                status.update({
+                    "phase": self.phase,
+                    "reason": "aim_error_timeout_skip",
+                    "last_result": self.last_result,
+                })
+                self._publish_override(
+                    active=True, hold_motion=True,
+                    turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                    fire=False, status=status,
+                )
+                return
+        else:
+            self.aim_error_started_wall = None
+
         # Closed-loop aiming stage.
+        if self._start_hull_alignment_for_fire(now):
+            status = self._stage_status_base(active=False)
+            status.update({
+                "phase": "align_hull_for_fire",
+                "reason": self.hull_alignment_reason,
+                "aim_axis": "hull_alignment_guard",
+                "hull_alignment": self._hull_alignment_status(now),
+            })
+            self._publish_override(
+                active=False, hold_motion=False,
+                turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                fire=False, status=status,
+            )
+            return
         flat_status = self._fire_pose_tilt_status(now)
         if self.require_flat_fire_pose and not flat_status.get("ok", True):
             if self._start_reposition_for_flat_fire_pose(now):
