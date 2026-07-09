@@ -1431,6 +1431,62 @@ class TeamDynamicAStarPlannerNode(Node):
             )
         return remaining
 
+    def _clip_route_waypoints_to_active_goal(
+        self,
+        start_pos: Tuple[float, float],
+        waypoints: Sequence[Tuple[float, float]],
+        goal_pos: Tuple[float, float],
+    ) -> List[Tuple[float, float]]:
+        """Keep only route checkpoints needed to reach the current active goal.
+
+        Scenario-2 uses /tank/mission/goal_pose as a stage gate:
+          stage 1 goal = first firing checkpoint,
+          stage 2 goal = second firing checkpoint.
+
+        The route yaml can still contain the full safe corridor
+        [firebase1 -> firebase2], but A* must not insert checkpoints that are
+        beyond the current mission goal.  The previous behavior planned through
+        every remaining configured waypoint and then appended the active goal,
+        so an initial goal at (49.4,164.5) still produced a path through
+        (48,224) and (50,260).  That made the vehicle drive to shot 2 before
+        ballistic_turret_node could fire shot 1.
+        """
+        pts = [tuple(map(float, wp)) for wp in waypoints]
+        if not pts:
+            return []
+
+        goal = (float(goal_pos[0]), float(goal_pos[1]))
+        start = (float(start_pos[0]), float(start_pos[1]))
+        hit_radius = max(1.0, float(getattr(self, "route_checkpoint_reached_radius", 4.0)))
+        margin = max(1.0, float(getattr(self, "route_checkpoint_passed_z_margin", 4.0)))
+
+        clipped: List[Tuple[float, float]] = []
+        # Dominant direction for this leg. In the tank map y/z is normally the
+        # northbound mission axis, but keep a fallback for lateral/direct legs.
+        dx = goal[0] - start[0]
+        dy = goal[1] - start[1]
+        use_y_axis = abs(dy) >= abs(dx)
+        forward_sign = 1.0 if (dy if use_y_axis else dx) >= 0.0 else -1.0
+
+        for wp in pts:
+            # Stop immediately once the configured route reaches the active goal.
+            if get_distance(wp, goal) <= hit_radius:
+                clipped.append(wp)
+                break
+
+            # If the next waypoint is clearly beyond the active goal along the
+            # dominant route axis, do not include it.  This is the key guard for
+            # Scenario-2 stage 1: keep [50,140] but reject [48,224] and [50,260]
+            # while the active goal is [49.42,164.5].
+            axis_wp = wp[1] if use_y_axis else wp[0]
+            axis_goal = goal[1] if use_y_axis else goal[0]
+            beyond = (axis_wp - axis_goal) * forward_sign > margin
+            if beyond:
+                break
+            clipped.append(wp)
+
+        return clipped
+
     def _is_dynamic_replan_reason(self, reason: str) -> bool:
         r = str(reason or "")
         return "path_blocked" in r or r.startswith("emergency_") or r.startswith("lidar_")
@@ -1552,8 +1608,15 @@ class TeamDynamicAStarPlannerNode(Node):
                     route_config = self.route_config_file or None
                     waypoints = get_route_waypoints(self.route_map_name, self.route_id, route_config)
                     remaining_waypoints = self._remaining_route_waypoints(start_pos, waypoints)
-                    # 이미 지난 checkpoint는 through list에서 제외한다. goal은 마지막 목적지로만 유지한다.
-                    through = list(remaining_waypoints) + [goal_pos]
+                    # 이미 지난 checkpoint는 through list에서 제외한다.
+                    # 단, 현재 mission goal보다 뒤의 scenario2 checkpoint는 절대 끼워 넣지 않는다.
+                    # otherwise stage1 goal(49.4,164.5)인데도 [48,224]→[50,260]을 먼저 지나가려 한다.
+                    clipped_waypoints = self._clip_route_waypoints_to_active_goal(
+                        start_pos, remaining_waypoints, goal_pos
+                    )
+                    through = list(clipped_waypoints)
+                    if not through or get_distance(through[-1], goal_pos) > max(1.0, self.route_checkpoint_reached_radius):
+                        through.append(goal_pos)
                     route = team_plan_path_through_waypoints(
                         start_pos,
                         through,
@@ -1569,6 +1632,7 @@ class TeamDynamicAStarPlannerNode(Node):
                     route_mode = (
                         f"route_waypoints:{self.route_map_name}/{self.route_id}/{self.route_side}"
                         f":next_checkpoint={self.route_checkpoint_index}/{self.route_checkpoint_total}"
+                        f":active_goal_clip={len(clipped_waypoints)}/{len(remaining_waypoints)}"
                     )
                 except Exception as exc:
                     self.get_logger().warn(f"route waypoint planning failed, fallback direct A*: {exc}")

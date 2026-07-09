@@ -116,6 +116,14 @@ FIRE_RUNTIME_BODY_ROLL_MAX_DEG = float(os.getenv("TANK_FIRE_RUNTIME_BODY_ROLL_MA
 FIRE_FORCE_STATIC_FIREBASE = os.getenv("TANK_FIRE_FORCE_STATIC_FIREBASE", "true").strip().lower() in ("1", "true", "yes", "y", "on")
 FIRE_STATIC_FIREBASE_X = float(os.getenv("TANK_FIRE_STATIC_FIREBASE_X", "49.42"))
 FIRE_STATIC_FIREBASE_Y = float(os.getenv("TANK_FIRE_STATIC_FIREBASE_Y", "164.5"))
+# Stage-1 must shoot the static/object tank in the center lane, not a
+# duplicate detected_tank near the final enemy.  The launch file also enforces
+# this at runtime, but writing it into mission_plan keeps the MFD and the
+# execution sequence consistent.
+FIRE_FORCE_STATIC_TARGET = os.getenv("TANK_FIRE_FORCE_STATIC_TARGET", "true").strip().lower() in ("1", "true", "yes", "y", "on")
+FIRE_STATIC_TARGET_X = float(os.getenv("TANK_FIRE_STATIC_TARGET_X", "50.0"))
+FIRE_STATIC_TARGET_Y = float(os.getenv("TANK_FIRE_STATIC_TARGET_Y", "285.0"))
+FIRE_STATIC_TARGET_Z = float(os.getenv("TANK_FIRE_STATIC_TARGET_Z", "8.5"))
 FIRE_STATIC_FIREBASE_FALLBACKS = [
     (float(x), float(y))
     for x, y in (
@@ -1011,22 +1019,35 @@ def build_engagements_json(plan: Dict[str, Any]) -> str:
             for g in (cp.get("fallback_goals") or [])
             if isinstance(g, dict) and g.get("x") is not None and g.get("y") is not None
         ]
+        target_x = float(e["pos"]["x"])
+        target_y = float(e["pos"]["y"])
+        target_z = float(e.get("z_height", 0.0))
+        target_policy = "mission_plan_target"
         # Stage 1 is the recon/static tank.  Use the verified route-A firebase
-        # by default.  This prevents minor terrain-score changes from selecting
-        # the hillside stop around y≈208 or any target-side close fallback.
-        if FIRE_FORCE_STATIC_FIREBASE and order_index == 0 and e.get("class") != "final_enemy":
-            cp["x"] = FIRE_STATIC_FIREBASE_X
-            cp["y"] = FIRE_STATIC_FIREBASE_Y
-            cp["selection_policy"] = "forced_static_ballistic_firebase"
-            fallback_goals = [
-                {"x": float(x), "y": float(y)}
-                for x, y in FIRE_STATIC_FIREBASE_FALLBACKS
-            ]
+        # and target by default.  This prevents minor terrain-score changes or a
+        # duplicate detected_tank near the final enemy from making stage 1 aim
+        # sideways/backward from the firebase.
+        if order_index == 0 and e.get("class") != "final_enemy":
+            if FIRE_FORCE_STATIC_FIREBASE:
+                cp["x"] = FIRE_STATIC_FIREBASE_X
+                cp["y"] = FIRE_STATIC_FIREBASE_Y
+                cp["selection_policy"] = "forced_static_ballistic_firebase"
+                fallback_goals = [
+                    {"x": float(x), "y": float(y)}
+                    for x, y in FIRE_STATIC_FIREBASE_FALLBACKS
+                ]
+            if FIRE_FORCE_STATIC_TARGET:
+                e["source_pos_before_static_target_force"] = dict(e.get("pos", {}))
+                target_x = FIRE_STATIC_TARGET_X
+                target_y = FIRE_STATIC_TARGET_Y
+                target_z = FIRE_STATIC_TARGET_Z
+                target_policy = "forced_static_center_lane_target"
         engs.append({
             "id": tid,
             "checkpoint": {"x": cp["x"], "y": cp["y"], "radius_m": FIRE_CHECKPOINT_RADIUS_M},
             "checkpoint_settle_sec": 1.2,
-            "target": {"x": e["pos"]["x"], "y": e["pos"]["y"], "z": e.get("z_height", 0.0)},
+            "target": {"x": target_x, "y": target_y, "z": target_z},
+            "target_selection_policy": target_policy,
             "target_from_enemy_pose": e["class"] == "final_enemy",
             "target_height_offset_m": 0.0,
             "reposition": {
@@ -1183,6 +1204,11 @@ def main() -> int:
             item["firing_checkpoint"]["selection_policy"] = item["firing_checkpoint"].get("selection_policy", "")
             if eid == plan["plan"].get("engage_order", [None])[0] and FIRE_FORCE_STATIC_FIREBASE:
                 item["firing_checkpoint"]["selection_policy"] = "forced_static_ballistic_firebase"
+            if eid == plan["plan"].get("engage_order", [None])[0] and FIRE_FORCE_STATIC_TARGET:
+                item["source_pos_before_static_target_force"] = dict(item.get("pos", {}))
+                item["pos"] = {"x": FIRE_STATIC_TARGET_X, "y": FIRE_STATIC_TARGET_Y}
+                item["z_height"] = FIRE_STATIC_TARGET_Z
+                item["target_selection_policy"] = "forced_static_center_lane_target"
 
     # 검증
     problems = verify_plan(plan, bboxes)

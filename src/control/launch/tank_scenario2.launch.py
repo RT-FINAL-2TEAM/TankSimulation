@@ -25,15 +25,53 @@ from launch_ros.actions import Node
 
 
 def _project_root() -> str:
-    """프로젝트 루트. TANK_PROJECT_ROOT env 우선, 없으면 이 파일 위치에서 유추.
+    """Return the real ~/tankcc project root, even from an installed launch file.
 
-    src/control/launch/tank_scenario2.launch.py → parents[3] = 프로젝트 루트
-    (colcon --symlink-install이면 resolve()가 심링크를 따라 src 실경로로 돌아간다).
+    When this launch file is executed from ``install/control/share/...`` without
+    ``TANK_PROJECT_ROOT``, ``parents[3]`` points to ``~/tankcc/install/control``.
+    That made ``recon_reports/mission_plan.json`` look missing and silently
+    forced the old hard-coded Scenario-2 plan whose first checkpoint is
+    ``(50,260)``.  Search likely roots and prefer the one that actually owns
+    recon_reports/mission_plan.json.
     """
+    candidates: list[Path] = []
     env = os.environ.get("TANK_PROJECT_ROOT")
     if env:
-        return env
-    return str(Path(__file__).resolve().parents[3])
+        candidates.append(Path(env).expanduser())
+    candidates.append(Path.cwd())
+    try:
+        f = Path(__file__).resolve()
+        candidates.extend(f.parents)
+    except Exception:
+        pass
+    candidates.append(Path.home() / "tankcc")
+    candidates.append(Path("/home/tankcc/tankcc"))
+
+    seen: set[str] = set()
+    for c in candidates:
+        try:
+            c = c.resolve()
+        except Exception:
+            continue
+        key = str(c)
+        if key in seen:
+            continue
+        seen.add(key)
+        if (c / "recon_reports" / "mission_plan.json").is_file():
+            return str(c)
+
+    for c in candidates:
+        try:
+            c = c.resolve()
+        except Exception:
+            continue
+        if (c / "src" / "control").is_dir() and (c / "scripts").is_dir():
+            return str(c)
+
+    # Last resort for the bootcamp workspace.  If this is wrong, the fail-fast
+    # mission-plan check below will stop the launch instead of driving to a
+    # stale default checkpoint.
+    return "/home/tankcc/tankcc"
 
 
 def _clear_stale_scenario2_completion_files(project_root: str) -> None:
@@ -58,23 +96,22 @@ def _clear_stale_scenario2_completion_files(project_root: str) -> None:
 _DEFAULT_ENGAGEMENTS_JSON = (
     '[{'
     '"id":"enemy_mid",'
-    '"checkpoint":{"x":50.0,"y":260.0,"radius_m":10.0},'
+    '"checkpoint":{"x":49.42,"y":164.5,"radius_m":1.0},'
     '"checkpoint_settle_sec":0.8,'
     '"target":{"x":50.0,"y":285.0,"z":8.5},'
     '"target_from_enemy_pose":false,'
     '"target_height_offset_m":0.0,'
-    '"reposition":{"enabled":true,"fallback_goals":[{"x":48.0,"y":208.0}],"arrival_radius_m":10.0,"min_travel_m":0.0,"timeout_sec":20.0,"max_attempts":1}'
+    '"reposition":{"enabled":false,"fallback_goals":[],"arrival_radius_m":1.0,"min_travel_m":0.0,"timeout_sec":8.0,"max_attempts":0}'
     '},{'
     '"id":"enemy_final",'
-    '"checkpoint":{"x":50.0,"y":260.0,"radius_m":10.0},'
+    '"checkpoint":{"x":50.0,"y":260.0,"radius_m":1.5},'
     '"checkpoint_settle_sec":0.8,'
     '"target":{"x":135.46,"y":276.87,"z":0.0},'
     '"target_from_enemy_pose":true,'
     '"target_height_offset_m":0.0,'
-    '"reposition":{"enabled":false,"heading_deg":0.0,"goal_offset_m":16.0,"min_travel_m":3.0,"arrival_radius_m":10.5,"max_attempts":2}'
+    '"reposition":{"enabled":false,"fallback_goals":[],"arrival_radius_m":1.5,"min_travel_m":0.0,"timeout_sec":8.0,"max_attempts":0}'
     '}]'
 )
-
 
 def _env_bool(name: str, default: bool = False) -> bool:
     """Parse a user-facing boolean env var while preserving explicit false."""
@@ -103,18 +140,9 @@ def _standoff_point() -> tuple[float, float]:
     )
 
 
+# S2_CHECKPOINT_CLAIM_FIRE_PATCH
 def _standoff_radius() -> float:
-    return max(1.0, _env_float("TANK_S2_STANDOFF_RADIUS_M", 1.5))
-
-
-def _static_firebase_point() -> tuple[float, float]:
-    # Verified from the current recon terrain: far enough for stage-1 standoff,
-    # flat enough for the level-ground ballistic dataset, and on the route-A
-    # centerline so the hull approaches facing the target.
-    return (
-        _env_float("TANK_S2_STATIC_FIREBASE_X", _env_float("TANK_FIRE_STATIC_FIREBASE_X", 49.42)),
-        _env_float("TANK_S2_STATIC_FIREBASE_Y", _env_float("TANK_FIRE_STATIC_FIREBASE_Y", 164.5)),
-    )
+    return max(2.0, _env_float("TANK_S2_STANDOFF_RADIUS_M", 2.5))
 
 
 def _mid_target_anchor() -> tuple[float, float]:
@@ -231,8 +259,6 @@ def _normalize_scenario2_engagements(raw_engs: list[dict]) -> list[dict]:
     # can still force a fixed fallback with TANK_S2_FORCE_STANDOFF=true.
     force_standoff = _env_bool("TANK_S2_FORCE_STANDOFF", default=False)
     sx, sy = _standoff_point()
-    static_fx, static_fy = _static_firebase_point()
-    force_static_firebase = _env_bool("TANK_S2_FORCE_STATIC_FIREBASE", default=True)
 
     def _checkpoint_for(e: dict, fallback_xy: tuple[float, float]) -> dict:
         src_xy = _eng_point_xy(e, "checkpoint")
@@ -244,8 +270,8 @@ def _normalize_scenario2_engagements(raw_engs: list[dict]) -> list[dict]:
             radius = float(radius)
         except (TypeError, ValueError):
             radius = _standoff_radius()
-        fire_radius = _env_float("TANK_S2_FIRE_CHECKPOINT_RADIUS_M", _env_float("TANK_FIRE_CHECKPOINT_RADIUS_M", 1.0))
-        radius = min(max(1.0, radius), max(1.0, fire_radius))
+        fire_radius = _env_float("TANK_S2_FIRE_CHECKPOINT_RADIUS_M", _env_float("TANK_FIRE_CHECKPOINT_RADIUS_M", 2.5))
+        radius = min(max(2.0, radius), max(2.0, fire_radius))
         return {"x": float(src_xy[0]), "y": float(src_xy[1]), "radius_m": radius}
 
     def _reposition_for(e: dict, cp: dict) -> dict:
@@ -300,7 +326,7 @@ def _normalize_scenario2_engagements(raw_engs: list[dict]) -> list[dict]:
             "fallback_goals": goals,
             "arrival_radius_m": float(cp.get("radius_m", _standoff_radius())),
             "min_travel_m": 0.0,
-            "timeout_sec": _env_float("TANK_S2_REPOSITION_TIMEOUT_SEC", 55.0),
+            "timeout_sec": _env_float("TANK_S2_REPOSITION_TIMEOUT_SEC", 8.0),
             "max_attempts": len(goals),
         }
 
@@ -309,24 +335,18 @@ def _normalize_scenario2_engagements(raw_engs: list[dict]) -> list[dict]:
     if str(static.get("id", "")).startswith("detected_"):
         static["source_id"] = static.get("id")
         static["id"] = "enemy_mid"
-    static_cp = _checkpoint_for(static, (static_fx, static_fy) if force_static_firebase else (sx, sy))
-    if force_static_firebase:
-        fire_radius = _env_float("TANK_S2_FIRE_CHECKPOINT_RADIUS_M", _env_float("TANK_FIRE_CHECKPOINT_RADIUS_M", 1.0))
-        static_cp = {"x": float(static_fx), "y": float(static_fy), "radius_m": max(1.0, fire_radius)}
+    static_cp = _checkpoint_for(static, (sx, sy))
     static["checkpoint"] = static_cp
     static["target_from_enemy_pose"] = False
-    # Do not let stage 1 fall forward to the enemy nose. If the verified
-    # firebase somehow fails, ballistic_turret_node's aim-error timeout advances
-    # the mission instead of blocking the whole scenario.
-    static["_allow_stage1_close_emergency_fallback"] = _env_bool("TANK_S2_ENABLE_STATIC_EMERGENCY_FALLBACK", default=False)
+    static["_allow_stage1_close_emergency_fallback"] = _env_bool("TANK_S2_ENABLE_STATIC_EMERGENCY_FALLBACK", default=True)
     static["checkpoint_settle_sec"] = float(static.get("checkpoint_settle_sec", 0.8) or 0.8)
     static["reposition"] = _reposition_for(static, static_cp)
 
     final = dict(final)
     final["id"] = "enemy_final"
     if _env_bool("TANK_S2_FORCE_FINAL_STABLE_FIREBASE", default=True):
-        fire_radius = _env_float("TANK_S2_FIRE_CHECKPOINT_RADIUS_M", _env_float("TANK_FIRE_CHECKPOINT_RADIUS_M", 1.0))
-        final_cp = {"x": 50.0, "y": 260.0, "radius_m": max(1.0, fire_radius)}
+        fire_radius = _env_float("TANK_S2_FIRE_CHECKPOINT_RADIUS_M", _env_float("TANK_FIRE_CHECKPOINT_RADIUS_M", 2.5))
+        final_cp = {"x": 50.0, "y": 260.0, "radius_m": max(2.0, fire_radius)}
     else:
         final_cp = _checkpoint_for(final, (50.0, 260.0))
     final["checkpoint"] = final_cp
@@ -337,55 +357,95 @@ def _normalize_scenario2_engagements(raw_engs: list[dict]) -> list[dict]:
     return [static, final]
 
 
+
+def _first_engagement_checkpoint_xy(engagements_json: str) -> tuple[str, str]:
+    """Return the first firing checkpoint from normalized engagements_json.
+
+    Scenario-2 must visit engagement[0] first.  The previous launch defaulted
+    the planner goal to the final/standoff checkpoint, so A* could head to shot
+    2 before ballistic_turret_node had a chance to claim shot 1.
+    """
+    import json
+    try:
+        engs = json.loads(engagements_json)
+        cp = engs[0].get("checkpoint", {}) if isinstance(engs, list) and engs else {}
+        x = float(cp.get("x"))
+        y = float(cp.get("y", cp.get("z")))
+        return (f"{x:.3f}", f"{y:.3f}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[scenario2] first checkpoint parse failed({exc}); fallback to 50,260")
+        return ("50.0", "260.0")
+
 def _scenario2_engagements(project_root: str) -> str:
-    """사격 시퀀스(engagements_json) 결정.
+    """Return strict Scenario-2 engagements.
 
-    기본 정책을 "mission_plan.json이 있으면 자동 사용"으로 바꾼다.
-    - TANK_USE_MISSION_PLAN=true  : mission_plan 강제 사용
-    - TANK_USE_MISSION_PLAN=false : 검증 하드코딩값 강제 사용
-    - env 미지정                  : recon_reports/mission_plan.json이 있으면 자동 사용
-
-    실패(파일 없음/파싱 오류/engagements 없음)하면 항상 안전 기본값으로 폴백한다.
+    A missing/invalid mission_plan must not silently fall back to the old
+    hard-coded ``(50,260)`` first checkpoint.  That failure mode looks like the
+    vehicle intentionally skipped shot 1.  Therefore we fail fast unless the
+    operator explicitly sets ``TANK_USE_MISSION_PLAN=false``.
     """
     import json
 
     mp_file = os.environ.get(
         "TANK_MISSION_PLAN_FILE", os.path.join(project_root, "recon_reports", "mission_plan.json")
     )
-    mission_plan_exists = Path(mp_file).is_file()
-    use_mp = _env_bool("TANK_USE_MISSION_PLAN", default=mission_plan_exists)
+    explicit_use_mp = os.environ.get("TANK_USE_MISSION_PLAN")
+    use_mp = _env_bool("TANK_USE_MISSION_PLAN", default=True)
 
     if not use_mp:
-        reason = "env=false" if os.environ.get("TANK_USE_MISSION_PLAN") is not None else "mission_plan 없음"
-        print(f"[scenario2] mission_plan 미사용({reason}) → 기본 사격 시퀀스 사용")
+        print("[scenario2] TANK_USE_MISSION_PLAN=false → explicit default/debug engagement sequence")
         return _DEFAULT_ENGAGEMENTS_JSON
+
+    print(f"[scenario2] project_root={project_root}")
+    print(f"[scenario2] mission_plan_file={mp_file}")
 
     try:
         with open(mp_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-        engs = data.get("engagements")
-        if isinstance(engs, list) and engs:
-            normalized = _normalize_scenario2_engagements(engs)
-            if len(normalized) == 2:
-                print(
-                    f"[scenario2] mission_plan 사격 시퀀스 사용: {mp_file} "
-                    f"(원본 {len(engs)}개 → 실행 2개: "
-                    f"{normalized[0].get('id')} -> {normalized[1].get('id')})"
-                )
-                print(f"[scenario2] route_recommended={data.get('route_recommended', '-')} order={data.get('plan', {}).get('engage_order', '-')}")
-                return json.dumps(normalized, ensure_ascii=False)
-            print(f"[scenario2] mission_plan 정규화 실패 → 기본 사격 시퀀스 사용: {mp_file}")
-        else:
-            print(f"[scenario2] mission_plan에 engagements 없음 → 기본 사격 시퀀스 사용: {mp_file}")
-    except FileNotFoundError:
-        print(f"[scenario2] mission_plan 파일 없음 → 기본 사격 시퀀스 사용: {mp_file}")
-    except Exception as exc:  # noqa: BLE001 - 어떤 오류든 기본값 폴백
-        print(f"[scenario2] mission_plan 로드 실패({exc}) → 기본 사격 시퀀스 사용")
-    return _DEFAULT_ENGAGEMENTS_JSON
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "Scenario-2 mission_plan.json not found. "
+            f"Expected: {mp_file}. "
+            "Run Scenario-1/build_mission_plan.py first, or export "
+            "TANK_PROJECT_ROOT=/home/tankcc/tankcc and TANK_MISSION_PLAN_FILE=/home/tankcc/tankcc/recon_reports/mission_plan.json. "
+            "Refusing to use stale default checkpoint (50,260) for shot 1."
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"Scenario-2 mission_plan load failed: {mp_file}: {exc}") from exc
+
+    engs = data.get("engagements")
+    if not isinstance(engs, list) or not engs:
+        raise RuntimeError(f"Scenario-2 mission_plan has no engagements: {mp_file}")
+
+    normalized = _normalize_scenario2_engagements(engs)
+    if len(normalized) != 2:
+        raise RuntimeError(
+            f"Scenario-2 mission_plan normalization failed: {mp_file}; "
+            f"raw={len(engs)} normalized={len(normalized)}"
+        )
+
+    print(
+        f"[scenario2] mission_plan 사격 시퀀스 사용: {mp_file} "
+        f"(원본 {len(engs)}개 → 실행 2개: "
+        f"{normalized[0].get('id')} -> {normalized[1].get('id')})"
+    )
+    print(f"[scenario2] route_recommended={data.get('route_recommended', '-')} order={data.get('plan', {}).get('engage_order', '-')}")
+    for idx, e in enumerate(normalized, start=1):
+        cp = e.get("checkpoint", {}) if isinstance(e, dict) else {}
+        tgt = e.get("target", {}) if isinstance(e, dict) else {}
+        print(
+            f"[scenario2] engagement[{idx}] id={e.get('id')} "
+            f"checkpoint=({cp.get('x')},{cp.get('y')}) r={cp.get('radius_m')} "
+            f"target=({tgt.get('x')},{tgt.get('y', tgt.get('z'))},{tgt.get('z')})"
+        )
+    return json.dumps(normalized, ensure_ascii=False)
+
 def generate_launch_description():
     project_root = _project_root()
     _clear_stale_scenario2_completion_files(project_root)
     engagements_json = _scenario2_engagements(project_root)
+    first_goal_x, first_goal_y = _first_engagement_checkpoint_xy(engagements_json)
+    print(f"[scenario2] initial planner goal = first fire checkpoint ({first_goal_x}, {first_goal_y})")
 
     control_share = get_package_share_directory("control")
     autonomous_launch = os.path.join(control_share, "launch", "tank_autonomous_control.launch.py")
@@ -409,16 +469,20 @@ def generate_launch_description():
         scenario2_terrain_arg,
         # decision/risk 노드가 scripts/recon_eval(threat_geometry)을 찾도록 프로젝트 루트를 노출.
         SetEnvironmentVariable("TANK_PROJECT_ROOT", project_root),
+        SetEnvironmentVariable("TANK_USE_MISSION_PLAN", "true"),
+        SetEnvironmentVariable("TANK_MISSION_PLAN_FILE", os.environ.get(
+            "TANK_MISSION_PLAN_FILE", os.path.join(project_root, "recon_reports", "mission_plan.json")
+        )),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(autonomous_launch),
             launch_arguments={
                 "mission_type": "mission",
                 "route_id": "A",        # 시나리오2 임무 루트 = A 고정(설계)
                 "route_side": "west",
-                # 정찰 공용 route는 유지하고, 시나리오2에서는 50,260에서 멈추는 별도 route를 사용한다.
+                # 정찰 공용 route는 유지하고, 시나리오2에서는 첫 사격 checkpoint를 초기 planner goal로 사용한다.
                 "route_config_file": scenario2_route_file,
-                "default_goal_x": "50.0",
-                "default_goal_y": "260.0",
+                "default_goal_x": first_goal_x,
+                "default_goal_y": first_goal_y,
                 # 도착 후 pause/exit하지 않고 controller가 STOP을 유지해야 포탑 노드가 실제 발사한다.
                 "pause_on_goal_reached": "false",
                 "exit_on_goal_reached": "false",
@@ -432,7 +496,7 @@ def generate_launch_description():
                 "terminal_stop_on_turret_complete": "false",
                 "terminal_stop_require_goal_departure": "false",
                 # The external Scenario-2 harness declares success when it sees
-                # route_A.json(reached=true). Hold that report at (50,260)
+                # route_A.json(reached=true). Hold that report until the ballistic FSM completes
                 # until ballistic_turret_node has fired and physically returned.
                 "require_turret_completion_for_reached": "true",
                 # Simulator's original /set_destination points at the enemy.
@@ -449,7 +513,7 @@ def generate_launch_description():
             }.items(),
         ),
         # Strict Scenario-2 sequence is owned by ballistic_turret_node:
-        # checkpoint (50,260) -> full stop -> aim/fire -> internal return goal.
+        # engagement[0] checkpoint -> fire -> engagement[1] checkpoint -> fire -> return.
         # Do NOT launch decision_node here: its independent RETURN FSM can
         # overwrite the checkpoint while the ballistic node is waiting to fire.
         # The ballistic node owns the strict two-target sequence:
@@ -481,29 +545,30 @@ def generate_launch_description():
                 "pitch_feedback_sign": 1.0,
                 "max_range_m": 130.0,
                 "fire_pulse_sec": 0.35,
-                "impact_timeout_sec": 8.0,
+                "impact_timeout_sec": 3.0,
                 # Q/E를 기존보다 더 촘촘히 맞춘 뒤 사격한다.  1.0도 이하는
                 # Q/E 입력을 멈추고, 해당 범위를 0.60초 유지해야 발사한다.
                 "yaw_tolerance_deg": 1.0,
                 "pitch_tolerance_deg": 0.75,
                 "yaw_control_deadband_deg": 1.0,
                 "pitch_control_deadband_deg": 0.75,
-                "yaw_weight_max": 0.38,
+                "pitch_weight_max": 0.65,
+                "yaw_weight_max": 0.55,
                 # Delayed-feedback hybrid yaw control: coarse closed-loop
                 # tracking, then neutral/brake + bounded time pulse +
                 # fresh-feedback observation around the target.
                 "hybrid_yaw_enabled": True,
                 "yaw_overshoot_brake_sec": 0.18,
-                "yaw_pulse_weight": 0.14,
+                "yaw_pulse_weight": 0.20,
                 "yaw_pulse_rate_q_deg_s": 4.3,
                 "yaw_pulse_rate_e_deg_s": 5.1,
-                "yaw_pulse_gain": 0.55,
+                "yaw_pulse_gain": 0.75,
                 # tank_controller_node is normally 10 Hz, so use a
                 # pulse no shorter than one actual command cycle.
                 "yaw_pulse_min_sec": 0.12,
                 "yaw_pulse_max_sec": 0.30,
                 "yaw_observe_sec": 0.16,
-                "yaw_settle_rate_deg_s": 0.65,
+                "yaw_settle_rate_deg_s": 1.20,
                 "yaw_overshoot_min_prev_error_deg": 1.20,
                 "yaw_overshoot_min_current_error_deg": 0.35,
                 "aim_stable_sec": 0.22,
@@ -514,7 +579,9 @@ def generate_launch_description():
                 "lower_barrel_after_engagement": True,
                 "lower_barrel_target_deg": -5.0,
                 "lower_barrel_weight": 1.0,
-                "center_turret_tolerance_deg": 1.0,
+                "lower_barrel_timeout_sec": 2.5,
+                "center_turret_tolerance_deg": 1.5,
+                "center_turret_timeout_sec": 3.0,
                 # At a slope-induced pitch limit, request a short direct A*
                 # reposition instead of repeatedly pressing F/R at the stop.
                 "reposition_on_unreachable_pitch": True,
@@ -522,20 +589,16 @@ def generate_launch_description():
                 # If the hull is tilted at a firing stop, the turret node will
                 # request the stage fallback standoff point instead of aiming forever.
                 "require_flat_fire_pose": True,
-                "max_fire_body_pitch_deg": 3.0,
-                "max_fire_body_roll_deg": 3.0,
-                "align_hull_before_fire": True,
-                "max_fire_body_yaw_error_deg": 35.0,
-                "hull_alignment_backoff_m": 8.0,
-                "hull_alignment_arrival_radius_m": 1.5,
-                "hull_alignment_timeout_sec": 35.0,
-                "hull_alignment_max_attempts": 1,
-                "aim_error_skip_after_sec": 12.0,
+                "max_fire_body_pitch_deg": 3.5,
+                "max_fire_body_roll_deg": 3.5,
                 "reposition_goal_offset_m": 16.0,
                 "reposition_min_travel_m": 3.0,
                 "reposition_arrival_radius_m": 1.5,
-                "reposition_timeout_sec": 55.0,
+                "reposition_timeout_sec": 8.0,
                 "reposition_max_attempts": 2,
+                "physical_endstop_ignore_reachable_pitch": True,
+                "physical_endstop_limit_margin_deg": 0.75,
+                "physical_endstop_min_error_deg": 1.25,
                 # Only after engagement 2 is complete does the node issue home.
                 "return_enabled": True,
                 "return_x": 59.0,
