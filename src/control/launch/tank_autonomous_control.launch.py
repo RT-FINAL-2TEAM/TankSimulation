@@ -122,6 +122,14 @@ def generate_launch_description():
         'require_turret_completion_for_reached', default_value='false',
         description='Gate route report completion on /tank/turret/status terminal phase.'
     )
+    drive_turret_home_enabled_arg = DeclareLaunchArgument(
+        'drive_turret_home_enabled', default_value='false',
+        description='Align turret to hull heading while driving outside recon.'
+    )
+    drive_turret_home_mission_types_arg = DeclareLaunchArgument(
+        'drive_turret_home_mission_types', default_value='mission',
+        description='Comma-separated mission_type values that may use drive turret homing.'
+    )
     # RL 컨트롤러 스왑: true면 PD tank_controller_node 대신 tank_rl_inference_node를 띄운다
     # (둘 다 /tank/control/command 발행 → 반드시 하나만). 정책은 2D 선학습 산출물(.ts/.zip).
     use_rl_controller_arg = DeclareLaunchArgument(
@@ -156,6 +164,8 @@ def generate_launch_description():
         terrain_weight_arg,
         recon_report_dir_arg,
         require_turret_completion_for_reached_arg,
+        drive_turret_home_enabled_arg,
+        drive_turret_home_mission_types_arg,
         use_rl_controller_arg,
         rl_policy_path_arg,
         rl_mode_arg,
@@ -480,6 +490,12 @@ def generate_launch_description():
                 "forward_guard_max_search_points": 120,
                 "forward_guard_allow_in_danger": False,
                 "mission_type": LaunchConfiguration("mission_type"),
+                "drive_turret_home_enabled": ParameterValue(
+                    LaunchConfiguration("drive_turret_home_enabled"), value_type=bool),
+                "drive_turret_home_mission_types": LaunchConfiguration("drive_turret_home_mission_types"),
+                "drive_turret_home_tol_deg": 2.0,
+                "drive_turret_home_max_weight": 0.35,
+                "drive_turret_home_min_ws_weight": 0.05,
                 "goal_tolerance": 10.0,
                 "pause_on_goal_reached": ParameterValue(
                     LaunchConfiguration("pause_on_goal_reached"), value_type=bool),

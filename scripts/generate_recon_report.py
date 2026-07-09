@@ -10,8 +10,8 @@
 
 명세(Tank_System_Spec.pdf 6.2) 위험도 수식:
     Risk = W1·(적/초소 발견) + W2·(시야 노출시간) + W3·(우회/이탈) + W4·(지형굴곡 σP+σR) + W5·(소요시간)
-  - W1: vision_yolo.counts 위협클래스(person/tank/house; rock/car 제외) 가중합 + asset_spotted_gt 보강
-  - W2: finalmap.map GT 위협(초소/적전차) + 전차 궤적으로 사후 계산(노출시간·발각횟수)
+  - W1: discovered_objects_route_{A,B}.map의 센서퓨전 확정 house/tank distinct 객체 수
+  - W2: 센서퓨전 확정 위협 + 전차 궤적으로 사후 계산(노출길이·근접길이)
   - W3: distance_m / 직선거리(start→goal) 우회비(재계획 카운트 미로깅이라 근사)
   - W4: terrain_roughness.pitch_std + roll_std
   - W5: result.sim_time_s
@@ -45,6 +45,7 @@ DEFAULT_ROUTES = os.path.join(PROJECT_ROOT, "src", "path_planning", "config", "r
 DEFAULT_DISCOVERED_DIR = os.path.join(DEFAULT_REPORT_DIR, "recon_map")
 # 정답맵(GT) — 위험도엔 안 쓰고, "정찰이 얼마나 정확/충분히 찾았나" 검증에만.
 DEFAULT_GT_MAP = os.path.join(PROJECT_ROOT, "src", "rviz_visualization", "map", "final_v3.map")
+GT_CONFIDENCE_CAP_DEFAULT = os.environ.get("TANK_GT_CONFIDENCE_CAP", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 # 출발/목적 (routes.yaml finalmap 기준). 우회비 직선거리 계산 + 중심선 폴백에 사용.
 START_XY = (60.0, 30.0)
@@ -637,10 +638,13 @@ def risk_score(norm_route: Dict[str, dict], weights: Dict[str, float]) -> Tuple[
 
 
 def recommend(scored: Dict[str, dict], gt_validation: Optional[Dict[str, dict]] = None,
-              tie_eps: float = 0.05) -> dict:
-    """위험도(perception 기반) 최저 루트 추천. 승자는 위험도로만 정하되, GT 검증상
-    인지 신뢰도가 낮으면(위협 누락 多) 추천 신뢰도를 강등하고 재정찰을 경고한다.
-    (GT로 승자를 바꾸지 않음 — 위험도는 perception, GT는 신뢰도 캡 용도.)"""
+              tie_eps: float = 0.05,
+              use_gt_confidence_cap: bool = False) -> dict:
+    """위험도(perception 기반) 최저 루트 추천.
+
+    기본 추천과 confidence는 센서퓨전 확정 객체 기반 위험도만 사용한다.
+    GT 발견률은 검증 표시용이며, use_gt_confidence_cap=True일 때만 신뢰도 cap에 사용한다.
+    """
     valid = {rid: s for rid, s in scored.items() if s["valid"]}
     if not valid:
         return {"winner": None, "confidence": "none",
@@ -680,9 +684,8 @@ def recommend(scored: Dict[str, dict], gt_validation: Optional[Dict[str, dict]] 
             result = {"winner": winner, "confidence": "medium",
                       "reason": f"route_{winner} 위험도 최저({ranked[0][1]['risk_total']:.3f} vs {second[1]['risk_total']:.3f}, 차 {gap:.3f})."}
 
-    # 인지 신뢰도 캡: 승자의 GT 검증 신뢰도가 낮거나 발견 위협 0이면 강등 + 재정찰 경고.
-    # (perception이 위협을 놓쳐 위험도가 과소평가된 '거짓 안전'일 수 있음.)
-    if gt_validation and winner in gt_validation:
+    # 선택적으로만 사용하는 GT 신뢰도 cap. 기본 OFF: GT 대비 발견률이 추천/위험도에 섞이지 않게 한다.
+    if use_gt_confidence_cap and gt_validation and winner in gt_validation:
         gv = gt_validation[winner]
         gconf = gv.get("confidence")
         if gv.get("perceived_total", 0) == 0 or (gconf is not None and gconf < 0.5):
@@ -1039,9 +1042,9 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
             L.append("")
 
     # 7. 정찰 정확도 (GT 검증 — 위험도엔 미반영)
-    L.append("## 7. 정찰 정확도 (GT 검증)")
+    L.append("## 7. 정찰 정확도 (GT 검증, 점수 미반영)")
     L.append("")
-    L.append("> 발견 위협 ↔ 정답맵(GT) 위협 비교. 누락이 많으면 위험도가 그만큼 **과소평가**됐다는 신호 → 재정찰 권고.")
+    L.append("> 발견 위협 ↔ 정답맵(GT) 위협 비교. 이 표는 검증 전용이며, 위험도 수식·추천·LLM 입력의 enemy_count에는 사용하지 않는다.")
     L.append("")
     def gv(r):
         return gt_validation[r]
@@ -1052,7 +1055,7 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
     L.append("| 누락 | " + " | ".join(str(gv(r)["missed"]) for r in routes) + " |")
     L.append("| 오탐(false+) | " + " | ".join(str(gv(r)["false_pos"]) for r in routes) + " |")
     L.append("| 위치오차 평균 m | " + " | ".join(_fmt(gv(r)["mean_pos_err_m"]) for r in routes) + " |")
-    L.append("| 탐지 신뢰도(발견/GT) | " + " | ".join(_fmt(gv(r)["confidence"]) for r in routes) + " |")
+    L.append("| 탐지 신뢰도(발견/GT, 검증용) | " + " | ".join(_fmt(gv(r)["confidence"]) for r in routes) + " |")
     fams = sorted({f["family"] for r in routes for f in gv(r)["by_family"]})
     for fam in fams:
         def famcell(r, fam=fam):
@@ -1063,8 +1066,8 @@ def render_markdown(routes: List[str], metrics: Dict[str, dict], exposures: Dict
     for r in routes:
         conf = gv(r)["confidence"]
         if conf is not None and conf < 0.5:
-            L.append(f"- ⚠️ **route_{r}**: 탐지 신뢰도 {conf} (GT {gv(r)['gt_total']}개 중 {gv(r)['found']}개) — "
-                     "정찰이 위협을 많이 놓침 → 위험도 과소평가 가능 → 재정찰 권장.")
+            L.append(f"- 참고: **route_{r}** GT 검증 신뢰도 {conf} (GT {gv(r)['gt_total']}개 중 {gv(r)['found']}개). "
+                     "이 값은 기본 설정에서 수식/추천에는 반영되지 않는다.")
     L.append("")
 
     # 8. 최종 추천
@@ -1170,7 +1173,7 @@ def run_recon_eval(input_path: str = DEFAULT_REPORT_DIR,
         total, breakdown = risk_score(norm[rid], weights)
         scored[rid] = {"risk_total": total, "breakdown": breakdown,
                        "valid": valid, "warnings": warns}
-    rec = recommend(scored, gt_validation)
+    rec = recommend(scored, gt_validation, use_gt_confidence_cap=GT_CONFIDENCE_CAP_DEFAULT)
 
     return {"routes": routes, "metrics": metrics, "exposures": exposures,
             "perceived": perceived, "centerlines": centerlines,
@@ -1202,6 +1205,7 @@ def build_risk_features(R: dict) -> dict:
             "valid": R["scored"][rid]["valid"],
             "threat": {
                 "confirmed_count": len(per),
+                "source": f"sensor_fusion_confirmed_discovered_objects_route_{rid}.map",
                 "by_class": dict(by_cls),
                 "nearest_dist_m": _nearest_threat_dist(exp),
                 "list": [{"type": t.get("type"),
@@ -1233,11 +1237,16 @@ def build_risk_features(R: dict) -> dict:
                 "obstacle_count": m["obstacle_count"],
                 "obstacle_density_per_100m": m["obstacle_density"],
             },
-            "quality": R["gt_validation"].get(rid, {}),
+            "quality": {
+                **(R["gt_validation"].get(rid, {}) or {}),
+                "score_usage": "validation_only_not_used_for_risk_or_llm_by_default",
+                "gt_confidence_cap_enabled": GT_CONFIDENCE_CAP_DEFAULT,
+            },
             "raw_ref": {
                 "yolo_counts": m["yolo_counts"],
                 "_note": "누적 탐지 프레임 수(distinct 아님) — 적 수 판단에 쓰지 말 것",
                 "asset_spotted_gt": m["asset_gt"],
+                "asset_spotted_gt_note": "GT 대비 검증 참고값 — 위험도/LLM enemy_count에 쓰지 않음",
             },
         }
     return out

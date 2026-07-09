@@ -1047,9 +1047,21 @@ def _route_risk_factors(level: Any, evidence: Dict[str, Any], route_length: Any 
     actual_time_s = evidence.get("sim_time_s") if isinstance(evidence, dict) else None
     time_value = actual_time_s if actual_time_s is not None else _route_estimated_time_s(route_length)
     time_score = _numeric_score(time_value, 300.0 if actual_time_s is not None else 60.0)
-    exposure_score = _numeric_score(evidence.get("enemy_visible_time_s"), 30.0)
+
+    # New route_comparison.json source: enemy_count is sensor-fusion confirmed distinct house/tank,
+    # not GT-found ratio and not raw YOLO frame counts.  Keep legacy fallbacks for older reports.
+    stealth_ratio = evidence.get("stealth_ratio") if isinstance(evidence, dict) else None
+    if stealth_ratio is None:
+        exposure_score = _numeric_score(evidence.get("enemy_visible_time_s"), 30.0)
+        exposure_value = _format_metric(evidence.get("enemy_visible_time_s"), "s")
+    else:
+        exposure_score = _numeric_score(stealth_ratio, 1.0)
+        exposure_value = _format_metric(float(stealth_ratio) * 100.0, "%")
+    enemy_count = evidence.get("enemy_count") if isinstance(evidence, dict) else None
+    enemy_score = _numeric_score(enemy_count, 5.0)
     obstacle_score = _numeric_score(evidence.get("obstacle_count"), 30.0)
-    blocked_score = _numeric_score(evidence.get("blocked_segment_count"), 3.0)
+    terrain_sigma = evidence.get("terrain_sigma_deg") if isinstance(evidence, dict) else None
+    terrain_score = _numeric_score(terrain_sigma, 20.0)
     return [
         {
             "label": "DIST",
@@ -1065,21 +1077,27 @@ def _route_risk_factors(level: Any, evidence: Dict[str, Any], route_length: Any 
         },
         {
             "label": "EXPO",
-            "value": _format_metric(evidence.get("enemy_visible_time_s"), "s"),
+            "value": exposure_value,
             "level": _factor_level_from_score(exposure_score),
             "score": exposure_score,
+        },
+        {
+            "label": "ENEMY",
+            "value": _format_metric(enemy_count),
+            "level": _factor_level_from_score(enemy_score),
+            "score": enemy_score,
+        },
+        {
+            "label": "TERR",
+            "value": _format_metric(terrain_sigma, "deg"),
+            "level": _factor_level_from_score(terrain_score),
+            "score": terrain_score,
         },
         {
             "label": "OBS",
             "value": _format_metric(evidence.get("obstacle_count")),
             "level": _factor_level_from_score(obstacle_score),
             "score": obstacle_score,
-        },
-        {
-            "label": "BLOCK",
-            "value": _format_metric(evidence.get("blocked_segment_count")),
-            "level": _factor_level_from_score(blocked_score),
-            "score": blocked_score,
         },
     ]
 

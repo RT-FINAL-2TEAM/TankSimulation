@@ -75,6 +75,25 @@ def as_finite_float(value: Any) -> Optional[float]:
     return out if math.isfinite(out) else None
 
 
+def parse_stage_indices(raw: Any) -> Optional[set[int]]:
+    """Parse 1-based engagement indices. None means all stages."""
+    text = str(raw or "").strip().lower()
+    if text in {"", "all", "*", "any"}:
+        return None
+    out: set[int] = set()
+    for part in text.replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            idx = int(part)
+        except ValueError:
+            continue
+        if idx > 0:
+            out.add(idx)
+    return out
+
+
 class BallisticTurretNode(Node):
     """Ordered stop → aim/fire → lower-barrel → continue mission controller."""
 
@@ -212,6 +231,18 @@ class BallisticTurretNode(Node):
         self.declare_parameter("max_fire_body_pitch_deg", 3.0)
         self.declare_parameter("max_fire_body_roll_deg", 3.0)
         self.declare_parameter("flat_fire_pose_require_fresh_attitude", False)
+        # SCENARIO2_PRE_AIM_BODY_ALIGN_V1
+        # checkpoint에서 포탑만 적 방향으로 돌려 쏘기 전에, 차체 heading을 먼저 표적 방향으로 맞춘다.
+        # 기본은 scenario2 checkpoint1만 적용해 기존 final engagement 동작 변화폭을 줄인다.
+        self.declare_parameter("pre_aim_body_align_enabled", True)
+        self.declare_parameter("pre_aim_body_align_stage_indices", "1")
+        self.declare_parameter("pre_aim_body_align_tolerance_deg", 4.0)
+        self.declare_parameter("pre_aim_body_align_stable_sec", 0.25)
+        self.declare_parameter("pre_aim_body_align_timeout_sec", 4.0)
+        self.declare_parameter("pre_aim_body_align_min_ad_weight", 0.25)
+        self.declare_parameter("pre_aim_body_align_max_ad_weight", 0.55)
+        self.declare_parameter("pre_aim_body_align_body_yaw_ttl_sec", 1.0)
+        self.declare_parameter("pre_aim_body_align_turret_to_hull", True)
 
         self.target_pose_ttl_sec = max(0.05, float(self.get_parameter("target_pose_ttl_sec").value))
         self.default_checkpoint_settle_sec = max(
@@ -406,6 +437,35 @@ class BallisticTurretNode(Node):
         self.flat_fire_pose_require_fresh_attitude = bool(
             self.get_parameter("flat_fire_pose_require_fresh_attitude").value
         )
+        self.pre_aim_body_align_enabled = bool(
+            self.get_parameter("pre_aim_body_align_enabled").value
+        )
+        self.pre_aim_body_align_stage_indices = parse_stage_indices(
+            self.get_parameter("pre_aim_body_align_stage_indices").value
+        )
+        self.pre_aim_body_align_tolerance_deg = max(
+            0.5, float(self.get_parameter("pre_aim_body_align_tolerance_deg").value)
+        )
+        self.pre_aim_body_align_stable_sec = max(
+            0.0, float(self.get_parameter("pre_aim_body_align_stable_sec").value)
+        )
+        self.pre_aim_body_align_timeout_sec = max(
+            0.5, float(self.get_parameter("pre_aim_body_align_timeout_sec").value)
+        )
+        self.pre_aim_body_align_min_ad_weight = clamp(
+            float(self.get_parameter("pre_aim_body_align_min_ad_weight").value), 0.0, 1.0
+        )
+        self.pre_aim_body_align_max_ad_weight = clamp(
+            float(self.get_parameter("pre_aim_body_align_max_ad_weight").value),
+            self.pre_aim_body_align_min_ad_weight,
+            1.0,
+        )
+        self.pre_aim_body_align_body_yaw_ttl_sec = max(
+            0.05, float(self.get_parameter("pre_aim_body_align_body_yaw_ttl_sec").value)
+        )
+        self.pre_aim_body_align_turret_to_hull = bool(
+            self.get_parameter("pre_aim_body_align_turret_to_hull").value
+        )
 
         # Latest simulator state.
         self.player_pose: Optional[Tuple[float, float, float]] = None
@@ -437,6 +497,8 @@ class BallisticTurretNode(Node):
         # Per-stage controller state.
         self.phase = "approach"
         self.checkpoint_enter_wall: Optional[float] = None
+        self.body_align_started_wall: Optional[float] = None
+        self.body_aligned_since_wall: Optional[float] = None
         self.engagement_target: Optional[Tuple[float, float, float]] = None
         self.shot_target: Optional[Tuple[float, float, float]] = None
         self.shot_count = 0
@@ -809,6 +871,80 @@ class BallisticTurretNode(Node):
                 f"{self.engagement_target[2]:.2f})"
             )
 
+    def _pre_aim_body_align_enabled_for_stage(self) -> bool:
+        if not self.pre_aim_body_align_enabled:
+            return False
+        if self.pre_aim_body_align_stage_indices is None:
+            return True
+        return (self.stage_index + 1) in self.pre_aim_body_align_stage_indices
+
+    def _desired_fire_body_yaw_deg(self) -> Optional[float]:
+        if self.player_pose is None:
+            return None
+        target = self._selected_target()
+        dx = float(target[0]) - float(self.player_pose[0])
+        dy = float(target[1]) - float(self.player_pose[1])
+        if math.hypot(dx, dy) < 1e-6:
+            return None
+        return normalize_180(math.degrees(math.atan2(dx, dy)))
+
+    def _body_yaw_fresh(self, now: Optional[float] = None) -> Tuple[bool, float]:
+        now = time.monotonic() if now is None else now
+        age = now - self.body_attitude_wall
+        return self.body_attitude_wall > 0.0 and age <= self.pre_aim_body_align_body_yaw_ttl_sec, age
+
+    def _begin_pre_aim_body_align_or_aim(self, now: float) -> None:
+        if not self._pre_aim_body_align_enabled_for_stage():
+            self.phase = "aim"
+            self._reset_hybrid_yaw_control()
+            self._lock_engagement_target()
+            return
+        desired_yaw = self._desired_fire_body_yaw_deg()
+        yaw_fresh, yaw_age = self._body_yaw_fresh(now)
+        if desired_yaw is None or not yaw_fresh:
+            self.get_logger().warn(
+                f"Pre-aim body alignment skipped at stage={self.stage_index + 1}: "
+                f"desired_yaw={desired_yaw}, body_yaw_age={yaw_age:.3f}s"
+            )
+            self.phase = "aim"
+            self._reset_hybrid_yaw_control()
+            self._lock_engagement_target()
+            return
+        self.phase = "align_body"
+        self.body_align_started_wall = now
+        self.body_aligned_since_wall = None
+        self._reset_hybrid_yaw_control()
+        self._lock_engagement_target()
+        self.get_logger().info(
+            f"Pre-aim body alignment stage={self.stage_index + 1}: "
+            f"body_yaw={self.body_yaw_deg:.1f} -> target_yaw={desired_yaw:.1f}"
+        )
+
+    def _pre_aim_body_align_ad_weight(self, yaw_error_deg: float) -> float:
+        ratio = clamp(abs(yaw_error_deg) / 45.0, 0.0, 1.0)
+        return clamp(
+            self.pre_aim_body_align_min_ad_weight + ratio * (
+                self.pre_aim_body_align_max_ad_weight - self.pre_aim_body_align_min_ad_weight
+            ),
+            self.pre_aim_body_align_min_ad_weight,
+            self.pre_aim_body_align_max_ad_weight,
+        )
+
+    def _pre_aim_turret_home_axis(self, now: float) -> Dict[str, Any]:
+        if not self.pre_aim_body_align_turret_to_hull:
+            return self._axis("", 0.0)
+        feedback_age = now - self.turret_feedback_wall
+        if self.turret_yaw_deg is None or feedback_age > self.turret_feedback_ttl_sec:
+            return self._axis("", 0.0)
+        target_yaw = self._center_target_yaw_deg()
+        yaw_error = normalize_180(target_yaw - float(self.turret_yaw_deg))
+        if abs(yaw_error) <= self.center_turret_tolerance_deg:
+            return self._axis("", 0.0)
+        return self._axis(
+            "E" if yaw_error > 0.0 else "Q",
+            self._yaw_weight(yaw_error, min(self.center_turret_weight_max, 0.35)),
+        )
+
     def _at_checkpoint(self) -> bool:
         if self.player_pose is None:
             return False
@@ -894,6 +1030,8 @@ class BallisticTurretNode(Node):
     def _reset_stage_runtime(self) -> None:
         self.phase = "approach"
         self.checkpoint_enter_wall = None
+        self.body_align_started_wall = None
+        self.body_aligned_since_wall = None
         self.engagement_target = None
         self.shot_target = None
         self.shot_count = 0
@@ -1794,6 +1932,15 @@ class BallisticTurretNode(Node):
             "target_locked": self.engagement_target is not None,
             "body_attitude": self._body_attitude_debug(),
             "flat_fire_pose": self._fire_pose_tilt_status(),
+            "pre_aim_body_align": {
+                "enabled": self.pre_aim_body_align_enabled,
+                "stage_enabled": self._pre_aim_body_align_enabled_for_stage(),
+                "stage_indices": (
+                    "all" if self.pre_aim_body_align_stage_indices is None
+                    else sorted(self.pre_aim_body_align_stage_indices)
+                ),
+                "tolerance_deg": self.pre_aim_body_align_tolerance_deg,
+            },
             "pitch_feedback_frame": (
                 "world" if self.turret_pitch_feedback_is_world else "hull_relative"
             ),
@@ -1814,6 +1961,8 @@ class BallisticTurretNode(Node):
         turret_rf: Dict[str, Any],
         fire: bool,
         status: Dict[str, Any],
+        move_ws: Optional[Dict[str, Any]] = None,
+        move_ad: Optional[Dict[str, Any]] = None,
     ) -> None:
         payload = {
             "active": bool(active),
@@ -1824,6 +1973,10 @@ class BallisticTurretNode(Node):
             "status": status,
             "timestamp_monotonic": time.monotonic(),
         }
+        if move_ws is not None:
+            payload["moveWS"] = move_ws
+        if move_ad is not None:
+            payload["moveAD"] = move_ad
         self.override_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))
         now = time.monotonic()
         if now - self._last_status_wall >= 0.10:
@@ -2011,9 +2164,92 @@ class BallisticTurretNode(Node):
                     fire=False, status=status,
                 )
                 return
-            self.phase = "aim"
-            self._reset_hybrid_yaw_control()
-            self._lock_engagement_target()
+            self._begin_pre_aim_body_align_or_aim(now)
+
+        if self.phase == "align_body":
+            desired_yaw = self._desired_fire_body_yaw_deg()
+            yaw_fresh, yaw_age = self._body_yaw_fresh(now)
+            timed_out = (
+                self.body_align_started_wall is not None
+                and now - self.body_align_started_wall >= self.pre_aim_body_align_timeout_sec
+            )
+            yaw_error = (
+                normalize_180(desired_yaw - self.body_yaw_deg)
+                if desired_yaw is not None and yaw_fresh else None
+            )
+            if yaw_error is None:
+                self.get_logger().warn(
+                    f"Pre-aim body alignment aborted stage={self.stage_index + 1}: "
+                    f"desired_yaw={desired_yaw}, body_yaw_fresh={yaw_fresh}, body_yaw_age={yaw_age:.3f}s"
+                )
+                self.phase = "aim"
+                self._reset_hybrid_yaw_control()
+                status = self._stage_status_base(active=True)
+                status.update({
+                    "phase": "aim",
+                    "reason": "pre_aim_body_align_aborted_no_fresh_body_yaw",
+                    "desired_body_yaw_deg": desired_yaw,
+                    "body_yaw_fresh": yaw_fresh,
+                    "body_yaw_age_sec": round(max(0.0, yaw_age), 3),
+                })
+                self._publish_override(
+                    active=True, hold_motion=True,
+                    turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
+                    fire=False, status=status,
+                )
+                return
+            reached = abs(yaw_error) <= self.pre_aim_body_align_tolerance_deg
+            if reached:
+                if self.body_aligned_since_wall is None:
+                    self.body_aligned_since_wall = now
+                stable_sec = now - self.body_aligned_since_wall
+            else:
+                self.body_aligned_since_wall = None
+                stable_sec = 0.0
+
+            if (reached and stable_sec >= self.pre_aim_body_align_stable_sec) or timed_out:
+                if timed_out and not reached:
+                    self.get_logger().warn(
+                        f"Pre-aim body alignment timeout stage={self.stage_index + 1}: "
+                        f"yaw_error={yaw_error}"
+                    )
+                self.phase = "aim"
+                self._reset_hybrid_yaw_control()
+            else:
+                cmd_ad = "D" if (yaw_error or 0.0) > 0.0 else "A"
+                w_ad = self._pre_aim_body_align_ad_weight(float(yaw_error or 0.0))
+                turret_qe = self._pre_aim_turret_home_axis(now)
+                status = self._stage_status_base(active=True)
+                status.update({
+                    "phase": "align_body",
+                    "reason": "pre_aim_body_heading_to_target",
+                    "desired_body_yaw_deg": desired_yaw,
+                    "current_body_yaw_deg": self.body_yaw_deg,
+                    "body_yaw_error_deg": yaw_error,
+                    "body_yaw_fresh": yaw_fresh,
+                    "body_yaw_age_sec": round(max(0.0, yaw_age), 3),
+                    "reached": reached,
+                    "stable_sec": round(stable_sec, 3),
+                    "stable_sec_required": self.pre_aim_body_align_stable_sec,
+                    "timeout_sec": self.pre_aim_body_align_timeout_sec,
+                    "command": {
+                        "moveWS": {"command": "STOP", "weight": 1.0},
+                        "moveAD": {"command": cmd_ad, "weight": w_ad},
+                        "turretQE": turret_qe,
+                        "turretRF": {"command": "", "weight": 0.0},
+                    },
+                })
+                self._publish_override(
+                    active=True,
+                    hold_motion=False,
+                    turret_qe=turret_qe,
+                    turret_rf=self._axis("", 0.0),
+                    fire=False,
+                    status=status,
+                    move_ws={"command": "STOP", "weight": 1.0},
+                    move_ad={"command": cmd_ad, "weight": w_ad},
+                )
+                return
 
         # Re-acquire only when entering aim for the first time in this stage.
         if self.phase in {"aim", "aim_error"}:

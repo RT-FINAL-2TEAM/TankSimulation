@@ -502,6 +502,9 @@ def generate_launch_description():
                 # Simulator's original /set_destination points at the enemy.
                 # Lock it out: scenario2 must always visit the firing checkpoint first.
                 "accept_external_goal_updates": "false",
+                # 이동 중 포탑을 차체 heading에 붙여 다음 사격 checkpoint에서 뒤돌아 조준하는 상황을 줄인다.
+                "drive_turret_home_enabled": "true",
+                "drive_turret_home_mission_types": "mission",
                 "static_map_file": LaunchConfiguration("scenario2_map"),
                 "terrain_cost_file": LaunchConfiguration("scenario2_terrain"),
                 # 지형 비용(험지 회피)을 정찰과 동일하게 OFF. 정찰은 terrain_cost_file이 비어 무영향이라,
@@ -589,6 +592,13 @@ def generate_launch_description():
                 # If the hull is tilted at a firing stop, the turret node will
                 # request the stage fallback standoff point instead of aiming forever.
                 "require_flat_fire_pose": True,
+                # checkpoint1에서는 발사 전 차체 heading을 표적 방향으로 먼저 맞춘 뒤 포탑 미세조준한다.
+                "pre_aim_body_align_enabled": True,
+                "pre_aim_body_align_stage_indices": "1",
+                "pre_aim_body_align_tolerance_deg": 4.0,
+                "pre_aim_body_align_stable_sec": 0.25,
+                "pre_aim_body_align_timeout_sec": 4.0,
+                "pre_aim_body_align_max_ad_weight": 0.55,
                 "max_fire_body_pitch_deg": 3.5,
                 "max_fire_body_roll_deg": 3.5,
                 "reposition_goal_offset_m": 16.0,

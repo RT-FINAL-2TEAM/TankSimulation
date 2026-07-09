@@ -64,7 +64,7 @@ def route_metrics(report: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "pitch_std_deg": terrain.get("pitch_std_deg"),
         "roll_std_deg": terrain.get("roll_std_deg"),
         "yolo_counts": vision.get("counts") if isinstance(vision.get("counts"), dict) else {},
-        "asset_spotted_gt": report.get("asset_spotted_gt") if isinstance(report.get("asset_spotted_gt"), dict) else {},
+        "asset_spotted_gt": report.get("asset_spotted_gt") if isinstance(report.get("asset_spotted_gt"), dict) else {},  # 검증 참고 전용
     }
 
 
@@ -89,7 +89,8 @@ def route_risk(result: Dict[str, Any], route_id: str) -> Dict[str, Any]:
 def render_route_section(route_id: str, metrics: Dict[str, Any], llm: Dict[str, Any]) -> list[str]:
     route_llm = route_risk(llm, route_id)
     yolo_counts = metrics.get("yolo_counts") if isinstance(metrics.get("yolo_counts"), dict) else {}
-    gt_counts = metrics.get("asset_spotted_gt") if isinstance(metrics.get("asset_spotted_gt"), dict) else {}
+    evidence = route_llm.get("evidence") if isinstance(route_llm.get("evidence"), dict) else {}
+    fusion_enemy_count = evidence.get("enemy_count")
     lines = [
         f"[ROUTE {route_id}]",
         f"- 도착 여부: {metrics.get('reached')}",
@@ -99,8 +100,8 @@ def render_route_section(route_id: str, metrics: Dict[str, Any], llm: Dict[str, 
         f"- 노출 시간 / 최대 연속 노출: {fmt(metrics.get('enemy_visible_time_s'), 's')} / {fmt(metrics.get('max_continuous_visible_time_s'), 's')}",
         f"- 노출 이벤트 수: {fmt(metrics.get('exposure_event_count'))}",
         f"- 지형 안정성 pitch/roll std: {fmt(metrics.get('pitch_std_deg'), 'deg')} / {fmt(metrics.get('roll_std_deg'), 'deg')}",
-        f"- YOLO counts: {json.dumps(yolo_counts, ensure_ascii=False)}",
-        f"- GT spotted: {json.dumps(gt_counts, ensure_ascii=False)}",
+        f"- YOLO counts(raw frames, 참고): {json.dumps(yolo_counts, ensure_ascii=False)}",
+        f"- Fusion enemy_count(위험도 반영): {fmt(fusion_enemy_count)}",
         f"- LLM 위험도: {fmt(route_llm.get('level'))}",
     ]
     risks = route_llm.get("risks") or []

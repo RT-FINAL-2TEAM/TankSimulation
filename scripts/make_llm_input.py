@@ -73,7 +73,7 @@ def summarize_route(rec: Dict[str, Any]) -> Dict[str, Any]:
     """risk_features.json의 per-route 레코드(그룹별) → LLM 입력용 평면 요약.
 
     적 수는 센서퓨전 확정 dedup(threat.confirmed_count), 노출은 길이비(exposure),
-    효율은 별도 축. yolo_counts_raw는 '누적 프레임'으로 명시해 적 수 오독을 막는다.
+    효율은 별도 축. GT 대비 발견률/asset_spotted_gt는 검증 전용이라 LLM 입력에서 제외한다.
     """
     threat = rec.get("threat") if isinstance(rec.get("threat"), dict) else {}
     exp = rec.get("exposure") if isinstance(rec.get("exposure"), dict) else {}
@@ -87,8 +87,9 @@ def summarize_route(rec: Dict[str, Any]) -> Dict[str, Any]:
         "route_id": rec.get("route_id"),
         "reached": bool(rec.get("reached", False)),
 
-        # 위협 — 확정 dedup 수(YOLO 누적 아님)
+        # 위협 — 센서퓨전 확정 dedup 수(YOLO 누적/GT 대비 발견률 아님)
         "enemy_count": safe_int(threat.get("confirmed_count"), 0),
+        "enemy_count_source": threat.get("source", "sensor_fusion_confirmed_discovered_objects"),
         "enemy_by_class": threat.get("by_class", {}) if isinstance(threat.get("by_class"), dict) else {},
         "closest_enemy_distance_m": threat.get("nearest_dist_m"),  # null=위협 미탐지(판단 제외)
 
@@ -110,14 +111,8 @@ def summarize_route(rec: Dict[str, Any]) -> Dict[str, Any]:
         "roll_std_deg": round_float(terr.get("roll_std_deg"), 3, 0.0),
         "terrain_sigma_deg": round_float(terr.get("sigma_deg"), 3, 0.0),
 
-        # 정찰 신뢰도(점수 미반영, 신뢰도 캡용)
-        "gt_found": qual.get("found"),
-        "gt_total": qual.get("gt_total"),
-        "gt_confidence": qual.get("confidence"),
-
-        # 참고 전용
+        # 참고 전용: 누적 탐지 프레임 수. enemy_count로 쓰지 않는다.
         "yolo_counts_raw": raw.get("yolo_counts", {}) if isinstance(raw.get("yolo_counts"), dict) else {},
-        "asset_spotted_gt": raw.get("asset_spotted_gt", {}) if isinstance(raw.get("asset_spotted_gt"), dict) else {},
     }
 
 

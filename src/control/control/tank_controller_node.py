@@ -299,6 +299,15 @@ class TeamPathControllerNode(Node):
         self.declare_parameter("recon_turret_home_tol_deg", 1.5)
         self.declare_parameter("recon_turret_home_max_weight", 0.40)
         self.declare_parameter("recon_turret_home_body_yaw_ttl_sec", 1.0)
+        # SCENARIO2_DRIVE_TURRET_HOME_V1: scenario2 이동 중에는 포탑을 차체 진행방향으로 복귀시킨다.
+        # recon의 후보 관측/step-stare와 교전 override는 항상 우선한다.
+        self.declare_parameter("drive_turret_home_enabled", False)
+        self.declare_parameter("drive_turret_home_mission_types", "mission")
+        self.declare_parameter("drive_turret_home_min_ws_weight", 0.05)
+        self.declare_parameter("drive_turret_home_tol_deg", 2.0)
+        self.declare_parameter("drive_turret_home_max_weight", 0.35)
+        self.declare_parameter("drive_turret_home_body_yaw_ttl_sec", 1.0)
+        self.declare_parameter("drive_turret_home_qe_sign", 1)
         self.recon_observe_enabled = bool(self.get_parameter("recon_observe_enabled").value)
         self.recon_observe_stale_sec = float(self.get_parameter("recon_observe_stale_sec").value)
         self.recon_observe_ws_weight = float(self.get_parameter("recon_observe_ws_weight").value)
@@ -342,6 +351,24 @@ class TeamPathControllerNode(Node):
         self.recon_turret_home_body_yaw_ttl_sec = max(
             0.05, float(self.get_parameter("recon_turret_home_body_yaw_ttl_sec").value)
         )
+        self.drive_turret_home_enabled = bool(self.get_parameter("drive_turret_home_enabled").value)
+        raw_drive_home_types = str(self.get_parameter("drive_turret_home_mission_types").value or "")
+        self.drive_turret_home_mission_types = {
+            part.strip().lower() for part in raw_drive_home_types.split(",") if part.strip()
+        } or {"mission"}
+        self.drive_turret_home_min_ws_weight = clamp(
+            float(self.get_parameter("drive_turret_home_min_ws_weight").value), 0.0, 1.0
+        )
+        self.drive_turret_home_tol_deg = max(
+            0.1, float(self.get_parameter("drive_turret_home_tol_deg").value)
+        )
+        self.drive_turret_home_max_weight = clamp(
+            float(self.get_parameter("drive_turret_home_max_weight").value), 0.05, 1.0
+        )
+        self.drive_turret_home_body_yaw_ttl_sec = max(
+            0.05, float(self.get_parameter("drive_turret_home_body_yaw_ttl_sec").value)
+        )
+        self.drive_turret_home_qe_sign = 1 if int(self.get_parameter("drive_turret_home_qe_sign").value) >= 0 else -1
         self._observe_payload: Optional[Dict[str, Any]] = None
         self._observe_wall: float = 0.0
         self._turret_world_deg: Optional[float] = None
@@ -1761,6 +1788,60 @@ class TeamPathControllerNode(Node):
         base.update({"cmd": direction, "weight": round(weight, 2)})
         return {"command": direction, "weight": float(weight)}, base
 
+    def _drive_turret_home_action(self, now: float) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Scenario2 주행 중 turret yaw를 차체 heading에 맞춘다."""
+        empty = {"command": "", "weight": 0.0}
+        if not self.drive_turret_home_enabled:
+            return empty, {"active": False, "reason": "disabled"}
+        if self.mission_type not in self.drive_turret_home_mission_types:
+            return empty, {"active": False, "reason": "mission_type_disabled", "mission_type": self.mission_type}
+        if self._turret_world_deg is None:
+            return empty, {"active": False, "reason": "no_turret_feedback"}
+        yaw_age = now - self._player_yaw_wall
+        if self._player_yaw_wall <= 0.0 or yaw_age > self.drive_turret_home_body_yaw_ttl_sec:
+            return empty, {
+                "active": False,
+                "reason": "body_yaw_stale",
+                "body_yaw_age_sec": round(max(0.0, yaw_age), 3),
+            }
+
+        desired_world_deg = float(self.current_yaw)
+        current_world_deg = float(self._turret_world_deg)
+        err = self._normalize_180(desired_world_deg - current_world_deg)
+        base = {
+            "active": True,
+            "mode": "drive_turret_home",
+            "desired_world_deg": round(desired_world_deg, 1),
+            "current_world_deg": round(current_world_deg, 1),
+            "err_deg": round(err, 1),
+            "tol_deg": self.drive_turret_home_tol_deg,
+        }
+        if abs(err) <= self.drive_turret_home_tol_deg:
+            base["on_target"] = True
+            return empty, base
+
+        direction = "E" if (err * self.drive_turret_home_qe_sign) > 0.0 else "Q"
+        weight = clamp(abs(err) / 25.0, 0.16, 1.0) * self.drive_turret_home_max_weight
+        base.update({"cmd": direction, "weight": round(weight, 2)})
+        return {"command": direction, "weight": float(weight)}, base
+
+    @staticmethod
+    def _sanitize_motion_axis(part: Any, allowed: set[str]) -> Optional[Dict[str, Any]]:
+        """Validate an optional motion axis from the turret override boundary."""
+        if not isinstance(part, dict):
+            return None
+        command = str(part.get("command", ""))
+        if command not in allowed:
+            command = ""
+        try:
+            weight = float(part.get("weight", 0.0))
+        except (TypeError, ValueError):
+            weight = 0.0
+        weight = clamp(weight, 0.0, 1.0)
+        if not command:
+            weight = 0.0
+        return {"command": command, "weight": weight}
+
     def apply_recon_observation(
         self, cmd_ws: str, w_ws: float, speed_mode: str
     ) -> Tuple[str, float, str, Dict[str, Any], Dict[str, Any]]:
@@ -2005,7 +2086,16 @@ class TeamPathControllerNode(Node):
         action["turretRF"] = self._sanitize_turret_axis(override.get("turretRF"), {"R", "F"})
         action["fire"] = bool(override.get("fire", False))
         hold_motion = bool(override.get("hold_motion", False))
-        if hold_motion:
+
+        # Optional motion override is used only by the ballistic pre-aim hull-alignment phase.
+        # Without these fields, legacy behavior is unchanged: hold_motion freezes W/S and A/D.
+        move_ws_override = self._sanitize_motion_axis(override.get("moveWS"), {"W", "S", "STOP", ""})
+        move_ad_override = self._sanitize_motion_axis(override.get("moveAD"), {"A", "D", ""})
+        if move_ws_override is not None:
+            action["moveWS"] = move_ws_override
+        if move_ad_override is not None:
+            action["moveAD"] = move_ad_override
+        if hold_motion and move_ws_override is None and move_ad_override is None:
             action["moveWS"] = {"command": "STOP", "weight": 1.0}
             action["moveAD"] = {"command": "", "weight": 0.0}
         status = override.get("status") if isinstance(override.get("status"), dict) else {}
@@ -2014,6 +2104,8 @@ class TeamPathControllerNode(Node):
             "age_sec": round(age, 3),
             "hold_motion": hold_motion,
             "fire": action["fire"],
+            "moveWS": action.get("moveWS"),
+            "moveAD": action.get("moveAD"),
             "turretQE": action["turretQE"],
             "turretRF": action["turretRF"],
             "producer": status,
@@ -2251,13 +2343,26 @@ class TeamPathControllerNode(Node):
         # 정찰 전용: 미분류 후보 관측을 위한 ②감속/dwell + ③포탑 step-stare (recon에서만, 마지막에 적용).
         recon_turret_qe: Dict[str, Any] = {"command": "", "weight": 0.0}
         recon_obs_status: Dict[str, Any] = {"active": False}
+        drive_turret_qe: Dict[str, Any] = {"command": "", "weight": 0.0}
+        drive_turret_home_status: Dict[str, Any] = {"active": False, "reason": "not_checked"}
         if self.mission_type == "recon":
             cmd_ws, w_ws, speed_mode, recon_turret_qe, recon_obs_status = self.apply_recon_observation(
                 cmd_ws, w_ws, speed_mode
             )
+        elif cmd_ws == "W" and w_ws >= self.drive_turret_home_min_ws_weight:
+            drive_turret_qe, drive_turret_home_status = self._drive_turret_home_action(time.time())
+        else:
+            drive_turret_home_status = {
+                "active": False,
+                "reason": "not_moving_forward",
+                "cmd_ws": cmd_ws,
+                "w_ws": round(float(w_ws), 3),
+            }
         action = self.make_action(cmd_ws, w_ws, cmd_ad, w_ad)
         if recon_turret_qe.get("command"):
             action["turretQE"] = recon_turret_qe
+        elif drive_turret_qe.get("command"):
+            action["turretQE"] = drive_turret_qe
         # 교전 노드의 override를 마지막에 합성한다. 특히 checkpoint에서 active이면
         # goal_reached의 control:pause를 억제해 simulator가 /get_action을 계속 호출하고
         # Q/E/R/F 및 fire pulse를 실제로 받을 수 있게 한다.
@@ -2296,6 +2401,7 @@ class TeamPathControllerNode(Node):
             "current_speed_mps": self.current_speed,
             "speed_mode": speed_mode,
             "recon_observation": recon_obs_status,
+            "drive_turret_home": drive_turret_home_status,
             "planner_speed_profile": planner_profile_status,
             "planner_vehicle_geometry": self.planner_vehicle_geometry,
             "safety": {
@@ -2363,6 +2469,10 @@ class TeamPathControllerNode(Node):
                 "turn_overspeed_hard_speed_mps": self.turn_overspeed_hard_speed_mps,
                 "turn_overspeed_reverse_weight": self.turn_overspeed_reverse_weight,
                 "turn_overspeed_slow_ws_weight": self.turn_overspeed_slow_ws_weight,
+                "drive_turret_home_enabled": self.drive_turret_home_enabled,
+                "drive_turret_home_mission_types": sorted(self.drive_turret_home_mission_types),
+                "drive_turret_home_tol_deg": self.drive_turret_home_tol_deg,
+                "drive_turret_home_max_weight": self.drive_turret_home_max_weight,
                 "danger_obstacle_brake_speed_mps": self.danger_obstacle_brake_speed_mps,
                 "danger_obstacle_reverse_weight": self.danger_obstacle_reverse_weight,
                 "enable_forward_target_guard": self.enable_forward_target_guard,

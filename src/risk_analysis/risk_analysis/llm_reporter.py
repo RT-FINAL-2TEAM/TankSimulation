@@ -60,10 +60,10 @@ class LLMReporter:
         - proximity_ratio(0~1)는 적 탐지반경 안을 지나는 길이 비율이다. 클수록 위험.
         - exposure_available=false이면 노출 미측정이니 노출은 판단에서 제외한다.
         - closest_enemy_distance_m는 가장 가까운 적과의 거리(m)다. null이면 위협 미탐지로 보고 제외, 값이 있으면 작을수록 위험하다.
-        - [위협 맥락] enemy_count는 센서퓨전으로 확정된 distinct 적/초소 수다(많을수록 위험). enemy_by_class로 초소(house)/전차(tank)를 구분하라. yolo_counts_raw는 중복 누적 탐지 프레임이니 적 수로 쓰지 마라.
+        - [위협 맥락] enemy_count는 센서퓨전으로 확정된 distinct 적/초소 수다(많을수록 위험). enemy_by_class로 초소(house)/전차(tank)를 구분하라. yolo_counts_raw는 중복 누적 탐지 프레임이고, GT 대비 발견률은 검증 전용이니 적 수로 쓰지 마라.
         - [험지] pitch_std_deg·roll_std_deg(또는 terrain_sigma_deg)가 클수록 지형 주행 안정성이 낮다(위험).
         - [효율 = 보조, 위험 아님] distance_m·sim_time_s·detour_ratio·obstacle_count·obstacle_density_per_100m는 '이동 부담'이다. risk_level은 노출·위협·험지로 정하고, 효율은 위험이 비슷할 때만 보조로 써라.
-        - [신뢰도] gt_confidence가 낮거나(<0.5) gt_found가 gt_total보다 많이 적으면 정찰이 위협을 놓쳤을 수 있으니 confidence를 낮춰라.
+        - [신뢰도] confidence는 입력의 센서퓨전 위협 수, 노출 측정 가능 여부, reached 여부를 기준으로 정하라. GT 검증값이 입력에 있더라도 위험도 판단에는 쓰지 마라.
         - 단일 항목이 아니라 전체 위험 맥락을 비교해 selected_route를 선택하라.
 
         출력 규칙:
@@ -257,6 +257,7 @@ class LLMReporter:
                 "route_id": route_data.get("route_id"),
                 "reached": route_data.get("reached"),
                 "enemy_count": route_data.get("enemy_count"),
+                "enemy_count_source": route_data.get("enemy_count_source"),
                 "enemy_by_class": route_data.get("enemy_by_class") if isinstance(route_data.get("enemy_by_class"), dict) else {},
                 "closest_enemy_distance_m": route_data.get("closest_enemy_distance_m"),
                 "stealth_ratio": route_data.get("stealth_ratio"),
@@ -271,11 +272,7 @@ class LLMReporter:
                 "pitch_std_deg": route_data.get("pitch_std_deg"),
                 "roll_std_deg": route_data.get("roll_std_deg"),
                 "terrain_sigma_deg": route_data.get("terrain_sigma_deg"),
-                "gt_found": route_data.get("gt_found"),
-                "gt_total": route_data.get("gt_total"),
-                "gt_confidence": route_data.get("gt_confidence"),
                 "yolo_counts_raw": route_data.get("yolo_counts_raw") if isinstance(route_data.get("yolo_counts_raw"), dict) else {},
-                "asset_spotted_gt": route_data.get("asset_spotted_gt") if isinstance(route_data.get("asset_spotted_gt"), dict) else {},
                 "reason": old_reason,
             }
 
