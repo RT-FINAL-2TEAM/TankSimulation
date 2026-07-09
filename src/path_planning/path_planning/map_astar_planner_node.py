@@ -102,7 +102,7 @@ from path_planning.config import (
 )
 
 from ament_index_python.packages import get_package_share_directory
-from path_planning.route_loader import get_route_waypoints
+from path_planning.route_loader import get_route_destination, get_route_waypoints
 from path_planning.team_path_planning import (
     plan_path_through_waypoints as team_plan_path_through_waypoints,
     load_static_obstacles_from_map,
@@ -633,6 +633,13 @@ class TeamDynamicAStarPlannerNode(Node):
         self.declare_parameter("route_side", ROUTE_SIDE)
         self.declare_parameter("route_clearance_weight", ROUTE_CLEARANCE_WEIGHT)
         self.declare_parameter("route_config_file", ROUTE_CONFIG_FILE)
+        # Scenario-1 route A/B may have different tactical final destinations
+        # even when legacy launch files still pass one shared default goal.
+        # This only replaces a map-wide default/simulator destination with a
+        # route-specific YAML destination; mission/reposition checkpoint goals
+        # are left intact.
+        self.declare_parameter("use_route_destination_goal", True)
+        self.declare_parameter("route_destination_goal_match_tolerance_m", 12.0)
         self.declare_parameter("use_static_map", USE_STATIC_MAP)
         self.declare_parameter("static_map_file", STATIC_MAP_FILE)
         self.declare_parameter("terrain_cost_file", TERRAIN_COST_FILE)
@@ -755,6 +762,12 @@ class TeamDynamicAStarPlannerNode(Node):
             self.route_side = _expected_side
         self.route_clearance_weight = float(self.get_parameter("route_clearance_weight").value)
         self.route_config_file = str(self.get_parameter("route_config_file").value)
+        self.use_route_destination_goal = bool(self.get_parameter("use_route_destination_goal").value)
+        self.route_destination_goal_match_tolerance_m = max(0.0, float(
+            self.get_parameter("route_destination_goal_match_tolerance_m").value
+        ))
+        self.route_destination_goal: Optional[Tuple[float, float]] = None
+        self.route_map_destination_goal: Optional[Tuple[float, float]] = None
         self.use_static_map = bool(self.get_parameter("use_static_map").value)
         self.static_map_file = str(self.get_parameter("static_map_file").value)
         self.terrain_cost_file = str(self.get_parameter("terrain_cost_file").value)
@@ -828,6 +841,11 @@ class TeamDynamicAStarPlannerNode(Node):
         self.goal_pos: Optional[Tuple[float, float]] = None
         if bool(self.get_parameter("default_goal_enabled").value):
             self.goal_pos = (float(self.get_parameter("default_goal_x").value), float(self.get_parameter("default_goal_y").value))
+
+        self._load_route_destination_goal()
+        if self.goal_pos is not None:
+            self.goal_pos = self._maybe_apply_route_destination_goal(self.goal_pos, source="initial_default")
+
         self.gt_obstacles: List[Dict[str, float]] = []
         self.temporary_direct_goal_active = False
         # Unlike a turret reposition, a mission return stays direct until the
@@ -957,6 +975,64 @@ class TeamDynamicAStarPlannerNode(Node):
                 self.route_remaining_waypoints = []
         self.current_pos = new_pos
 
+    def _load_route_destination_goal(self) -> None:
+        """Load optional route-specific final goal from routes.yaml.
+
+        Scenario-1 now distinguishes the final destination of route A/B:
+          A -> (50, 265), B -> (130, 255).
+
+        The route-specific value is only used to replace a legacy map-wide
+        destination, so Scenario-2 mission checkpoint goals are not clobbered.
+        """
+        self.route_destination_goal = None
+        self.route_map_destination_goal = None
+        if not (self.use_route_waypoints and self.use_route_destination_goal):
+            return
+        try:
+            route_goal, map_goal = get_route_destination(
+                self.route_map_name, self.route_id, self.route_config_file or None
+            )
+        except Exception as exc:
+            self.get_logger().warn(f"route destination goal load failed: {exc}")
+            return
+        self.route_map_destination_goal = map_goal
+        if route_goal is None:
+            return
+        if get_distance(route_goal, map_goal) <= 0.1:
+            return
+        self.route_destination_goal = route_goal
+        self.get_logger().info(
+            f"route-specific destination active: route={self.route_id} "
+            f"goal=({route_goal[0]:.1f},{route_goal[1]:.1f}), "
+            f"legacy_map_goal=({map_goal[0]:.1f},{map_goal[1]:.1f})"
+        )
+
+    def _maybe_apply_route_destination_goal(
+        self, requested_goal: Tuple[float, float], source: str = "goal"
+    ) -> Tuple[float, float]:
+        """Replace only the old shared map goal with the route-specific goal.
+
+        This keeps Scenario-1 route A/B endpoints distinct while leaving direct
+        mission goals, turret reposition goals, and Scenario-2 firing
+        checkpoints unchanged.
+        """
+        if self.route_destination_goal is None or self.route_map_destination_goal is None:
+            return requested_goal
+        try:
+            req = (float(requested_goal[0]), float(requested_goal[1]))
+        except Exception:
+            return requested_goal
+        tol = max(0.0, float(self.route_destination_goal_match_tolerance_m))
+        if get_distance(req, self.route_map_destination_goal) <= tol:
+            rg = self.route_destination_goal
+            if get_distance(req, rg) > 0.1:
+                self.get_logger().info(
+                    f"{source}: legacy map destination ({req[0]:.1f},{req[1]:.1f}) "
+                    f"→ route {self.route_id} destination ({rg[0]:.1f},{rg[1]:.1f})"
+                )
+            return rg
+        return req
+
     def _set_goal(
         self,
         new_goal: Tuple[float, float],
@@ -970,6 +1046,8 @@ class TeamDynamicAStarPlannerNode(Node):
         Both the public simulator goal topic and the internal mission goal topic
         share this path; the caller decides which source is allowed.
         """
+        new_goal = self._maybe_apply_route_destination_goal(new_goal, source=reason)
+
         # 목적지가 '의미있게' 바뀔 때만 전역경로 재생성. 0.5m는 과민했다 — /tank/goal/pose에
         # ros_bridge(시뮬 POST)와 planner(2Hz)가 이중 발행해, 좌표변환 부동소수 차로도 매번
         # route를 비워 lookahead가 프레임마다 흔들렸다. goal_tolerance(10m)와 정합되게 10m로 상향.

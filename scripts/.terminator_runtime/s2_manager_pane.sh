@@ -11,7 +11,7 @@ MISSION_PLAN_FILE="/home/tankcc/tankcc/recon_reports/mission_plan.json"
 echo "============================================================"
 echo "[T3] Scenario 2 Auto Pipeline"
 echo "============================================================"
-echo "log dir    : /home/tankcc/tankcc/logs/scenario2_terminator_20260709_150332"
+echo "log dir    : /home/tankcc/tankcc/logs/scenario2_terminator_20260709_165846"
 echo "build mode : auto"
 echo "map        : $MAP_FILE"
 echo "mission    : $MISSION_PLAN_FILE"
@@ -25,12 +25,12 @@ run_step() {
   echo "============================================================"
   echo "Command: $*"
   echo
-  "$@" 2>&1 | tee "/home/tankcc/tankcc/logs/scenario2_terminator_20260709_150332/$name.log"
+  "$@" 2>&1 | tee "/home/tankcc/tankcc/logs/scenario2_terminator_20260709_165846/$name.log"
   local code="${PIPESTATUS[0]}"
   if [[ "$code" -ne 0 ]]; then
     echo
     echo "[ERROR] $name failed with exit code $code"
-    echo "로그: /home/tankcc/tankcc/logs/scenario2_terminator_20260709_150332/$name.log"
+    echo "로그: /home/tankcc/tankcc/logs/scenario2_terminator_20260709_165846/$name.log"
     exec bash
   fi
   echo "[OK] $name completed"
@@ -45,12 +45,12 @@ run_optional_step() {
   echo "Command: $*"
   echo
   set +e
-  "$@" 2>&1 | tee "/home/tankcc/tankcc/logs/scenario2_terminator_20260709_150332/$name.log"
+  "$@" 2>&1 | tee "/home/tankcc/tankcc/logs/scenario2_terminator_20260709_165846/$name.log"
   local code="${PIPESTATUS[0]}"
   set -e
   if [[ "$code" -ne 0 ]]; then
     echo "[WARN] optional step failed: $name (exit=$code). 계속 진행합니다."
-    echo "       로그: /home/tankcc/tankcc/logs/scenario2_terminator_20260709_150332/$name.log"
+    echo "       로그: /home/tankcc/tankcc/logs/scenario2_terminator_20260709_165846/$name.log"
   else
     echo "[OK] $name completed"
   fi
@@ -59,8 +59,8 @@ run_optional_step() {
 wait_for_bridge() {
   echo "[WAIT] ros_bridge health: http://127.0.0.1:5000/health"
   for _ in $(seq 1 60); do
-    if command -v curl >/dev/null 2>&1 && curl -fsS "http://127.0.0.1:5000/health" >"/home/tankcc/tankcc/logs/scenario2_terminator_20260709_150332/bridge_health.json" 2>/dev/null; then
-      echo "[OK] bridge health: $(cat "/home/tankcc/tankcc/logs/scenario2_terminator_20260709_150332/bridge_health.json")"
+    if command -v curl >/dev/null 2>&1 && curl -fsS "http://127.0.0.1:5000/health" >"/home/tankcc/tankcc/logs/scenario2_terminator_20260709_165846/bridge_health.json" 2>/dev/null; then
+      echo "[OK] bridge health: $(cat "/home/tankcc/tankcc/logs/scenario2_terminator_20260709_165846/bridge_health.json")"
       return 0
     fi
     sleep 0.5
@@ -75,7 +75,7 @@ request_simulator_reset() {
   fi
   echo "[RESET] simulator restart/reset request -> /tank/episode/control reset"
   for i in 1 2 3; do
-    timeout 6s ros2 topic pub --once /tank/episode/control std_msgs/msg/String "{data: 'reset'}"       2>&1 | tee "/home/tankcc/tankcc/logs/scenario2_terminator_20260709_150332/reset_attempt_${i}.log" || true
+    timeout 6s ros2 topic pub --once /tank/episode/control std_msgs/msg/String "{data: 'reset'}"       2>&1 | tee "/home/tankcc/tankcc/logs/scenario2_terminator_20260709_165846/reset_attempt_${i}.log" || true
     sleep 0.5
   done
 }
@@ -194,5 +194,5 @@ echo "============================================================"
 echo "[DONE] Scenario 2 completed"
 echo "============================================================"
 echo "결과: recon_reports/scenario2/scenario2_result.json"
-echo "로그: /home/tankcc/tankcc/logs/scenario2_terminator_20260709_150332"
+echo "로그: /home/tankcc/tankcc/logs/scenario2_terminator_20260709_165846"
 exec bash

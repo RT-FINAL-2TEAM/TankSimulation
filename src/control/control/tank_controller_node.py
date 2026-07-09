@@ -79,6 +79,16 @@ def clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+def env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def empty_action() -> Dict[str, Any]:
     return {
         "moveWS": {"command": "STOP", "weight": 1.0},
@@ -222,6 +232,17 @@ class TeamPathControllerNode(Node):
         self.declare_parameter("planner_path_points_topic", TOPIC_PATH_POINTS)
         self.declare_parameter("planner_speed_profile_ttl_sec", PLANNER_SPEED_PROFILE_TTL_SEC)
         self.declare_parameter("planner_goal_stop_distance_m", PLANNER_GOAL_STOP_DISTANCE_M)
+        # Scenario-2 checkpoint 접근 오버슛 방지용 controller-side 최종 감속 cap.
+        # planner가 speed profile을 주지 않거나, profile 갱신이 늦어도 goal 근처에서는
+        # W weight를 낮춰 checkpoint를 지나친 뒤 뒤돌아오는 상황을 줄인다.
+        self.declare_parameter(
+            "planner_brake_distance_m",
+            env_float("TANK_PLANNER_BRAKE_DISTANCE_M", 30.0),
+        )
+        self.declare_parameter(
+            "planner_brake_ws_weight",
+            env_float("TANK_PLANNER_BRAKE_WS_WEIGHT", 0.04),
+        )
 
         self.enable_local_target = bool(self.get_parameter("enable_local_target").value)
         self.target_ttl_sec = float(self.get_parameter("target_ttl_sec").value)
@@ -466,6 +487,13 @@ class TeamPathControllerNode(Node):
         self.planner_path_points_topic = str(self.get_parameter("planner_path_points_topic").value)
         self.planner_speed_profile_ttl_sec = max(0.1, float(self.get_parameter("planner_speed_profile_ttl_sec").value))
         self.planner_goal_stop_distance_m = max(0.1, float(self.get_parameter("planner_goal_stop_distance_m").value))
+        self.planner_brake_distance_m = max(
+            self.planner_goal_stop_distance_m,
+            float(self.get_parameter("planner_brake_distance_m").value),
+        )
+        self.planner_brake_ws_weight = clamp(
+            float(self.get_parameter("planner_brake_ws_weight").value), 0.0, 1.0
+        )
         self._steering_direction_lock_cmd: str = ""
         self._steering_direction_lock_until: float = 0.0
         self._steering_direction_lock_reason: str = "none"
@@ -1589,6 +1617,59 @@ class TeamPathControllerNode(Node):
             return "W", min(ws_weight, suggested), f"{speed_mode}|planner_curve", profile
         return cmd_ws, ws_weight, speed_mode, profile
 
+    def apply_goal_approach_brake(
+        self, cmd_ws: str, ws_weight: float, speed_mode: str
+    ) -> Tuple[str, float, str, Dict[str, Any]]:
+        """Final controller-side W cap near the active goal/checkpoint.
+
+        This is intentionally independent from the planner's path-point speed
+        profile.  It catches Scenario-2 checkpoint approach overshoot even when
+        planner profile packets are stale or sparse.
+        """
+        status: Dict[str, Any] = {
+            "enabled": self.planner_brake_distance_m > 0.0,
+            "active": False,
+            "reason": "disabled",
+            "brake_distance_m": round(float(self.planner_brake_distance_m), 3),
+            "brake_ws_weight": round(float(self.planner_brake_ws_weight), 3),
+        }
+        if not status["enabled"]:
+            return cmd_ws, ws_weight, speed_mode, status
+        if self.current_pos is None or self.goal_pos is None:
+            status["reason"] = "no_pose_or_goal"
+            return cmd_ws, ws_weight, speed_mode, status
+
+        distance_to_goal = get_distance(self.current_pos, self.goal_pos)
+        stop_distance = self._effective_goal_stop_distance()
+        status.update({
+            "distance_to_goal_m": round(distance_to_goal, 3),
+            "stop_distance_m": round(float(stop_distance), 3),
+            "cmd_before": cmd_ws,
+            "w_before": round(float(ws_weight), 3),
+        })
+
+        if cmd_ws != "W":
+            status["reason"] = "not_forward"
+            return cmd_ws, ws_weight, speed_mode, status
+        if distance_to_goal <= stop_distance:
+            status["reason"] = "inside_stop_distance"
+            return cmd_ws, ws_weight, speed_mode, status
+        if distance_to_goal > self.planner_brake_distance_m:
+            status["reason"] = "outside_brake_distance"
+            return cmd_ws, ws_weight, speed_mode, status
+
+        capped = min(float(ws_weight), float(self.planner_brake_ws_weight))
+        if capped < float(ws_weight):
+            status.update({
+                "active": True,
+                "reason": "goal_approach_brake",
+                "w_after": round(capped, 3),
+            })
+            return "W", capped, f"{speed_mode}|goal_approach_brake", status
+
+        status.update({"reason": "already_below_cap", "w_after": round(float(ws_weight), 3)})
+        return cmd_ws, ws_weight, speed_mode, status
+
     def calculate_speed(self, target: Tuple[float, float], yaw_error: float) -> Tuple[str, float, str]:
         assert self.current_pos is not None
         abs_err = abs(yaw_error)
@@ -2332,6 +2413,11 @@ class TeamPathControllerNode(Node):
         )
         # planner 곡선/감속 profile은 최종 W 상한으로만 적용한다. 안전/APF STOP은 항상 우선한다.
         cmd_ws, w_ws, speed_mode, planner_profile_status = self.apply_planner_speed_profile(cmd_ws, w_ws, speed_mode)
+        # Scenario-2 checkpoint 접근 오버슛 방지: planner profile이 없거나 늦어도
+        # goal 근처에서는 controller가 한 번 더 W를 낮춘다.
+        cmd_ws, w_ws, speed_mode, goal_approach_brake_status = self.apply_goal_approach_brake(
+            cmd_ws, w_ws, speed_mode
+        )
         # ``escape_command_if_needed`` runs before this section, but the
         # overspeed/danger brake can independently choose S later in the same
         # tick.  During the post-shot handoff, resume the normal forward path
@@ -2403,6 +2489,7 @@ class TeamPathControllerNode(Node):
             "recon_observation": recon_obs_status,
             "drive_turret_home": drive_turret_home_status,
             "planner_speed_profile": planner_profile_status,
+            "goal_approach_brake": goal_approach_brake_status,
             "planner_vehicle_geometry": self.planner_vehicle_geometry,
             "safety": {
                 "enabled": self.enable_safety_speed_limit,
@@ -2427,6 +2514,8 @@ class TeamPathControllerNode(Node):
                 "enable_planner_speed_profile": self.enable_planner_speed_profile,
                 "planner_speed_profile_ttl_sec": self.planner_speed_profile_ttl_sec,
                 "planner_goal_stop_distance_m": self.planner_goal_stop_distance_m,
+                "planner_brake_distance_m": self.planner_brake_distance_m,
+                "planner_brake_ws_weight": self.planner_brake_ws_weight,
                 "crawl_pivot_ws_weight": self.crawl_pivot_ws_weight,
                 "crawl_turn_ws_weight": self.crawl_turn_ws_weight,
                 "crawl_pivot_angle_deg": self.crawl_pivot_angle_deg,
