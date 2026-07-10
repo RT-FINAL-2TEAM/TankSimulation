@@ -89,6 +89,13 @@ def env_float(name: str, default: float) -> float:
         return float(default)
 
 
+def env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def empty_action() -> Dict[str, Any]:
     return {
         "moveWS": {"command": "STOP", "weight": 1.0},
@@ -237,11 +244,43 @@ class TeamPathControllerNode(Node):
         # W weight를 낮춰 checkpoint를 지나친 뒤 뒤돌아오는 상황을 줄인다.
         self.declare_parameter(
             "planner_brake_distance_m",
-            env_float("TANK_PLANNER_BRAKE_DISTANCE_M", 30.0),
+            env_float("TANK_PLANNER_BRAKE_DISTANCE_M", 14.0),
         )
         self.declare_parameter(
             "planner_brake_ws_weight",
-            env_float("TANK_PLANNER_BRAKE_WS_WEIGHT", 0.04),
+            env_float("TANK_PLANNER_BRAKE_WS_WEIGHT", 0.10),
+        )
+        # Scenario-2 checkpoint1 overshoot guard.  Before entering the actual
+        # checkpoint radius, stop once, wait briefly, then resume with a very
+        # small W cap.  This prevents the hull from passing the fire base and
+        # turning back with its heading reversed.
+        self.declare_parameter(
+            "checkpoint_pre_stop_enabled",
+            env_bool("TANK_CHECKPOINT_PRE_STOP_ENABLED", True),
+        )
+        self.declare_parameter(
+            "checkpoint_pre_stop_mission_types",
+            os.environ.get("TANK_CHECKPOINT_PRE_STOP_MISSION_TYPES", "mission"),
+        )
+        self.declare_parameter(
+            "checkpoint_pre_stop_margin_m",
+            env_float("TANK_CHECKPOINT_PRE_STOP_MARGIN_M", 10.0),
+        )
+        self.declare_parameter(
+            "checkpoint_pre_stop_hold_sec",
+            env_float("TANK_CHECKPOINT_PRE_STOP_HOLD_SEC", 0.85),
+        )
+        self.declare_parameter(
+            "checkpoint_pre_stop_resume_ws_weight",
+            env_float("TANK_CHECKPOINT_PRE_STOP_RESUME_WS_WEIGHT", 0.12),
+        )
+        # Treat tiny republished goal jitter as the same checkpoint.  Without
+        # this tolerance, a goal publisher that republishes (50.000,165.000) as
+        # (50.001,165.000) can reset the one-shot pre-stop latch repeatedly,
+        # making a requested 1s stop look like a 10s stop.
+        self.declare_parameter(
+            "checkpoint_pre_stop_goal_tolerance_m",
+            env_float("TANK_CHECKPOINT_PRE_STOP_GOAL_TOLERANCE_M", 0.75),
         )
 
         self.enable_local_target = bool(self.get_parameter("enable_local_target").value)
@@ -494,6 +533,31 @@ class TeamPathControllerNode(Node):
         self.planner_brake_ws_weight = clamp(
             float(self.get_parameter("planner_brake_ws_weight").value), 0.0, 1.0
         )
+        self.checkpoint_pre_stop_enabled = bool(
+            self.get_parameter("checkpoint_pre_stop_enabled").value
+        )
+        raw_pre_stop_types = str(
+            self.get_parameter("checkpoint_pre_stop_mission_types").value or ""
+        )
+        self.checkpoint_pre_stop_mission_types = {
+            part.strip().lower() for part in raw_pre_stop_types.split(",") if part.strip()
+        } or {"mission"}
+        self.checkpoint_pre_stop_margin_m = max(
+            0.0, float(self.get_parameter("checkpoint_pre_stop_margin_m").value)
+        )
+        self.checkpoint_pre_stop_hold_sec = max(
+            0.0, float(self.get_parameter("checkpoint_pre_stop_hold_sec").value)
+        )
+        self.checkpoint_pre_stop_resume_ws_weight = clamp(
+            float(self.get_parameter("checkpoint_pre_stop_resume_ws_weight").value), 0.0, 1.0
+        )
+        self.checkpoint_pre_stop_goal_tolerance_m = max(
+            0.0, float(self.get_parameter("checkpoint_pre_stop_goal_tolerance_m").value)
+        )
+        self._checkpoint_pre_stop_triggered: bool = False
+        self._checkpoint_pre_stop_hold_until: float = 0.0
+        self._checkpoint_pre_stop_goal: Optional[Tuple[float, float]] = None
+        self._checkpoint_pre_stop_last_reason: str = "init"
         self._steering_direction_lock_cmd: str = ""
         self._steering_direction_lock_until: float = 0.0
         self._steering_direction_lock_reason: str = "none"
@@ -651,7 +715,11 @@ class TeamPathControllerNode(Node):
         drive leg instead.
         """
         new_goal = (float(msg.pose.position.x), float(msg.pose.position.y))
-        goal_changed = self.goal_pos != new_goal
+        old_goal = self.goal_pos
+        goal_changed = (
+            old_goal is None
+            or get_distance(old_goal, new_goal) > max(0.05, self.checkpoint_pre_stop_goal_tolerance_m)
+        )
         self.goal_pos = new_goal
 
         if goal_changed:
@@ -695,6 +763,10 @@ class TeamPathControllerNode(Node):
                     f"Post-fire goal handoff: reverse inhibited for "
                     f"{self.post_fire_reverse_inhibit_sec:.1f}s"
                 )
+            self._checkpoint_pre_stop_triggered = False
+            self._checkpoint_pre_stop_hold_until = 0.0
+            self._checkpoint_pre_stop_goal = new_goal
+            self._checkpoint_pre_stop_last_reason = "goal_changed_reset"
             self.get_logger().info(
                 f"Goal updated: ({new_goal[0]:.1f},{new_goal[1]:.1f}); "
                 "stuck-escape baseline reset"
@@ -1608,9 +1680,29 @@ class TeamPathControllerNode(Node):
         phase = str(profile.get("phase", "cruise"))
         suggested = max(0.0, min(1.0, float(profile.get("recommended_ws_weight", ws_weight))))
         distance_to_goal = float(profile.get("distance_to_goal_m", 0.0))
+        actual_goal_distance = None
+        if self.goal_pos is not None and self.current_pos is not None:
+            actual_goal_distance = get_distance(self.current_pos, self.goal_pos)
+
         # 실제 goal 근처에서만 stop phase를 강제한다. 오래된 마지막 point가 멀리 있는 문제를 막는다.
-        if phase == "stop" and self.goal_pos is not None and self.current_pos is not None and get_distance(self.current_pos, self.goal_pos) <= self.planner_goal_stop_distance_m:
-            return "STOP", 1.0, "planner_stop", profile
+        if phase == "stop" and actual_goal_distance is not None:
+            profile["actual_goal_distance_m"] = round(float(actual_goal_distance), 3)
+            profile["hard_stop_distance_m"] = round(float(self.planner_goal_stop_distance_m), 3)
+            if actual_goal_distance <= self.planner_goal_stop_distance_m:
+                return "STOP", 1.0, "planner_stop", profile
+
+            # Scenario-2 firing checkpoints have a smaller ballistic arrival radius
+            # than the planner's terminal stop segment.  If we blindly apply the
+            # planner's stop-point recommended_ws_weight=0.0 outside the hard stop
+            # radius, the controller stops at ~2m while ballistic_turret_node still
+            # reports outside_checkpoint.  Crawl forward until the true hard-stop
+            # radius is reached, then STOP.
+            stop_crawl = max(0.05, min(0.18, float(self.checkpoint_pre_stop_resume_ws_weight)))
+            if cmd_ws == "W" and suggested <= 1e-6 and ws_weight > stop_crawl:
+                profile["stop_phase_crawl_override"] = True
+                profile["stop_phase_crawl_ws_weight"] = round(float(stop_crawl), 3)
+                return "W", stop_crawl, f"{speed_mode}|planner_stop_crawl", profile
+
         if cmd_ws == "W" and suggested < ws_weight:
             return "W", suggested, f"{speed_mode}|planner_{phase}", profile
         if cmd_ws == "W" and phase == "curve":
@@ -1669,6 +1761,122 @@ class TeamPathControllerNode(Node):
 
         status.update({"reason": "already_below_cap", "w_after": round(float(ws_weight), 3)})
         return cmd_ws, ws_weight, speed_mode, status
+
+    def apply_checkpoint_pre_stop(
+        self, cmd_ws: str, ws_weight: float, speed_mode: str
+    ) -> Tuple[str, float, str, Dict[str, Any]]:
+        """Stop once 10m before a Scenario-2 firing checkpoint, then crawl in.
+
+        The checkpoint radius itself is left unchanged.  This layer only shapes
+        the final approach: when the active goal is near, the first entry into
+        ``stop_distance + margin`` starts a short STOP hold.  After that hold,
+        the vehicle resumes with a small W cap until it reaches the real stop
+        radius.
+        """
+        status: Dict[str, Any] = {
+            "enabled": self.checkpoint_pre_stop_enabled,
+            "active": False,
+            "reason": "disabled",
+            "triggered": self._checkpoint_pre_stop_triggered,
+            "hold_until": round(float(self._checkpoint_pre_stop_hold_until), 3),
+            "margin_m": round(float(self.checkpoint_pre_stop_margin_m), 3),
+            "hold_sec": round(float(self.checkpoint_pre_stop_hold_sec), 3),
+            "resume_ws_weight": round(float(self.checkpoint_pre_stop_resume_ws_weight), 3),
+            "goal_tolerance_m": round(float(self.checkpoint_pre_stop_goal_tolerance_m), 3),
+        }
+        if not self.checkpoint_pre_stop_enabled:
+            return cmd_ws, ws_weight, speed_mode, status
+        if self.mission_type not in self.checkpoint_pre_stop_mission_types:
+            status.update({"reason": "mission_type_disabled", "mission_type": self.mission_type})
+            return cmd_ws, ws_weight, speed_mode, status
+        if self.current_pos is None or self.goal_pos is None:
+            status["reason"] = "no_pose_or_goal"
+            return cmd_ws, ws_weight, speed_mode, status
+
+        # If an identical goal is repeatedly published, keep the latch.  If a
+        # genuinely new goal arrived without going through goal_pose_cb's
+        # ``goal_changed`` branch for any reason, reset defensively here.
+        if (
+            self._checkpoint_pre_stop_goal is None
+            or get_distance(self._checkpoint_pre_stop_goal, self.goal_pos)
+            > max(0.05, self.checkpoint_pre_stop_goal_tolerance_m)
+        ):
+            self._checkpoint_pre_stop_goal = self.goal_pos
+            self._checkpoint_pre_stop_triggered = False
+            self._checkpoint_pre_stop_hold_until = 0.0
+            self._checkpoint_pre_stop_last_reason = "goal_key_reset"
+
+        distance_to_goal = get_distance(self.current_pos, self.goal_pos)
+        stop_distance = self._effective_goal_stop_distance()
+        trigger_distance = stop_distance + self.checkpoint_pre_stop_margin_m
+        now = time.monotonic()
+        status.update({
+            "distance_to_goal_m": round(float(distance_to_goal), 3),
+            "stop_distance_m": round(float(stop_distance), 3),
+            "trigger_distance_m": round(float(trigger_distance), 3),
+            "cmd_before": cmd_ws,
+            "w_before": round(float(ws_weight), 3),
+            "last_reason": self._checkpoint_pre_stop_last_reason,
+        })
+
+        if distance_to_goal <= stop_distance:
+            status["reason"] = "inside_stop_distance"
+            return cmd_ws, ws_weight, speed_mode, status
+
+        if not self._checkpoint_pre_stop_triggered:
+            if cmd_ws != "W":
+                status["reason"] = "not_forward_before_trigger"
+                return cmd_ws, ws_weight, speed_mode, status
+            if distance_to_goal > trigger_distance:
+                status["reason"] = "outside_trigger_distance"
+                return cmd_ws, ws_weight, speed_mode, status
+            self._checkpoint_pre_stop_triggered = True
+            self._checkpoint_pre_stop_hold_until = now + self.checkpoint_pre_stop_hold_sec
+            self._checkpoint_pre_stop_last_reason = "pre_stop_triggered"
+            status.update({
+                "active": True,
+                "reason": "pre_stop_hold_start",
+                "triggered": True,
+                "hold_remaining_sec": round(max(0.0, self._checkpoint_pre_stop_hold_until - now), 3),
+                "cmd_after": "STOP",
+                "w_after": 1.0,
+            })
+            return "STOP", 1.0, f"{speed_mode}|checkpoint_pre_stop", status
+
+        if now < self._checkpoint_pre_stop_hold_until:
+            self._checkpoint_pre_stop_last_reason = "pre_stop_holding"
+            status.update({
+                "active": True,
+                "reason": "pre_stop_holding",
+                "triggered": True,
+                "hold_remaining_sec": round(max(0.0, self._checkpoint_pre_stop_hold_until - now), 3),
+                "cmd_after": "STOP",
+                "w_after": 1.0,
+            })
+            return "STOP", 1.0, f"{speed_mode}|checkpoint_pre_stop_hold", status
+
+        if cmd_ws == "W" and ws_weight > self.checkpoint_pre_stop_resume_ws_weight:
+            capped = self.checkpoint_pre_stop_resume_ws_weight
+            self._checkpoint_pre_stop_last_reason = "pre_stop_resume_slow"
+            status.update({
+                "active": True,
+                "reason": "pre_stop_resume_slow",
+                "triggered": True,
+                "hold_remaining_sec": 0.0,
+                "cmd_after": "W",
+                "w_after": round(float(capped), 3),
+            })
+            return "W", capped, f"{speed_mode}|checkpoint_pre_stop_resume", status
+
+        status.update({
+            "reason": "triggered_already_below_cap" if cmd_ws == "W" else "triggered_not_forward",
+            "triggered": True,
+            "hold_remaining_sec": 0.0,
+            "cmd_after": cmd_ws,
+            "w_after": round(float(ws_weight), 3),
+        })
+        return cmd_ws, ws_weight, speed_mode, status
+
 
     def calculate_speed(self, target: Tuple[float, float], yaw_error: float) -> Tuple[str, float, str]:
         assert self.current_pos is not None
@@ -2418,6 +2626,9 @@ class TeamPathControllerNode(Node):
         cmd_ws, w_ws, speed_mode, goal_approach_brake_status = self.apply_goal_approach_brake(
             cmd_ws, w_ws, speed_mode
         )
+        cmd_ws, w_ws, speed_mode, checkpoint_pre_stop_status = self.apply_checkpoint_pre_stop(
+            cmd_ws, w_ws, speed_mode
+        )
         # ``escape_command_if_needed`` runs before this section, but the
         # overspeed/danger brake can independently choose S later in the same
         # tick.  During the post-shot handoff, resume the normal forward path
@@ -2516,6 +2727,12 @@ class TeamPathControllerNode(Node):
                 "planner_goal_stop_distance_m": self.planner_goal_stop_distance_m,
                 "planner_brake_distance_m": self.planner_brake_distance_m,
                 "planner_brake_ws_weight": self.planner_brake_ws_weight,
+                "checkpoint_pre_stop_enabled": self.checkpoint_pre_stop_enabled,
+                "checkpoint_pre_stop_mission_types": sorted(self.checkpoint_pre_stop_mission_types),
+                "checkpoint_pre_stop_margin_m": self.checkpoint_pre_stop_margin_m,
+                "checkpoint_pre_stop_hold_sec": self.checkpoint_pre_stop_hold_sec,
+                "checkpoint_pre_stop_resume_ws_weight": self.checkpoint_pre_stop_resume_ws_weight,
+                "checkpoint_pre_stop_goal_tolerance_m": self.checkpoint_pre_stop_goal_tolerance_m,
                 "crawl_pivot_ws_weight": self.crawl_pivot_ws_weight,
                 "crawl_turn_ws_weight": self.crawl_turn_ws_weight,
                 "crawl_pivot_angle_deg": self.crawl_pivot_angle_deg,

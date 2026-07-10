@@ -130,6 +130,42 @@ def generate_launch_description():
         'drive_turret_home_mission_types', default_value='mission',
         description='Comma-separated mission_type values that may use drive turret homing.'
     )
+    planner_brake_distance_arg = DeclareLaunchArgument(
+        'planner_brake_distance_m', default_value='14.0',
+        description='Final controller-side W cap distance to the active goal/checkpoint.'
+    )
+    planner_brake_weight_arg = DeclareLaunchArgument(
+        'planner_brake_ws_weight', default_value='0.10',
+        description='Final controller-side W cap near the active goal/checkpoint.'
+    )
+    planner_goal_stop_distance_arg = DeclareLaunchArgument(
+        'planner_goal_stop_distance_m', default_value='3.0',
+        description='Controller hard STOP radius for planner stop phase. Scenario2 must keep this smaller than ballistic checkpoint radius.'
+    )
+    checkpoint_pre_stop_enabled_arg = DeclareLaunchArgument(
+        'checkpoint_pre_stop_enabled', default_value='false',
+        description='Stop once before a firing checkpoint, then crawl into the true radius.'
+    )
+    checkpoint_pre_stop_mission_types_arg = DeclareLaunchArgument(
+        'checkpoint_pre_stop_mission_types', default_value='mission',
+        description='Comma-separated mission_type values that may use checkpoint pre-stop.'
+    )
+    checkpoint_pre_stop_margin_arg = DeclareLaunchArgument(
+        'checkpoint_pre_stop_margin_m', default_value='10.0',
+        description='Distance before the true stop radius where the one-shot pre-stop is triggered.'
+    )
+    checkpoint_pre_stop_hold_arg = DeclareLaunchArgument(
+        'checkpoint_pre_stop_hold_sec', default_value='0.85',
+        description='Neutral STOP duration at the pre-stop trigger.'
+    )
+    checkpoint_pre_stop_resume_weight_arg = DeclareLaunchArgument(
+        'checkpoint_pre_stop_resume_ws_weight', default_value='0.12',
+        description='W weight cap after the pre-stop hold while crawling into the checkpoint.'
+    )
+    checkpoint_pre_stop_goal_tolerance_arg = DeclareLaunchArgument(
+        'checkpoint_pre_stop_goal_tolerance_m', default_value='0.75',
+        description='Same-goal tolerance used to avoid repeated pre-stop latch resets from tiny goal jitter.'
+    )
     # RL 컨트롤러 스왑: true면 PD tank_controller_node 대신 tank_rl_inference_node를 띄운다
     # (둘 다 /tank/control/command 발행 → 반드시 하나만). 정책은 2D 선학습 산출물(.ts/.zip).
     use_rl_controller_arg = DeclareLaunchArgument(
@@ -166,6 +202,15 @@ def generate_launch_description():
         require_turret_completion_for_reached_arg,
         drive_turret_home_enabled_arg,
         drive_turret_home_mission_types_arg,
+        planner_brake_distance_arg,
+        planner_brake_weight_arg,
+        planner_goal_stop_distance_arg,
+        checkpoint_pre_stop_enabled_arg,
+        checkpoint_pre_stop_mission_types_arg,
+        checkpoint_pre_stop_margin_arg,
+        checkpoint_pre_stop_hold_arg,
+        checkpoint_pre_stop_resume_weight_arg,
+        checkpoint_pre_stop_goal_tolerance_arg,
         use_rl_controller_arg,
         rl_policy_path_arg,
         rl_mode_arg,
@@ -496,6 +541,23 @@ def generate_launch_description():
                 "drive_turret_home_tol_deg": 2.0,
                 "drive_turret_home_max_weight": 0.35,
                 "drive_turret_home_min_ws_weight": 0.05,
+                "planner_brake_distance_m": ParameterValue(
+                    LaunchConfiguration("planner_brake_distance_m"), value_type=float),
+                "planner_brake_ws_weight": ParameterValue(
+                    LaunchConfiguration("planner_brake_ws_weight"), value_type=float),
+                "planner_goal_stop_distance_m": ParameterValue(
+                    LaunchConfiguration("planner_goal_stop_distance_m"), value_type=float),
+                "checkpoint_pre_stop_enabled": ParameterValue(
+                    LaunchConfiguration("checkpoint_pre_stop_enabled"), value_type=bool),
+                "checkpoint_pre_stop_mission_types": LaunchConfiguration("checkpoint_pre_stop_mission_types"),
+                "checkpoint_pre_stop_margin_m": ParameterValue(
+                    LaunchConfiguration("checkpoint_pre_stop_margin_m"), value_type=float),
+                "checkpoint_pre_stop_hold_sec": ParameterValue(
+                    LaunchConfiguration("checkpoint_pre_stop_hold_sec"), value_type=float),
+                "checkpoint_pre_stop_resume_ws_weight": ParameterValue(
+                    LaunchConfiguration("checkpoint_pre_stop_resume_ws_weight"), value_type=float),
+                "checkpoint_pre_stop_goal_tolerance_m": ParameterValue(
+                    LaunchConfiguration("checkpoint_pre_stop_goal_tolerance_m"), value_type=float),
                 "goal_tolerance": 10.0,
                 "pause_on_goal_reached": ParameterValue(
                     LaunchConfiguration("pause_on_goal_reached"), value_type=bool),

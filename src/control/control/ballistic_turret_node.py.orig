@@ -104,13 +104,6 @@ class BallisticTurretNode(Node):
         self.declare_parameter("checkpoint_x", 50.0)
         self.declare_parameter("checkpoint_y", 260.0)
         self.declare_parameter("checkpoint_radius_m", 10.0)
-        # Scenario-2 firing checkpoint is a tactical stop region, not an exact
-        # geometric point.  The controller uses the tank's measured dynamics and
-        # may stop/circle at the terminal segment before entering a too-small
-        # radius.  This capture radius lets the turret FSM claim the checkpoint
-        # once the hull is inside a small, safe firing neighborhood; actual yaw
-        # and pitch are still computed from the measured player pose.
-        self.declare_parameter("checkpoint_capture_radius_m", 3.2)
         self.declare_parameter("checkpoint_settle_sec", 0.8)
         self.declare_parameter("target_from_enemy_pose", True)
         self.declare_parameter("target_pose_ttl_sec", 1.0)
@@ -270,9 +263,6 @@ class BallisticTurretNode(Node):
         self.declare_parameter("pre_aim_body_align_turret_to_hull", True)
 
         self.target_pose_ttl_sec = max(0.05, float(self.get_parameter("target_pose_ttl_sec").value))
-        self.checkpoint_capture_radius_m = max(
-            0.5, float(self.get_parameter("checkpoint_capture_radius_m").value)
-        )
         self.default_checkpoint_settle_sec = max(
             0.0, float(self.get_parameter("checkpoint_settle_sec").value)
         )
@@ -1015,26 +1005,13 @@ class BallisticTurretNode(Node):
             self._yaw_weight(yaw_error, min(self.center_turret_weight_max, 0.35)),
         )
 
-    def _checkpoint_distance_m(self) -> Optional[float]:
+    def _at_checkpoint(self) -> bool:
         if self.player_pose is None:
-            return None
+            return False
         checkpoint = self.stage["checkpoint"]
         return math.hypot(
             self.player_pose[0] - checkpoint[0], self.player_pose[1] - checkpoint[1]
-        )
-
-    def _effective_checkpoint_capture_radius_m(self) -> float:
-        # Use a capture radius at least as large as the mission-plan radius.
-        # This prevents terminal capture deadlock/circling when the controller's
-        # dynamic stop/turn behavior cannot physically converge to a point that
-        # is smaller than its low-speed turning radius.
-        return max(float(self.stage["checkpoint_radius_m"]), float(self.checkpoint_capture_radius_m))
-
-    def _at_checkpoint(self) -> bool:
-        distance = self._checkpoint_distance_m()
-        if distance is None:
-            return False
-        return distance <= self._effective_checkpoint_capture_radius_m()
+        ) <= self.stage["checkpoint_radius_m"]
 
     def _at_return_point(self) -> bool:
         if self.player_pose is None:
@@ -2306,13 +2283,7 @@ class BallisticTurretNode(Node):
         # Drive freely until the current engagement checkpoint is reached.
         if self.phase == "approach" and not self._at_checkpoint():
             status = self._stage_status_base(active=False)
-            status.update({
-                "phase": "approach",
-                "reason": "outside_checkpoint",
-                "checkpoint_distance_m": round(float(self._checkpoint_distance_m() or 0.0), 3),
-                "checkpoint_radius_m": round(float(self.stage["checkpoint_radius_m"]), 3),
-                "checkpoint_capture_radius_m": round(float(self._effective_checkpoint_capture_radius_m()), 3),
-            })
+            status.update({"phase": "approach", "reason": "outside_checkpoint"})
             self._publish_override(
                 active=False, hold_motion=False,
                 turret_qe=self._axis("", 0.0), turret_rf=self._axis("", 0.0),
@@ -2324,12 +2295,6 @@ class BallisticTurretNode(Node):
         if self.phase == "approach":
             self.phase = "settling"
             self.checkpoint_enter_wall = now
-            self.get_logger().info(
-                f"Checkpoint captured: stage={self.stage_index + 1} "
-                f"distance={float(self._checkpoint_distance_m() or 0.0):.2f}m "
-                f"capture_radius={self._effective_checkpoint_capture_radius_m():.2f}m "
-                f"plan_radius={float(self.stage['checkpoint_radius_m']):.2f}m"
-            )
         if self.phase == "settling":
             settle_sec = self.stage["checkpoint_settle_sec"]
             elapsed = now - (self.checkpoint_enter_wall or now)

@@ -646,6 +646,36 @@ class RosBridge(Node):
         except (ValueError, TypeError):
             return
         if isinstance(payload, dict):
+            payload = deepcopy(payload)
+            try:
+                risk_raw = float(payload.get("max_risk", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                risk_raw = 0.0
+            risk_percent = risk_raw * 100.0 if risk_raw <= 1.5 else risk_raw
+            risk_percent = max(0.0, min(100.0, risk_percent))
+            try:
+                thr_raw = float(payload.get("return_risk_threshold", 0.5) or 0.5)
+            except (TypeError, ValueError):
+                thr_raw = 0.5
+            thr_percent = thr_raw * 100.0 if thr_raw <= 1.5 else thr_raw
+            thr_percent = max(0.0, min(100.0, thr_percent))
+            payload.setdefault("max_risk_percent", round(risk_percent, 1))
+            payload.setdefault("return_risk_threshold", round(thr_percent / 100.0, 3))
+            payload.setdefault("return_risk_threshold_percent", round(thr_percent, 1))
+            payload.setdefault("risk_level", (
+                "return" if str(payload.get("action", "")).upper() == "RETURN"
+                else "critical" if risk_percent >= thr_percent
+                else "warning" if risk_percent >= max(1.0, thr_percent * 0.7)
+                else "watch" if risk_percent > 0.0
+                else "clear"
+            ))
+            payload.setdefault("risk_bar", {
+                "value": round(risk_percent, 1),
+                "max": 100.0,
+                "threshold": round(thr_percent, 1),
+                "level": payload.get("risk_level"),
+                "label": "돌발 위협 위험도",
+            })
             self.update_latest("sudden_decision", payload)
 
     def on_route_risk_report(self, msg: String) -> None:

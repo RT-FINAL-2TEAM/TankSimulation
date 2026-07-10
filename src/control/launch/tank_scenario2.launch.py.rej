@@ -1,0 +1,14 @@
+--- src/control/launch/tank_scenario2.launch.py	2026-07-09 09:20:00.000000000 +0000
++++ src/control/launch/tank_scenario2.launch.py	2026-07-10 00:47:51.581662707 +0000
+@@ -611,7 +611,10 @@
+                 "checkpoint_pre_stop_mission_types": "mission",
+                 "checkpoint_pre_stop_margin_m": "10.0",
+                 "checkpoint_pre_stop_hold_sec": "0.30",
+-                "checkpoint_pre_stop_resume_ws_weight": "0.055",
++                "checkpoint_pre_stop_resume_ws_weight": "0.12",
++                # Controller STOP radius must be smaller than ballistic checkpoint radius.
++                # Otherwise the controller stops around 2~3m out while ballistic_turret_node still reports outside_checkpoint.
++                "planner_goal_stop_distance_m": "1.5",
+                 "static_map_file": LaunchConfiguration("scenario2_map"),
+                 "terrain_cost_file": LaunchConfiguration("scenario2_terrain"),
+                 # 지형 비용(험지 회피)을 정찰과 동일하게 OFF. 정찰은 terrain_cost_file이 비어 무영향이라,

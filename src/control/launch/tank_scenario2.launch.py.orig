@@ -711,7 +711,6 @@ def generate_launch_description():
                 # request the stage fallback standoff point instead of aiming forever.
                 "require_flat_fire_pose": True,
                 # checkpoint1에서는 발사 전 차체 heading을 표적 방향으로 먼저 맞춘 뒤 포탑 미세조준한다.
-                "checkpoint_capture_radius_m": 3.2,
                 "pre_aim_body_align_enabled": True,
                 "pre_aim_body_align_stage_indices": "1",
                 "pre_aim_body_align_tolerance_deg": 4.0,

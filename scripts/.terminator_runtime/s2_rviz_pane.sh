@@ -10,7 +10,7 @@ echo "[T2] Scenario2 Desktop RViz2 + Visualization Backend (--rviz)"
 echo "============================================================"
 echo "RViz2는 scenario2_map.map이 준비된 뒤 실행합니다."
 echo "map : $MAP_FILE"
-echo "log : /home/tankcc/tankcc/logs/scenario2_terminator_20260709_165846/rviz_scenario2.log"
+echo "log : /home/tankcc/tankcc/logs/scenario2_terminator_20260710_095630/rviz_scenario2.log"
 echo
 for i in $(seq 1 "180"); do
   if [[ -f "$MAP_FILE" ]]; then
@@ -26,7 +26,7 @@ for i in $(seq 1 "180"); do
 done
 
 sleep 0.7
-ros2 launch rviz_visualization tank_scenario2_map_view.launch.py 2>&1 | tee "/home/tankcc/tankcc/logs/scenario2_terminator_20260709_165846/rviz_scenario2.log"
+ros2 launch rviz_visualization tank_scenario2_map_view.launch.py 2>&1 | tee "/home/tankcc/tankcc/logs/scenario2_terminator_20260710_095630/rviz_scenario2.log"
 echo
 echo "[EXIT] scenario2 RViz2 종료."
 exec bash

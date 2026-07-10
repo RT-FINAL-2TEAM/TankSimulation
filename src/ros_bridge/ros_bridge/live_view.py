@@ -873,7 +873,8 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 <section class="panel">
                     <div class="panel-title"><span>④ ROS MONITOR</span><span id="riskStatusText" class="feed-status-text">-</span></div>
                     <div id="riskContent" style="display:flex;flex-direction:column;position:absolute;inset:34px 0 0 0;">
-                        <div id="rosWrap" style="display:flex;position:absolute;inset:0;flex-direction:column;background:var(--bg);">
+                        <div id="suddenRiskStrip" style="position:absolute;left:0;right:0;top:0;height:68px;padding:8px 10px;border-bottom:1px solid var(--line-dim);background:rgba(4,12,8,0.92);z-index:7;"></div>
+                        <div id="rosWrap" style="display:flex;position:absolute;inset:68px 0 0 0;flex-direction:column;background:var(--bg);">
                             <div class="map-tabs" style="grid-template-columns:repeat(3,minmax(0,1fr));height:32px;">
                                 <button id="ros-sub-graph" class="tab-button active" type="button" onclick="setRosSub('graph')">GRAPH</button>
                                 <button id="ros-sub-services" class="tab-button" type="button" onclick="setRosSub('services')">SERVICES</button>
@@ -926,6 +927,60 @@ def render_view_page(poll_ms: int = 1000) -> str:
             function numberText(value, digits = 1) {
                 const n = Number(value);
                 return Number.isFinite(n) ? n.toFixed(digits) : "-";
+            }
+            function suddenRiskInfo(state) {
+                const sd = state?.suddenDecision || latestBridge(state)?.sudden_decision || null;
+                const raw = Number(sd?.max_risk_percent ?? sd?.risk_bar?.value ?? sd?.max_risk ?? 0);
+                let pct = Number.isFinite(raw) ? raw : 0;
+                if (pct <= 1.5) pct *= 100.0;
+                pct = Math.max(0, Math.min(100, pct));
+                const thrRaw = Number(sd?.return_risk_threshold_percent ?? sd?.risk_bar?.threshold ?? sd?.return_risk_threshold ?? 50);
+                let threshold = Number.isFinite(thrRaw) ? thrRaw : 50;
+                if (threshold <= 1.5) threshold *= 100.0;
+                threshold = Math.max(1, Math.min(100, threshold));
+                const action = String(sd?.action || "NONE").toUpperCase();
+                const instant = String(sd?.instant_action || "").toUpperCase();
+                const activeReturn = !!sd?.return_execution?.active || action === "RETURN";
+                const level = activeReturn ? "RETURN" : pct >= threshold ? "HIGH" : pct >= threshold * 0.7 ? "WARN" : pct > 0 ? "WATCH" : "CLEAR";
+                const color = activeReturn || pct >= threshold ? "#ff3448" : pct >= threshold * 0.7 ? "#ffd34d" : pct > 0 ? "#5ac8ff" : "#39ff88";
+                return { sd, pct, threshold, action, instant, activeReturn, level, color };
+            }
+            function renderSuddenRiskBar(state, compact = false) {
+                const r = suddenRiskInfo(state);
+                const sd = r.sd;
+                const nNew = Number(sd?.n_new ?? 0);
+                const nEng = Number(sd?.n_engageable ?? 0);
+                const armed = sd?.return_execution?.armed;
+                const armText = armed === false ? "RETURN LOCK" : "RETURN ARMED";
+                const reason = sd?.reason || (sd ? "돌발 위협 판단 수신" : "sudden_advisor_node 대기 중");
+                const pctText = Number.isFinite(r.pct) ? `${r.pct.toFixed(1)}%` : "-";
+                const thrText = Number.isFinite(r.threshold) ? `${r.threshold.toFixed(0)}%` : "-";
+                const fill = Math.max(0, Math.min(100, r.pct));
+                const marker = Math.max(0, Math.min(100, r.threshold));
+                return `<div style="display:grid;gap:5px;min-width:0;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:${compact ? '10.5px' : '11.5px'};">
+                        <span style="font-weight:900;color:#9ec5f0;">돌발 위험도 BAR</span>
+                        <span style="font-family:Consolas,monospace;font-weight:900;color:${r.color};">${escapeHtml(r.level)} · ${escapeHtml(pctText)}</span>
+                    </div>
+                    <div style="position:relative;height:${compact ? '9px' : '12px'};border:1px solid var(--line);background:rgba(8,19,40,0.88);box-shadow:inset 0 0 8px rgba(0,0,0,0.35);">
+                        <span style="position:absolute;left:0;top:0;bottom:0;width:${fill}%;background:linear-gradient(90deg,#39ff88,#ffd34d,#ff3448);box-shadow:0 0 12px ${r.color};"></span>
+                        <i style="position:absolute;left:${marker}%;top:-3px;bottom:-3px;width:2px;background:#fff;box-shadow:0 0 8px #fff;"></i>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;gap:8px;font-size:10px;color:#7a8aa0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                        <span>action <b style="color:${r.color};">${escapeHtml(r.action)}</b> · 신규 ${escapeHtml(nNew)} · 교전가능 ${escapeHtml(nEng)} · 기준 ${escapeHtml(thrText)} · ${escapeHtml(armText)}</span>
+                        <span title="${escapeHtml(reason)}">${escapeHtml(String(reason).slice(0, compact ? 34 : 54))}</span>
+                    </div>
+                </div>`;
+            }
+            function updateSuddenRiskStrip(state) {
+                const el = byId("suddenRiskStrip");
+                if (el) el.innerHTML = renderSuddenRiskBar(state, true);
+                const text = byId("riskStatusText");
+                if (text) {
+                    const r = suddenRiskInfo(state);
+                    text.textContent = `SUDDEN ${r.level} ${r.pct.toFixed(0)}%`;
+                    text.style.color = r.color;
+                }
             }
             function escapeHtml(value) {
                 return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -2240,6 +2295,9 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
                 return { x, y, z: Number.isFinite(z) ? z : 0, radius: Number(p.radius_m ?? p.radius ?? 0) };
             }
+            const SCENARIO2_STATIC_TARGET_ANCHOR = { x: 50.0, y: 285.0 };
+            const SCENARIO2_STATIC_FIREBASE = { x: 50.0, y: 165.0 };
+            const SCENARIO2_STATIC_MATCH_RADIUS_M = 35.0;
             function missionEngagementRowsRaw(mp) {
                 if (!mp) return [];
                 const planTargets = Array.isArray(mp?.plan?.targets) ? mp.plan.targets : [];
@@ -2253,8 +2311,8 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 return ids.map((id, idx) => {
                     const t = planTargets.find((x) => String(x?.id) === id) || {};
                     const e = engById[id] || {};
-                    const cp = planPoint(t.firing_checkpoint || e.checkpoint || t.checkpoint);
-                    const target = planPoint(t.target || e.target);
+                    const cp = planPoint(t.firing_checkpoint || e.checkpoint || t.checkpoint || e.firing_checkpoint);
+                    const target = planPoint(t.target || e.target || t.pos || e.pos || t.position || e.position);
                     const range = Number(t?.firing_checkpoint?.distance_m ?? e?.checkpoint?.distance_m ?? dist2d(cp, target));
                     return {
                         index: idx + 1,
@@ -2265,7 +2323,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                         exposure: t?.firing_checkpoint?.exposure ?? t?.exposure ?? e?.exposure,
                         exposure_band: t?.firing_checkpoint?.exposure_band ?? t?.exposure_band ?? e?.exposure_band,
                         score: t?.firing_checkpoint?.score ?? t?.score ?? e?.score,
-                        los_clear: t?.firing_checkpoint?.los_clear ?? t?.los_clear ?? e?.los_clear,
+                        los_clear: t?.firing_checkpoint?.los ?? t?.firing_checkpoint?.los_clear ?? t?.los_clear ?? e?.los_clear,
                         target_from_enemy_pose: e?.target_from_enemy_pose,
                         reposition: e?.reposition || {},
                         rawTarget: t,
@@ -2273,8 +2331,15 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     };
                 });
             }
+            function scenario2StaticCheckpoint(row) {
+                if (!row) return null;
+                const dAnchor = dist2d(row.target, SCENARIO2_STATIC_TARGET_ANCHOR);
+                if (!Number.isFinite(dAnchor) || dAnchor > SCENARIO2_STATIC_MATCH_RADIUS_M) return row.checkpoint;
+                const radius = Math.max(2.0, Number(row.checkpoint?.radius || row.rawEngagement?.checkpoint?.radius_m || 2.0));
+                return { x: SCENARIO2_STATIC_FIREBASE.x, y: SCENARIO2_STATIC_FIREBASE.y, z: 0.0, radius };
+            }
             function normalizedMissionRows(mp) {
-                const rows = missionEngagementRowsRaw(mp);
+                const rows = missionEngagementRowsRaw(mp).filter((r) => r && r.id);
                 if (!rows.length) return [];
                 let final = rows.find((r) => String(r.id).toLowerCase() === 'enemy_final') || rows.find((r) => r.target_from_enemy_pose === true);
                 if (!final) final = rows[rows.length - 1];
@@ -2284,29 +2349,44 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     const d = dist2d(r.target, finalTarget);
                     return !(Number.isFinite(d) && d < 25.0);
                 });
+                const anchor = SCENARIO2_STATIC_TARGET_ANCHOR;
                 let first = null;
                 if (staticCandidates.length) {
-                    first = [...staticCandidates].sort((a, b) => Number(a.range_m ?? 9999) - Number(b.range_m ?? 9999))[0];
+                    first = [...staticCandidates].sort((a, b) => {
+                        const da = dist2d(a.target, anchor);
+                        const db = dist2d(b.target, anchor);
+                        return Number(da ?? 9999) - Number(db ?? 9999);
+                    })[0];
                 } else if (nonFinal.length) {
                     first = [...nonFinal].sort((a, b) => Number(a.range_m ?? 9999) - Number(b.range_m ?? 9999))[0];
                 }
                 const out = [];
                 if (first) {
+                    const cp = scenario2StaticCheckpoint(first);
+                    const range = dist2d(cp, first.target);
                     out.push({
                         ...first,
                         index: 1,
                         source_id: String(first.id || ''),
                         id: 'enemy_mid',
+                        checkpoint: cp,
+                        range_m: Number.isFinite(range) ? range : first.range_m,
+                        exposure_band: first.exposure_band || 'medium',
                         tactical_name: '1차 사격 · 차폐물 뒤 고정 전차',
                         tactical_detail: '정찰로 추가된 object tank1을 먼저 제거해 최종 목표 접근 전 측면 위협을 줄인다.',
                     });
                 }
                 if (final) {
+                    const fcp = final.checkpoint || { x: 50.0, y: 260.0, z: 0.0, radius: 2.5 };
+                    const frange = dist2d(fcp, final.target);
                     out.push({
                         ...final,
                         index: out.length + 1,
                         source_id: String(final.id || ''),
                         id: 'enemy_final',
+                        checkpoint: fcp,
+                        range_m: Number.isFinite(frange) ? frange : final.range_m,
+                        exposure_band: final.exposure_band || 'low',
                         target_from_enemy_pose: true,
                         tactical_name: '2차 사격 · 목적지 기동 전차',
                         tactical_detail: '피가 닳는 실제 목적지 전차를 마지막에 교전하고, 명중 후 복귀한다.',
@@ -2367,7 +2447,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     fireValue: fire ? 1 : 0,
                     currentId: cur?.id || null,
                     action: state?.suddenDecision?.action || "NONE",
-                    risk: Number(state?.suddenDecision?.max_risk),
+                    risk: suddenRiskInfo(state).pct,
                     fire,
                 };
                 const last = missionSeries[missionSeries.length - 1];
@@ -2377,7 +2457,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 }
                 const sd = state?.suddenDecision;
                 if (sd) {
-                    const risk = Number(sd.max_risk ?? 0);
+                    const risk = suddenRiskInfo(state).pct;
                     const prev = suddenSeries[suddenSeries.length - 1];
                     const si = { t, action: sd.action || "NONE", risk: Number.isFinite(risk) ? risk : 0, nNew: Number(sd.n_new ?? 0), nEngageable: Number(sd.n_engageable ?? 0), cpDist };
                     if (!prev || Math.abs(prev.t - si.t) > 0.20 || prev.action !== si.action || prev.risk !== si.risk) {
@@ -2428,11 +2508,11 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 const targetDist = pose && current?.target ? dist2d(pose, current.target) : null;
                 const fire = !!cmd.fire;
                 const sd = state?.suddenDecision || {};
-                const risk = Number(sd.max_risk ?? 0);
+                const risk = suddenRiskInfo(state).pct;
                 let level = 'INFO', col = '#5ac8ff', msg = '사격 지점 접근 중';
                 if (fire) { level = 'FIRE'; col = '#ff3448'; msg = '발사 명령 발생 — 포탑 안정/명중 판정 확인'; }
                 else if (current && Number.isFinite(cpDist) && cpDist <= Number(current.checkpoint?.radius || 10)) { level = 'AIM'; col = '#ffd34d'; msg = '사격 checkpoint 도달 — 정지·포탑 조준 단계'; }
-                else if (Number.isFinite(risk) && risk >= 70) { level = 'CAUTION'; col = '#ff8a3d'; msg = '실시간 위협도 상승 — 우회/복귀 판단 감시'; }
+                else if (Number.isFinite(risk) && risk >= suddenRiskInfo(state).threshold * 0.7) { level = 'CAUTION'; col = '#ff8a3d'; msg = '실시간 위협도 상승 — 우회/복귀 판단 감시'; }
                 else if (Number.isFinite(targetDist) && targetDist <= 130) { level = 'RANGE'; col = '#36d17a'; msg = '사거리 내 표적 — LoS와 포탑각 조건 확인'; }
                 return `<div style="border:1px solid ${col};background:linear-gradient(90deg,rgba(255,68,68,0.16),rgba(8,19,40,0.72));padding:8px 10px;font-size:12px;line-height:1.55;box-shadow:0 0 14px rgba(255,68,68,0.12);">
                     <b style="color:${col};">${escapeHtml(level)}</b> · ${escapeHtml(msg)}<br>
@@ -2470,6 +2550,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     <div style="font-size:11px;color:#b9c8e8;margin-top:3px;">실행 교전 순서: <b style="color:#e8eefc">${escapeHtml(order)}</b> · 현재 추적: <b style="color:#5ac8ff">${escapeHtml(safe(current?.id, '대기'))}</b></div>
                 </div>`;
                 html += renderMissionAlert(state, current, pose);
+                html += `<div style="border:1px solid var(--line-dim);background:rgba(4,12,8,0.72);padding:8px;">${renderSuddenRiskBar(state, false)}</div>`;
 
                 html += `<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;">
                     ${ioStep('INPUT', '정찰 합본맵 <b>scenario2_map.map</b><br>지형 비용 <b>scenario2_terrain.json</b><br>위험 feature <b>risk_features.json</b><br>후보 루트 <b>scenario2_routes.yaml</b>')}
@@ -2490,7 +2571,6 @@ def render_view_page(poll_ms: int = 1000) -> str:
                     html += `<div style="border:1px solid ${isCurrent ? '#5ac8ff' : 'var(--line-dim)'};background:rgba(8,19,40,0.58);padding:8px;min-width:0;">
                         <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:5px;"><b style="color:${isCurrent ? '#5ac8ff' : '#e8eefc'};">${escapeHtml(r.tactical_name || (r.index + '차 사격 · ' + r.id))}</b><span style="font-size:10px;color:${bandColor};border:1px solid ${bandColor};padding:1px 5px;">${escapeHtml(band)}</span></div>
                         ${r.tactical_detail ? `<div style="font-size:10.5px;color:#b9c8e8;line-height:1.45;margin-bottom:5px;">${escapeHtml(r.tactical_detail)}</div>` : ''}
-                        ${r.source_id && r.source_id !== r.id ? kvLine('원본 탐지 ID', r.source_id, '#9ec5f0') : ''}
                         ${kvLine('사격 checkpoint', r.checkpoint ? `(${numberText(r.checkpoint.x, 1)}, ${numberText(r.checkpoint.y, 1)}) R=${numberText(r.checkpoint.radius, 1)}m` : '없음')}
                         ${kvLine('표적 좌표', r.target ? `(${numberText(r.target.x, 1)}, ${numberText(r.target.y, 1)}, z=${numberText(r.target.z, 1)})` : '없음')}
                         ${kvLine('사격거리', Number.isFinite(r.range_m) ? `${numberText(r.range_m, 1)}m` : '—')}
@@ -2537,13 +2617,15 @@ def render_view_page(poll_ms: int = 1000) -> str:
                 const latest = latestBridge(state);
                 const detections = getDetections(state);
                 const act = sd?.action || 'NONE';
-                const col = act === 'RETURN' ? '#ff3448' : act === 'ENGAGE' ? '#ffd34d' : act === 'BYPASS' ? '#5ac8ff' : '#7a8aa0';
+                const riskInfo = suddenRiskInfo(state);
+                const col = act === 'RETURN' ? '#ff3448' : act === 'ENGAGE' ? '#ffd34d' : act === 'BYPASS' ? '#5ac8ff' : riskInfo.color || '#7a8aa0';
                 let html = '<div style="display:grid;gap:10px;">';
                 html += `<div style="background:rgba(8,19,40,0.65);border:1px solid ${col};border-radius:5px;padding:8px 10px;">
                     <div style="font-size:13px;font-weight:800;color:#fff;">실시간 판단 · <span style="color:${col};">${escapeHtml(act)}</span></div>
-                    <div style="font-size:11px;color:#b9c8e8;margin-top:3px;">신규 ${safe(sd?.n_new, 0)} · 교전가능 ${safe(sd?.n_engageable, 0)} · 최대위험 ${safe(sd?.max_risk, 0)} · YOLO/Fusion 객체 ${detections.length}</div>
+                    <div style="font-size:11px;color:#b9c8e8;margin-top:3px;">신규 ${safe(sd?.n_new, 0)} · 교전가능 ${safe(sd?.n_engageable, 0)} · 최대위험 ${numberText(riskInfo.pct, 1)}% · YOLO/Fusion 객체 ${detections.length}</div>
                 </div>`;
-                if (act === 'RETURN' || act === 'ENGAGE' || Number(sd?.max_risk ?? 0) >= 70) {
+                html += `<div style="border:1px solid var(--line-dim);background:rgba(4,12,8,0.72);padding:8px;">${renderSuddenRiskBar(state, false)}</div>`;
+                if (act === 'RETURN' || act === 'ENGAGE' || riskInfo.pct >= riskInfo.threshold * 0.7) {
                     const warnMsg = act === 'RETURN' ? '복귀/임무중단 조건 감지' : act === 'ENGAGE' ? '돌발 위협 교전 후보 발생' : '위협도 상승';
                     html += `<div style="border:1px solid ${col};background:rgba(255,68,68,0.12);padding:8px 10px;font-size:12px;font-weight:800;color:${col};box-shadow:0 0 16px rgba(255,68,68,0.16);">⚠ ${escapeHtml(warnMsg)} · 운용자 확인 필요</div>`;
                 }
@@ -2639,6 +2721,7 @@ def render_view_page(poll_ms: int = 1000) -> str:
             function updateLeftPanel(state) {
                 // C2 4분할: 패널 ③(전차상태+시스템)·④(LLM/위험도) 렌더. 아래 legacy 5탭 코드는 unreachable.
                 byId("tankSystemContent").innerHTML = renderTankState(state) + renderSystem(state);
+                updateSuddenRiskStrip(state);
                 if (activeMapTab === "llm" && byId("llm-sub-recon")) { renderLlmSubContent(activeLlmSub, state); }
                 renderRosActive(state);
                 return;

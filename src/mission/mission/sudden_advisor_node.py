@@ -45,6 +45,8 @@ class SuddenAdvisorNode(Node):
         self.declare_parameter("llm_cooldown_sec", 20.0)
         self.declare_parameter("known_match_radius_m", 8.0)
         self.declare_parameter("min_confidence", 0.0)
+        # Web MFD risk bar 표시용 기준값. sudden_decision.DEFAULTS와 같은 기본값을 사용한다.
+        self.declare_parameter("return_risk_threshold", float(sd.DEFAULTS.get("return_risk_threshold", 0.5)))
         self.declare_parameter("use_llm", True)
         # RETURN만 실제 실행한다. ENGAGE/BYPASS는 체크포인트 사격 시퀀스와
         # 충돌할 수 있으므로 여전히 상태 패널용 결정으로만 유지한다.
@@ -69,6 +71,7 @@ class SuddenAdvisorNode(Node):
         self.llm_cooldown = float(self.get_parameter("llm_cooldown_sec").value)
         self.match_r = float(self.get_parameter("known_match_radius_m").value)
         self.min_conf = float(self.get_parameter("min_confidence").value)
+        self.return_risk_threshold = max(0.0, min(1.0, float(self.get_parameter("return_risk_threshold").value)))
         self.use_llm = bool(self.get_parameter("use_llm").value)
         self.execute_return = bool(self.get_parameter("execute_return").value)
         self.return_arm_min_distance_from_home_m = max(
@@ -314,6 +317,20 @@ class SuddenAdvisorNode(Node):
     def _publish(self, feat: Dict[str, Any], d: Dict[str, Any]) -> None:
         effective_action = sd.ACTION_RETURN if self.return_active else self._committed
         effective_reason = self.return_reason if self.return_active else d["reason"]
+        max_risk = float(feat.get("max_risk", 0.0) or 0.0)
+        risk_percent = max(0.0, min(100.0, max_risk * 100.0))
+        threshold_percent = max(0.0, min(100.0, self.return_risk_threshold * 100.0))
+        if self.return_active or effective_action == sd.ACTION_RETURN:
+            risk_level = "return"
+        elif risk_percent >= threshold_percent:
+            risk_level = "critical"
+        elif risk_percent >= max(1.0, threshold_percent * 0.7):
+            risk_level = "warning"
+        elif risk_percent > 0.0:
+            risk_level = "watch"
+        else:
+            risk_level = "clear"
+
         payload = {
             "action": effective_action,          # 히스테리시스 반영 확정 결정
             "committed_action": self._committed,
@@ -322,6 +339,17 @@ class SuddenAdvisorNode(Node):
             "n_new": feat["n_new"],
             "n_engageable": feat["n_engageable"],
             "max_risk": feat["max_risk"],
+            "max_risk_percent": round(risk_percent, 1),
+            "return_risk_threshold": round(self.return_risk_threshold, 3),
+            "return_risk_threshold_percent": round(threshold_percent, 1),
+            "risk_level": risk_level,
+            "risk_bar": {
+                "value": round(risk_percent, 1),
+                "max": 100.0,
+                "threshold": round(threshold_percent, 1),
+                "level": risk_level,
+                "label": "돌발 위협 위험도",
+            },
             "target": d.get("target"),
             "per_threat": feat.get("per_threat", []),
             "llm": self._llm,
