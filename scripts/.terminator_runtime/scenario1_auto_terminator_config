@@ -4,13 +4,13 @@
   [[default]]
     scrollback_infinite = True
 [layouts]
-  [[scenario2_auto]]
+  [[scenario1_auto]]
     [[[window0]]]
       type = Window
       parent = ""
       order = 0
       maximised = True
-      title = Tank Scenario 2 Auto
+      title = Tank Scenario 1 Auto
     [[[hpaned0]]]
       type = HPaned
       parent = window0
@@ -25,25 +25,25 @@
       type = Terminal
       parent = vpaned_left
       order = 0
-      command = bash -lc '/home/tankcc/tankcc/scripts/.terminator_runtime/s2_bridge_pane.sh'
+      command = bash -lc '/home/tankcc/tankcc/scripts/.terminator_runtime/s1_bridge_pane.sh'
     [[[terminal_manager]]]
       type = Terminal
       parent = vpaned_left
       order = 1
-      command = bash -lc '/home/tankcc/tankcc/scripts/.terminator_runtime/s2_manager_pane.sh'
+      command = bash -lc '/home/tankcc/tankcc/scripts/.terminator_runtime/s1_manager_pane.sh'
     [[[vpaned_right]]]
       type = VPaned
       parent = hpaned0
       order = 1
       position = 520
-    [[[terminal_rviz]]]
+    [[[terminal_viz_or_terrain]]]
       type = Terminal
       parent = vpaned_right
       order = 0
-      command = bash -lc '/home/tankcc/tankcc/scripts/.terminator_runtime/s2_rviz_pane.sh'
+      command = bash -lc '/home/tankcc/tankcc/scripts/.terminator_runtime/s1_viz_or_terrain_pane.sh'
     [[[terminal_phone]]]
       type = Terminal
       parent = vpaned_right
       order = 1
-      command = bash -lc '/home/tankcc/tankcc/scripts/.terminator_runtime/s2_phone_sim2real_pane.sh'
+      command = bash -lc '/home/tankcc/tankcc/scripts/.terminator_runtime/s1_phone_sim2real_pane.sh'
 [plugins]

@@ -633,6 +633,61 @@ def _route_point(raw: Any) -> Dict[str, float]:
     return {"x": float(raw[0]), "y": float(raw[1])}
 
 
+def _same_route_point(a: Optional[Dict[str, float]], b: Optional[Dict[str, float]], tol: float = 0.05) -> bool:
+    if not a or not b:
+        return False
+    try:
+        dx = float(a["x"]) - float(b["x"])
+        dy = float(a["y"]) - float(b["y"])
+    except Exception:
+        return False
+    return (dx * dx + dy * dy) ** 0.5 <= tol
+
+
+def _append_route_point_unique(points: list[Dict[str, float]], point: Dict[str, float]) -> None:
+    if not _same_route_point(points[-1] if points else None, point):
+        points.append(point)
+
+
+def _route_specific_destination(route_map: Dict[str, Any], route_id: str, fallback: Any) -> Any:
+    route_key = str(route_id).strip().upper()
+
+    # Preferred YAML format:
+    # finalmap:
+    #   route_destinations:
+    #     A: [50.0, 265.0]
+    #     B: [130.0, 255.0]
+    for section_name in ("route_destinations", "destinations"):
+        section = route_map.get(section_name)
+        if isinstance(section, dict):
+            value = section.get(route_key) or section.get(str(route_id))
+            if value is not None:
+                return value
+
+    # Backward-compatible route-object format:
+    # routes:
+    #   A:
+    #     waypoints: [...]
+    #     destination: [...]
+    routes = route_map.get("routes") if isinstance(route_map.get("routes"), dict) else {}
+    route_obj = routes.get(route_key) or routes.get(str(route_id))
+    if isinstance(route_obj, dict) and route_obj.get("destination") is not None:
+        return route_obj.get("destination")
+
+    return fallback
+
+
+def _route_waypoints(route_map: Dict[str, Any], route_id: str) -> list[Any]:
+    routes = route_map.get("routes") if isinstance(route_map.get("routes"), dict) else {}
+    route_key = str(route_id).strip().upper()
+    raw_route = routes.get(route_key) or routes.get(str(route_id))
+    if isinstance(raw_route, dict):
+        raw_points = raw_route.get("waypoints") or raw_route.get("points") or []
+    else:
+        raw_points = raw_route
+    return raw_points if isinstance(raw_points, list) else []
+
+
 def _route_length(points: list[Dict[str, float]]) -> float:
     total = 0.0
     for prev, cur in zip(points, points[1:]):
@@ -735,16 +790,16 @@ def _fallback_route_candidates() -> Dict[str, Any]:
         {
             "start": start,
             "destination": destination,
+            "route_destinations": {
+                "A": [50.0, 265.0],
+                "B": [130.0, 255.0],
+            },
             "routes": {
-                "A": [[50.0, 140.0], [51.0, 271.0]],
+                "A": [[50.0, 140.0], [50.0, 265.0]],
                 "B": [
-                    [120.0, 70.0],
-                    [160.0, 105.0],
-                    [188.0, 122.0],
-                    [198.0, 142.0],
-                    [190.0, 160.0],
-                    [160.0, 200.0],
-                    [130.0, 240.0],
+                    [199.0, 109.0],
+                    [192.0, 166.0],
+                    [130.0, 255.0],
                 ],
             },
         },
@@ -756,7 +811,6 @@ def _fallback_route_candidates() -> Dict[str, Any]:
 def _route_candidate_payload(route_map: Dict[str, Any], source: str, map_name: str = "finalmap") -> Dict[str, Any]:
     start_raw = route_map.get("start") or [59.0, 27.0]
     destination_raw = route_map.get("destination") or [110.0, 276.5]
-    routes = route_map.get("routes") if isinstance(route_map.get("routes"), dict) else {}
     meta = {
         "A": {
             "name": "LEFT ROUGH",
@@ -778,13 +832,24 @@ def _route_candidate_payload(route_map: Dict[str, Any], source: str, map_name: s
         },
     }
     start = _route_point(start_raw)
-    destination = _route_point(destination_raw)
+    map_destination = _route_point(destination_raw)
+    route_destinations: Dict[str, Dict[str, float]] = {}
     candidates = []
     for route_id in ("A", "B"):
-        raw_points = routes.get(route_id)
-        if not isinstance(raw_points, list):
+        raw_points = _route_waypoints(route_map, route_id)
+        if not raw_points:
             continue
-        points = [start] + [_route_point(point) for point in raw_points] + [destination]
+
+        route_destination = _route_point(
+            _route_specific_destination(route_map, route_id, destination_raw)
+        )
+        route_destinations[route_id] = route_destination
+
+        points = [start]
+        for point in raw_points:
+            _append_route_point_unique(points, _route_point(point))
+        _append_route_point_unique(points, route_destination)
+
         route_length = _route_length(points)
         route_meta = deepcopy(meta[route_id])
         route_meta.update(
@@ -792,17 +857,29 @@ def _route_candidate_payload(route_map: Dict[str, Any], source: str, map_name: s
                 "id": route_id,
                 "selected": False,
                 "points": points,
+                "destination": route_destination,
                 "length": route_length,
                 "factors": _pending_route_factors(route_length),
             }
         )
         candidates.append(route_meta)
+
+    # A/B가 서로 다른 종점이면 top-level destination 하나로 표현할 수 없다.
+    # 각 candidate.destination / candidate.points[-1]을 웹 지도에서 사용하게 둔다.
+    unique_destinations = []
+    for dest in route_destinations.values():
+        if not any(_same_route_point(dest, old) for old in unique_destinations):
+            unique_destinations.append(dest)
+    display_destination = map_destination if len(unique_destinations) <= 1 else None
+
     return {
         "source": source,
         "mapName": map_name,
         "selected": None,
         "start": start,
-        "destination": destination,
+        "destination": display_destination,
+        "mapDestination": map_destination,
+        "routeDestinations": route_destinations,
         "decisionMode": "llm_pending",
         "decisionNote": "Waiting for LLM route assessment.",
         "candidates": candidates,
